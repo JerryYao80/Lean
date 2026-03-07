@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using QuantConnect.Brokerages;
 using QuantConnect.Configuration;
 using QuantConnect.Interfaces;
@@ -356,6 +357,7 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 var endTime = DateTime.UtcNow;
                 BacktestResultPacket result;
+                BacktestMonteCarloReport monteCarloReport = null;
                 // could happen if algorithm failed to init
                 if (Algorithm != null)
                 {
@@ -363,6 +365,7 @@ namespace QuantConnect.Lean.Engine.Results
                     var charts = new Dictionary<string, Chart>(Charts);
                     var orders = new Dictionary<int, Order>(TransactionHandler.Orders);
                     var profitLoss = new SortedDictionary<DateTime, decimal>(Algorithm.Transactions.TransactionRecord);
+                    monteCarloReport = TryRunMonteCarloAnalysis(charts);
                     var statisticsResults = GenerateStatisticsResults(charts, profitLoss, _capacityEstimate);
                     var runtime = GetAlgorithmRuntimeStatistics(statisticsResults.Summary, capacityEstimate: _capacityEstimate);
 
@@ -393,6 +396,11 @@ namespace QuantConnect.Lean.Engine.Results
 
                 StoreInsights();
 
+                if (monteCarloReport != null)
+                {
+                    SaveMonteCarloReport($"{AlgorithmId}-monte-carlo.json", monteCarloReport);
+                }
+
                 // Save summary results
                 SaveResults($"{AlgorithmId}-summary.json", CreateResultSummary(result));
 
@@ -409,6 +417,37 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 Log.Error(err);
             }
+        }
+
+        private BacktestMonteCarloReport TryRunMonteCarloAnalysis(Dictionary<string, Chart> charts)
+        {
+            var settings = BacktestMonteCarloSettings.From(_job?.Parameters);
+            if (!settings.Enabled)
+            {
+                return null;
+            }
+
+            if (!BacktestMonteCarloAnalysis.TryCreateReport(charts, settings, out var report))
+            {
+                Log.Trace("BacktestingResultHandler.TryRunMonteCarloAnalysis(): skipped because no daily returns were available.");
+                return null;
+            }
+
+            foreach (var statistic in BacktestMonteCarloAnalysis.CreateSummaryStatistics(report))
+            {
+                SummaryStatistic(statistic.Key, statistic.Value);
+            }
+
+            State[BacktestMonteCarloAnalysis.EnabledStateKey] = true.ToStringInvariant();
+            State[BacktestMonteCarloAnalysis.ReportStateKey] = $"{AlgorithmId}-monte-carlo.json";
+
+            Log.Trace($"BacktestingResultHandler.TryRunMonteCarloAnalysis(): generated {report.TrialCount} trials across {report.Scenarios.Count} scenarios.");
+            return report;
+        }
+
+        private void SaveMonteCarloReport(string name, BacktestMonteCarloReport report)
+        {
+            File.WriteAllText(GetResultsPath(name), JsonConvert.SerializeObject(report, Formatting.Indented, SerializerSettings));
         }
 
         /// <summary>

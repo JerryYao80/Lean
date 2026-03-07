@@ -3,20 +3,15 @@
   "algorithm-type-name": "AShareEtfT0FeatureIntradayAlgorithm",
   "algorithm-language": "CSharp",
   "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
-
   "data-folder": "../../../Data",
   "data-directory": "../../../Data",
-
   "history-provider": "TushareHistoryProvider",
   "data-provider": "DefaultDataProvider",
-
   "results-destination-folder": "../../../Results",
-
   "log-handler": "ConsoleLogHandler",
   "messaging-handler": "QuantConnect.Messaging.Messaging",
   "job-queue-handler": "QuantConnect.Queues.JobQueue",
   "api-handler": "QuantConnect.Api.Api",
-
   "parameters": {
     "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
     "feature-data-path": "../../../Data/alternative/ashare-etf-t0-features",
@@ -24,6 +19,15 @@
     "target-portfolio-exposure": "0.95",
     "exclude-money-market-etfs": "true",
     "start-date": "20240101",
-    "end-date": "20251231"
+    "end-date": "20251231",
+    "monte-carlo-enabled": "true",
+    "monte-carlo-trials": "500",
+    "monte-carlo-horizon-days": "63",
+    "monte-carlo-block-size": "5",
+    "monte-carlo-extra-fee-rate": "0.0004",
+    "monte-carlo-shock-probability": "0.04",
+    "monte-carlo-shock-mean": "0.012",
+    "monte-carlo-shock-std": "0.006",
+    "monte-carlo-seed": "42"
   }
 }
