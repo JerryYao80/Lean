@@ -1,0 +1,19 @@
+{
+  "registry-file": "../../Common/Securities/Equity/AShareETFMetadata.cs",
+  "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+  "dataset-catalog": "config-ashare-dataset-catalog.json",
+  "start-date": "20240101",
+  "end-date": "20251231",
+  "exclude-money-market-etfs": true,
+  "top-n": 3,
+  "fee-rate": 0.0006,
+  "trial-count": 500,
+  "horizon-days": 63,
+  "block-size": 5,
+  "extra-fee-rate": 0.0004,
+  "shock-probability": 0.04,
+  "shock-mean": 0.012,
+  "shock-std": 0.006,
+  "seed": 42,
+  "report-file": "../bin/Debug/AShareEtfT0FeatureIntradayAlgorithm-monte-carlo.log"
+}
