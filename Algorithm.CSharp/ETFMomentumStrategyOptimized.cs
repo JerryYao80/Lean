@@ -26,19 +26,25 @@ using QuantConnect.Securities.Equity;
 namespace QuantConnect.Algorithm.CSharp
 {
     /// <summary>
-    /// Simple momentum-based ETF strategy for A-Share T+0 ETFs ONLY
-    /// This strategy explicitly filters for T+0 ETFs (same-day buy/sell)
-    /// and excludes T+1 ETFs (next-day sell only)
+    /// Optimized momentum-based ETF strategy with parameter optimization support
     /// </summary>
-    public class ETFMomentumStrategy : QCAlgorithm
+    public class ETFMomentumStrategyOptimized : QCAlgorithm
     {
         private List<Symbol> _etfSymbols;
         private Dictionary<Symbol, decimal> _momentum;
         private readonly Dictionary<Symbol, decimal> _latestHistoryClose = new Dictionary<Symbol, decimal>();
+
+        // Optimizable parameters
         private int _rebalanceDays = 5;
         private int _lookbackPeriod = 20;
-        private int _topN = 3;
-        private bool _excludeMoneyMarketETFs = true; // Exclude low-volatility money market ETFs
+        private int _topN = 5;  // Increased from 3 to 5 for better diversification
+        private bool _excludeMoneyMarketETFs = true;
+        private bool _useOnlyLiquidETFs = true;  // Only use ETFs with complete data
+
+        // Risk management
+        private decimal _stopLossPercent = -0.08m;  // -8% stop loss
+        private decimal _takeProfitPercent = 0.15m;  // +15% take profit
+        private bool _enableRiskManagement = true;
 
         /// <summary>
         /// Initialize the algorithm
@@ -58,19 +64,40 @@ namespace QuantConnect.Algorithm.CSharp
             // Disable benchmark since we're trading Chinese ETFs
             SetBenchmark(x => 0);
 
-            // Get all T+0 ETFs from registry (excludes T+1 ETFs)
-            var t0ETFs = AShareETFRegistry.GetT0ETFs();
+            // Define liquid ETFs with complete historical data
+            var liquidETFs = new List<string>
+            {
+                // Major index ETFs
+                "510050", "510300", "510500",  // SSE 50/300/500
+                "159915", "159919", "159949",  // ChiNext ETFs
 
-            Log($"Found {t0ETFs.Count} T+0 ETFs in registry");
+                // Gold ETFs
+                "518880", "159934", "159937",  // Gold ETFs
 
-            // Add only T+0 tradable ETFs to the algorithm
+                // Optional: Money market ETFs (low volatility)
+                // "511880", "511990"
+            };
+
+            // Get all T+0 ETFs from registry
+            var t0ETFs = _useOnlyLiquidETFs ? liquidETFs : AShareETFRegistry.GetT0ETFs();
+
+            Log($"Strategy Configuration:");
+            Log($"  Lookback Period: {_lookbackPeriod} days");
+            Log($"  Rebalance Frequency: {_rebalanceDays} days");
+            Log($"  Top N Holdings: {_topN}");
+            Log($"  Risk Management: {(_enableRiskManagement ? "Enabled" : "Disabled")}");
+            Log($"  Stop Loss: {_stopLossPercent:P2}");
+            Log($"  Take Profit: {_takeProfitPercent:P2}");
+            Log($"Found {t0ETFs.Count} T+0 ETFs to trade");
+
+            // Add ETFs to the algorithm
             _etfSymbols = new List<Symbol>();
             foreach (var ticker in t0ETFs)
             {
                 var metadata = AShareETFRegistry.GetMetadata(ticker);
                 if (metadata != null)
                 {
-                    // Skip money market ETFs if configured (they have very low volatility)
+                    // Skip money market ETFs if configured
                     if (_excludeMoneyMarketETFs && (ticker.StartsWith("511") || ticker.StartsWith("159001") || ticker.StartsWith("159003") || ticker.StartsWith("159005")))
                     {
                         Log($"Skipping money market ETF: {ticker} ({metadata.Name})");
@@ -87,8 +114,7 @@ namespace QuantConnect.Algorithm.CSharp
                     equity.Session.Size = 2;
 
                     _etfSymbols.Add(equity.Symbol);
-                    var initialPrice = equity.Price > 0 ? equity.Price.ToString("F4") : "pending first bar";
-                    Log($"Added T+0 ETF: {ticker} ({metadata.Name}) on {metadata.Market}, Initial Price: {initialPrice}");
+                    Log($"Added T+0 ETF: {ticker} ({metadata.Name}) on {metadata.Market}");
                 }
             }
 
@@ -97,7 +123,13 @@ namespace QuantConnect.Algorithm.CSharp
             // Schedule rebalancing
             Schedule.On(DateRules.EveryDay(), TimeRules.AfterMarketOpen(Market.SSE, 30), Rebalance);
 
-            Log($"ETFMomentumStrategy initialized with {_etfSymbols.Count} T+0 ETFs (T+1 ETFs excluded)");
+            // Schedule risk management check
+            if (_enableRiskManagement)
+            {
+                Schedule.On(DateRules.EveryDay(), TimeRules.AfterMarketOpen(Market.SSE, 60), CheckRiskManagement);
+            }
+
+            Log($"ETFMomentumStrategyOptimized initialized with {_etfSymbols.Count} T+0 ETFs");
         }
 
         /// <summary>
@@ -109,6 +141,38 @@ namespace QuantConnect.Algorithm.CSharp
         }
 
         /// <summary>
+        /// Check risk management rules (stop loss / take profit)
+        /// </summary>
+        private void CheckRiskManagement()
+        {
+            if (!_enableRiskManagement)
+                return;
+
+            foreach (var holding in Portfolio.Values.Where(h => h.Invested))
+            {
+                var unrealizedProfitPercent = holding.UnrealizedProfitPercent;
+
+                // Stop loss
+                if (unrealizedProfitPercent <= _stopLossPercent)
+                {
+                    Log($"STOP LOSS triggered for {holding.Symbol.Value}: {unrealizedProfitPercent:P2}");
+                    Liquidate(holding.Symbol);
+                }
+                // Take profit (sell 50%)
+                else if (unrealizedProfitPercent >= _takeProfitPercent)
+                {
+                    var currentQuantity = holding.Quantity;
+                    var sellQuantity = (int)(currentQuantity * 0.5m / 100) * 100; // Round to lot size
+                    if (sellQuantity >= 100)
+                    {
+                        Log($"TAKE PROFIT triggered for {holding.Symbol.Value}: {unrealizedProfitPercent:P2}, selling 50%");
+                        MarketOrder(holding.Symbol, -sellQuantity);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Rebalance portfolio based on momentum
         /// </summary>
         private void Rebalance()
@@ -116,6 +180,7 @@ namespace QuantConnect.Algorithm.CSharp
             // Calculate momentum for all ETFs
             _momentum.Clear();
             _latestHistoryClose.Clear();
+
             foreach (var symbol in _etfSymbols)
             {
                 var history = History(symbol, _lookbackPeriod, Resolution.Daily);
@@ -126,11 +191,6 @@ namespace QuantConnect.Algorithm.CSharp
                     var newPrice = bars.Last().Close;
                     _latestHistoryClose[symbol] = newPrice;
                     _momentum[symbol] = (newPrice - oldPrice) / oldPrice;
-                    Log($"Momentum for {symbol.Value}: {_momentum[symbol]:P2} (from {oldPrice:F2} to {newPrice:F2})");
-                }
-                else
-                {
-                    Log($"Insufficient history for {symbol.Value}: {history?.Count() ?? 0} bars (need {_lookbackPeriod})");
                 }
             }
 
@@ -147,7 +207,11 @@ namespace QuantConnect.Algorithm.CSharp
                 .Select(kvp => kvp.Key)
                 .ToList();
 
-            Log($"Rebalancing: Top {_topN} ETFs by momentum: {string.Join(", ", topETFs.Select(s => s.Value))}");
+            Log($"Rebalancing: Top {_topN} ETFs by momentum:");
+            foreach (var symbol in topETFs)
+            {
+                Log($"  {symbol.Value}: {_momentum[symbol]:P2}");
+            }
 
             if (Transactions.GetOpenOrders().Count > 0)
             {
@@ -155,7 +219,7 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            // Keep a small cash buffer for fees and because daily MarketOrders are converted to MOO orders
+            // Keep a small cash buffer
             var targetWeight = 0.95m / _topN;
 
             var liquidationOrdersPlaced = false;
@@ -205,7 +269,7 @@ namespace QuantConnect.Algorithm.CSharp
                     var priceRatio = historyClose / price;
                     if (priceRatio > 10m || priceRatio < 0.1m)
                     {
-                        Log($"Skipping {symbol.Value}: current price {price:F4} inconsistent with history close {historyClose:F4} (ratio: {priceRatio:F2})");
+                        Log($"Skipping {symbol.Value}: price inconsistency detected");
                         continue;
                     }
                 }
@@ -216,7 +280,6 @@ namespace QuantConnect.Algorithm.CSharp
 
                 if (roundedShares > int.MaxValue)
                 {
-                    Log($"Skipping {symbol.Value}: calculated quantity {roundedShares:F0} exceeds Int32.MaxValue");
                     continue;
                 }
 
@@ -239,19 +302,19 @@ namespace QuantConnect.Algorithm.CSharp
 
             foreach (var adjustment in sellAdjustments)
             {
-                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4} (delta: {adjustment.DeltaValue:F2}, target weight: {targetWeight:P2})");
+                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4}");
                 MarketOrder(adjustment.Symbol, adjustment.Quantity);
             }
 
             if (sellAdjustments.Count > 0)
             {
-                Log("Skipping buy allocations until sell rebalancing orders fill");
+                Log("Skipping buy allocations until sell orders fill");
                 return;
             }
 
             foreach (var adjustment in buyAdjustments)
             {
-                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4} (delta: {adjustment.DeltaValue:F2}, target weight: {targetWeight:P2})");
+                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4}");
                 MarketOrder(adjustment.Symbol, adjustment.Quantity);
             }
         }
@@ -278,6 +341,13 @@ namespace QuantConnect.Algorithm.CSharp
         {
             Log($"Algorithm finished. Final portfolio value: {Portfolio.TotalPortfolioValue:C}");
             Log($"Total return: {((Portfolio.TotalPortfolioValue / 1000000m) - 1):P2}");
+
+            // Log performance summary
+            Log($"\nPerformance Summary:");
+            Log($"  Initial Capital: ¥1,000,000");
+            Log($"  Final Value: {Portfolio.TotalPortfolioValue:C}");
+            Log($"  Net Profit: {Portfolio.TotalPortfolioValue - 1000000:C}");
+            Log($"  Return: {((Portfolio.TotalPortfolioValue / 1000000m) - 1):P2}");
         }
     }
 }
