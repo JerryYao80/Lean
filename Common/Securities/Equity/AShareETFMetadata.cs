@@ -63,6 +63,11 @@ namespace QuantConnect.Securities.Equity
         /// Whether this ETF supports T+0 trading
         /// </summary>
         public bool IsT0 => TradingMode == ETFTradingMode.T0;
+
+        /// <summary>
+        /// Daily price limit percentage for this ETF
+        /// </summary>
+        public decimal PriceLimitPercentage { get; set; } = AShareETF.DefaultPriceLimitPercentage;
     }
 
     /// <summary>
@@ -81,9 +86,9 @@ namespace QuantConnect.Securities.Equity
             { "511990", new AShareETFMetadata { Ticker = "511990", Name = "华宝添益", TradingMode = ETFTradingMode.T0, Market = "SSE" } },
 
             // T+0 ETFs - Shenzhen Stock Exchange
-            { "159915", new AShareETFMetadata { Ticker = "159915", Name = "创业板ETF", TradingMode = ETFTradingMode.T0, Market = "SZSE" } },
+            { "159915", new AShareETFMetadata { Ticker = "159915", Name = "创业板ETF", TradingMode = ETFTradingMode.T0, Market = "SZSE", PriceLimitPercentage = AShareETF.GrowthBoardPriceLimitPercentage } },
             { "159919", new AShareETFMetadata { Ticker = "159919", Name = "300ETF", TradingMode = ETFTradingMode.T0, Market = "SZSE" } },
-            { "159949", new AShareETFMetadata { Ticker = "159949", Name = "创业板50", TradingMode = ETFTradingMode.T0, Market = "SZSE" } },
+            { "159949", new AShareETFMetadata { Ticker = "159949", Name = "创业板50", TradingMode = ETFTradingMode.T0, Market = "SZSE", PriceLimitPercentage = AShareETF.GrowthBoardPriceLimitPercentage } },
 
             // T+1 ETFs - Examples (for filtering out)
             { "510180", new AShareETFMetadata { Ticker = "510180", Name = "180ETF", TradingMode = ETFTradingMode.T1, Market = "SSE" } },
@@ -96,6 +101,14 @@ namespace QuantConnect.Securities.Equity
         public static AShareETFMetadata GetMetadata(string ticker)
         {
             return _etfMetadata.TryGetValue(ticker, out var metadata) ? metadata : null;
+        }
+
+        /// <summary>
+        /// Gets the daily price limit percentage for an ETF
+        /// </summary>
+        public static decimal GetPriceLimitPercentage(string ticker)
+        {
+            return GetMetadata(ticker)?.PriceLimitPercentage ?? AShareETF.DefaultPriceLimitPercentage;
         }
 
         /// <summary>

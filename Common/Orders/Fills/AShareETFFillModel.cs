@@ -63,16 +63,16 @@ namespace QuantConnect.Orders.Fills
             // Get base fill from parent class
             var fill = base.Fill(parameters);
 
-            // Validate price limits (10% up/down from previous close)
+            // Validate price limits using the symbol-specific daily limit percentage
             var fillEvent = fill.FirstOrDefault();
             if (fillEvent != null && (fillEvent.Status == OrderStatus.Filled || fillEvent.Status == OrderStatus.PartiallyFilled))
             {
-                var tradeBar = security.Cache.GetData<TradeBar>();
-                if (tradeBar != null)
+                var previousClose = GetPreviousClose(security);
+                if (previousClose > 0)
                 {
-                    var previousClose = tradeBar.Close;
-                    var upperLimit = previousClose * (1 + AShareETF.PriceLimitPercentage);
-                    var lowerLimit = previousClose * (1 - AShareETF.PriceLimitPercentage);
+                    var minimumPriceVariation = security.SymbolProperties.MinimumPriceVariation;
+                    var upperLimit = AShareETF.GetUpperPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
+                    var lowerLimit = AShareETF.GetLowerPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
 
                     if (fillEvent.FillPrice > upperLimit || fillEvent.FillPrice < lowerLimit)
                     {
@@ -88,6 +88,17 @@ namespace QuantConnect.Orders.Fills
             }
 
             return fill;
+        }
+
+
+        private decimal? GetPreviousClose(Security security)
+        {
+            if (security.Session != null && security.Session.Count > 1 && security.Session[1] != null && security.Session[1].Close > 0)
+            {
+                return security.Session[1].Close;
+            }
+
+            return security.Cache.GetData<TradeBar>()?.Close;
         }
 
         /// <summary>

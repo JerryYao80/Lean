@@ -81,7 +81,16 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
         /// </summary>
         public void SetJob(LiveNodePacket job)
         {
-            _dataPath = Globals.DataFolder;
+            if (job?.Parameters != null && job.Parameters.TryGetValue("tushare-data-path", out var configuredPath)
+                && !string.IsNullOrWhiteSpace(configuredPath))
+            {
+                _dataPath = configuredPath;
+            }
+            else
+            {
+                _dataPath = Globals.DataFolder;
+            }
+
             _converter = new TushareDataConverter(_dataPath);
             Log.Trace($"TushareDataQueue.SetJob(): Initialized with data path: {_dataPath}");
         }

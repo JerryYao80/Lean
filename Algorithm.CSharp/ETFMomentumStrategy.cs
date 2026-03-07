@@ -34,6 +34,7 @@ namespace QuantConnect.Algorithm.CSharp
     {
         private List<Symbol> _etfSymbols;
         private Dictionary<Symbol, decimal> _momentum;
+        private readonly Dictionary<Symbol, decimal> _latestHistoryClose = new Dictionary<Symbol, decimal>();
         private int _rebalanceDays = 5;
         private int _lookbackPeriod = 20;
         private int _topN = 3;
@@ -75,9 +76,11 @@ namespace QuantConnect.Algorithm.CSharp
                     equity.FeeModel = new AShareETFFeeModel();
                     equity.FillModel = new AShareETFFillModel();
                     equity.BuyingPowerModel = new AShareETFBuyingPowerModel();
+                    equity.Session.Size = 2;
 
                     _etfSymbols.Add(equity.Symbol);
-                    Log($"Added T+0 ETF: {ticker} ({metadata.Name}) on {metadata.Market}, Price: {equity.Price:F4}");
+                    var initialPrice = equity.Price > 0 ? equity.Price.ToString("F4") : "pending first bar";
+                    Log($"Added T+0 ETF: {ticker} ({metadata.Name}) on {metadata.Market}, Initial Price: {initialPrice}");
                 }
             }
 
@@ -104,6 +107,7 @@ namespace QuantConnect.Algorithm.CSharp
         {
             // Calculate momentum for all ETFs
             _momentum.Clear();
+            _latestHistoryClose.Clear();
             foreach (var symbol in _etfSymbols)
             {
                 var history = History(symbol, _lookbackPeriod, Resolution.Daily);
@@ -112,6 +116,7 @@ namespace QuantConnect.Algorithm.CSharp
                     var bars = history.ToList();
                     var oldPrice = bars.First().Close;
                     var newPrice = bars.Last().Close;
+                    _latestHistoryClose[symbol] = newPrice;
                     _momentum[symbol] = (newPrice - oldPrice) / oldPrice;
                     Log($"Momentum for {symbol.Value}: {_momentum[symbol]:P2} (from {oldPrice:F2} to {newPrice:F2})");
                 }
@@ -136,8 +141,16 @@ namespace QuantConnect.Algorithm.CSharp
 
             Log($"Rebalancing: Top {_topN} ETFs by momentum: {string.Join(", ", topETFs.Select(s => s.Value))}");
 
-            // Calculate target weights
-            var targetWeight = 1.0m / _topN;
+            if (Transactions.GetOpenOrders().Count > 0)
+            {
+                Log($"Skipping rebalance: waiting for {Transactions.GetOpenOrders().Count} open order(s) to fill");
+                return;
+            }
+
+            // Keep a small cash buffer for fees and because daily MarketOrders are converted to MOO orders
+            var targetWeight = 0.95m / _topN;
+
+            var liquidationOrdersPlaced = false;
 
             // Liquidate positions not in top N
             foreach (var holding in Portfolio.Values.Where(h => h.Invested))
@@ -146,8 +159,18 @@ namespace QuantConnect.Algorithm.CSharp
                 {
                     Log($"Liquidating {holding.Symbol.Value}: {holding.Quantity} shares");
                     Liquidate(holding.Symbol);
+                    liquidationOrdersPlaced = true;
                 }
             }
+
+            if (liquidationOrdersPlaced)
+            {
+                Log("Skipping new allocations until liquidation orders fill");
+                return;
+            }
+
+            var sellAdjustments = new List<(Symbol Symbol, int Quantity, decimal Price, decimal DeltaValue)>();
+            var buyAdjustments = new List<(Symbol Symbol, int Quantity, decimal Price, decimal DeltaValue)>();
 
             // Allocate to top N ETFs
             foreach (var symbol in topETFs)
@@ -157,24 +180,71 @@ namespace QuantConnect.Algorithm.CSharp
                 var currentValue = Portfolio[symbol].HoldingsValue;
                 var deltaValue = targetValue - currentValue;
 
-                if (Math.Abs(deltaValue) > Portfolio.TotalPortfolioValue * 0.01m) // 1% threshold
+                if (Math.Abs(deltaValue) <= Portfolio.TotalPortfolioValue * 0.01m)
                 {
-                    var price = Securities[symbol].Price;
-                    if (price > 0)
-                    {
-                        // Use decimal for calculation to avoid overflow
-                        var targetQuantityDecimal = deltaValue / price;
-                        // Round to lot size (100 shares)
-                        var lots = Math.Floor(Math.Abs(targetQuantityDecimal) / 100m);
-                        var targetQuantity = (int)(lots * 100m * Math.Sign(targetQuantityDecimal));
+                    continue;
+                }
 
-                        if (targetQuantity != 0)
-                        {
-                            Log($"Ordering {symbol.Value}: {targetQuantity} shares at {price:F4} (delta: {deltaValue:F2}, target weight: {targetWeight:P2})");
-                            MarketOrder(symbol, targetQuantity);
-                        }
+                var price = Securities[symbol].Price;
+                if (price <= 0)
+                {
+                    Log($"Skipping {symbol.Value}: current price unavailable ({price:F4})");
+                    continue;
+                }
+
+                if (_latestHistoryClose.TryGetValue(symbol, out var historyClose) && historyClose > 0)
+                {
+                    var priceRatio = historyClose / price;
+                    if (priceRatio > 10m || priceRatio < 0.1m)
+                    {
+                        Log($"Skipping {symbol.Value}: current price {price:F4} inconsistent with history close {historyClose:F4} (ratio: {priceRatio:F2})");
+                        continue;
                     }
                 }
+
+                var targetQuantityDecimal = deltaValue / price;
+                var lots = Math.Floor(Math.Abs(targetQuantityDecimal) / 100m);
+                var roundedShares = lots * 100m;
+
+                if (roundedShares > int.MaxValue)
+                {
+                    Log($"Skipping {symbol.Value}: calculated quantity {roundedShares:F0} exceeds Int32.MaxValue");
+                    continue;
+                }
+
+                var targetQuantity = (int)(roundedShares * Math.Sign(targetQuantityDecimal));
+                if (targetQuantity == 0)
+                {
+                    continue;
+                }
+
+                var adjustment = (symbol, targetQuantity, price, deltaValue);
+                if (targetQuantity < 0)
+                {
+                    sellAdjustments.Add(adjustment);
+                }
+                else
+                {
+                    buyAdjustments.Add(adjustment);
+                }
+            }
+
+            foreach (var adjustment in sellAdjustments)
+            {
+                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4} (delta: {adjustment.DeltaValue:F2}, target weight: {targetWeight:P2})");
+                MarketOrder(adjustment.Symbol, adjustment.Quantity);
+            }
+
+            if (sellAdjustments.Count > 0)
+            {
+                Log("Skipping buy allocations until sell rebalancing orders fill");
+                return;
+            }
+
+            foreach (var adjustment in buyAdjustments)
+            {
+                Log($"Ordering {adjustment.Symbol.Value}: {adjustment.Quantity} shares at {adjustment.Price:F4} (delta: {adjustment.DeltaValue:F2}, target weight: {targetWeight:P2})");
+                MarketOrder(adjustment.Symbol, adjustment.Quantity);
             }
         }
 

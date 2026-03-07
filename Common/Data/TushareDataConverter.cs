@@ -15,11 +15,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using NodaTime;
-using QuantConnect.Data;
+using Newtonsoft.Json;
 using QuantConnect.Data.Market;
 using QuantConnect.Logging;
 
@@ -32,6 +31,8 @@ namespace QuantConnect.Data
     {
         private readonly string _dataPath;
         private readonly TushareDataCache _cache;
+        private readonly Dictionary<string, List<TradeBar>> _dailyDataBySymbol = new Dictionary<string, List<TradeBar>>();
+        private readonly object _dailyDataLock = new object();
         private static readonly DateTimeZone ChinaTimeZone = DateTimeZoneProviders.Tzdb["Asia/Shanghai"];
 
         /// <summary>
@@ -81,7 +82,6 @@ namespace QuantConnect.Data
             var ticker = parts[0];
             var exchange = parts[1];
 
-            // Determine market based on exchange
             var market = exchange.ToUpperInvariant() switch
             {
                 "SH" => QuantConnect.Market.SSE,
@@ -108,7 +108,6 @@ namespace QuantConnect.Data
             var month = int.Parse(tradeDate.Substring(4, 2));
             var day = int.Parse(tradeDate.Substring(6, 2));
 
-            // Market close time: 15:00 CST
             var localDateTime = new LocalDateTime(year, month, day, 15, 0);
             var zonedDateTime = ChinaTimeZone.AtLeniently(localDateTime);
 
@@ -134,42 +133,127 @@ namespace QuantConnect.Data
         /// <returns>List of TradeBars</returns>
         public List<TradeBar> GetDailyData(string tsCode, DateTime startDate, DateTime endDate)
         {
-            var result = new List<TradeBar>();
-            var symbol = ConvertToSymbol(tsCode);
+            try
+            {
+                var allBars = GetOrLoadDailyData(tsCode);
+                var start = startDate.Date;
+                var end = endDate.Date;
 
-            // Path to fund daily data: fund_daily/ts_code={tsCode}/data.parquet
+                var result = allBars
+                    .Where(bar => bar.EndTime.Date >= start && bar.EndTime.Date <= end)
+                    .Select(bar => new TradeBar(bar))
+                    .ToList();
+
+                Log.Trace($"TushareDataConverter.GetDailyData(): Loaded {result.Count} bars for {tsCode}");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TushareDataConverter.GetDailyData(): Error reading data for {tsCode}: {ex.Message}");
+                return new List<TradeBar>();
+            }
+        }
+
+        /// <summary>
+        /// Gets the most recent trading data for a symbol (for live-paper simulation)
+        /// </summary>
+        public TradeBar GetLatestData(string tsCode)
+        {
+            var allBars = GetOrLoadDailyData(tsCode);
+            if (allBars.Count == 0)
+            {
+                return null;
+            }
+
+            return new TradeBar(allBars[allBars.Count - 1]);
+        }
+
+        private List<TradeBar> GetOrLoadDailyData(string tsCode)
+        {
+            lock (_dailyDataLock)
+            {
+                if (_dailyDataBySymbol.TryGetValue(tsCode, out var cachedBars))
+                {
+                    return cachedBars;
+                }
+            }
+
+            var loadedBars = LoadDailyData(tsCode);
+
+            lock (_dailyDataLock)
+            {
+                if (!_dailyDataBySymbol.ContainsKey(tsCode))
+                {
+                    _dailyDataBySymbol[tsCode] = loadedBars;
+                }
+
+                return _dailyDataBySymbol[tsCode];
+            }
+        }
+
+        private List<TradeBar> LoadDailyData(string tsCode)
+        {
+            var symbol = ConvertToSymbol(tsCode);
             var dailyPath = Path.Combine(_dataPath, "fund_daily", $"ts_code={tsCode}", "data.parquet");
 
             if (!File.Exists(dailyPath))
             {
-                Log.Error($"TushareDataConverter.GetDailyData(): Daily data file not found: {dailyPath}");
-                return result;
+                Log.Error($"TushareDataConverter.LoadDailyData(): Daily data file not found: {dailyPath}");
+                return new List<TradeBar>();
             }
 
-            try
-            {
-                // Use Python to read parquet file
-                var pythonCode = $@"
+            var pythonCode = $@"
 import pandas as pd
 import json
 
 df = pd.read_parquet('{dailyPath}')
 df = df.sort_values('trade_date')
-
-# Filter by date range
-start_date = '{startDate:yyyyMMdd}'
-end_date = '{endDate:yyyyMMdd}'
-df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
-
-# Convert to JSON
-result = df.to_json(orient='records')
-print(result)
+print(df.to_json(orient='records'))
 ";
 
-                var pythonPath = "/root/miniconda3/envs/quant311/bin/python";
-                var tempFile = Path.GetTempFileName();
-                File.WriteAllText(tempFile, pythonCode);
+            var output = ExecutePython(pythonCode, $"TushareDataConverter.LoadDailyData({tsCode})");
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return new List<TradeBar>();
+            }
 
+            var data = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output)
+                ?? new List<Dictionary<string, object>>();
+
+            var result = new List<TradeBar>(data.Count);
+            foreach (var row in data)
+            {
+                var tradeDate = row["trade_date"].ToString();
+                var time = ConvertTradeDate(tradeDate);
+
+                var tradeBar = new TradeBar
+                {
+                    Symbol = symbol,
+                    Time = time.AddDays(-1),
+                    EndTime = time,
+                    Open = Convert.ToDecimal(row["open"]),
+                    High = Convert.ToDecimal(row["high"]),
+                    Low = Convert.ToDecimal(row["low"]),
+                    Close = Convert.ToDecimal(row["close"]),
+                    Volume = ConvertVolume(Convert.ToDecimal(row["vol"])),
+                    Period = TimeSpan.FromDays(1)
+                };
+
+                result.Add(tradeBar);
+            }
+
+            Log.Trace($"TushareDataConverter.LoadDailyData(): Cached {result.Count} bars for {tsCode}");
+            return result;
+        }
+
+        private static string ExecutePython(string pythonCode, string context)
+        {
+            var pythonPath = "/root/miniconda3/envs/quant311/bin/python";
+            var tempFile = Path.GetTempFileName();
+            File.WriteAllText(tempFile, pythonCode);
+
+            try
+            {
                 var process = new System.Diagnostics.Process
                 {
                     StartInfo = new System.Diagnostics.ProcessStartInfo
@@ -188,58 +272,18 @@ print(result)
                 var error = process.StandardError.ReadToEnd();
                 process.WaitForExit();
 
-                File.Delete(tempFile);
-
-                if (!string.IsNullOrEmpty(error))
+                if (process.ExitCode != 0 || !string.IsNullOrWhiteSpace(error))
                 {
-                    Log.Error($"TushareDataConverter.GetDailyData(): Python error: {error}");
-                    return result;
+                    Log.Error($"{context}: Python error: {error}");
+                    return null;
                 }
 
-                // Parse JSON output
-                var data = Newtonsoft.Json.JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output);
-
-                foreach (var row in data)
-                {
-                    var tradeDate = row["trade_date"].ToString();
-                    var time = ConvertTradeDate(tradeDate);
-
-                    var tradeBar = new TradeBar
-                    {
-                        Symbol = symbol,
-                        Time = time.AddDays(-1), // Start of bar (previous day 15:00)
-                        EndTime = time,
-                        Open = Convert.ToDecimal(row["open"]),
-                        High = Convert.ToDecimal(row["high"]),
-                        Low = Convert.ToDecimal(row["low"]),
-                        Close = Convert.ToDecimal(row["close"]),
-                        Volume = ConvertVolume(Convert.ToDecimal(row["vol"])),
-                        Period = TimeSpan.FromDays(1)
-                    };
-
-                    result.Add(tradeBar);
-                }
-
-                Log.Trace($"TushareDataConverter.GetDailyData(): Loaded {result.Count} bars for {tsCode}");
+                return output;
             }
-            catch (Exception ex)
+            finally
             {
-                Log.Error($"TushareDataConverter.GetDailyData(): Error reading data for {tsCode}: {ex.Message}");
+                File.Delete(tempFile);
             }
-
-            return result;
-        }
-
-        /// <summary>
-        /// Gets the most recent trading data for a symbol (for live-paper simulation)
-        /// </summary>
-        public TradeBar GetLatestData(string tsCode)
-        {
-            var endDate = DateTime.UtcNow;
-            var startDate = endDate.AddDays(-10); // Get last 10 days to ensure we have data
-
-            var bars = GetDailyData(tsCode, startDate, endDate);
-            return bars.LastOrDefault();
         }
     }
 }
