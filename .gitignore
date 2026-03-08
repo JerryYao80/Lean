@@ -218,6 +218,13 @@ csx/
 AppPackages/
 
 # Others
+
+# Local scratch/generated files
+.dotnet_home/
+*.bak
+log.txt
+Launcher/log.txt
+good_data_etfs.json
 *.Cache
 ClientBin/
 [Ss]tyle[Cc]op.*
