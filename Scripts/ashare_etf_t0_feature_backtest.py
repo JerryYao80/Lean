@@ -46,8 +46,12 @@ def default_config() -> dict:
         "min-score-spread": 0.7,
         "max-average-gap-abs": 0.016,
         "risk-regime-filter-enabled": True,
+        "risk-regime-medium-momentum-threshold": 0.0,
+        "risk-regime-medium-volatility-threshold": 1.25,
+        "risk-regime-medium-exposure-scale": 0.9,
         "risk-regime-momentum-threshold": -0.005,
         "risk-regime-volatility-threshold": 1.4,
+        "risk-regime-high-exposure-scale": 0.1,
         "report-file": str(root / "Launcher" / "bin" / "Debug" / "bt.log"),
     }
 
@@ -155,8 +159,12 @@ def backtest_from_scores(
     min_score_spread: float = 0.0,
     max_average_gap_abs: float | None = None,
     risk_regime_filter_enabled: bool = False,
+    risk_regime_medium_momentum_threshold: float | None = None,
+    risk_regime_medium_volatility_threshold: float | None = None,
+    risk_regime_medium_exposure_scale: float = 1.0,
     risk_regime_momentum_threshold: float | None = None,
     risk_regime_volatility_threshold: float | None = None,
+    risk_regime_high_exposure_scale: float = 0.0,
 ) -> tuple[pd.DataFrame, dict]:
     daily_rows = []
     selection_counter: Counter[str] = Counter()
@@ -164,7 +172,9 @@ def backtest_from_scores(
     scored_trade_days = 0
     skipped_low_conviction_days = 0
     skipped_gap_risk_days = 0
-    skipped_risk_regime_days = 0
+    medium_risk_regime_days = 0
+    high_risk_regime_days = 0
+    exposure_scales = []
 
     for trade_date, group in scored.groupby("trade_date", sort=True):
         scored_trade_days += 1
@@ -179,16 +189,27 @@ def backtest_from_scores(
 
         market_signal_momentum5_mean = float(_numeric(group["signal_momentum_5"]).mean()) if "signal_momentum_5" in group.columns else 0.0
         market_signal_volatility10_mean = float(_numeric(group["signal_volatility_10"]).mean()) if "signal_volatility_10" in group.columns else 0.0
-        in_risk_regime = (
-            risk_regime_filter_enabled
-            and risk_regime_momentum_threshold is not None
-            and risk_regime_volatility_threshold is not None
-            and market_signal_momentum5_mean <= float(risk_regime_momentum_threshold)
-            and market_signal_volatility10_mean >= float(risk_regime_volatility_threshold)
-        )
-        if in_risk_regime:
-            skipped_risk_regime_days += 1
-            continue
+        exposure_scale = 1.0
+        risk_regime_bucket = "normal"
+        if risk_regime_filter_enabled:
+            if (
+                risk_regime_momentum_threshold is not None
+                and risk_regime_volatility_threshold is not None
+                and market_signal_momentum5_mean <= float(risk_regime_momentum_threshold)
+                and market_signal_volatility10_mean >= float(risk_regime_volatility_threshold)
+            ):
+                exposure_scale = float(risk_regime_high_exposure_scale)
+                risk_regime_bucket = "high"
+                high_risk_regime_days += 1
+            elif (
+                risk_regime_medium_momentum_threshold is not None
+                and risk_regime_medium_volatility_threshold is not None
+                and market_signal_momentum5_mean <= float(risk_regime_medium_momentum_threshold)
+                and market_signal_volatility10_mean >= float(risk_regime_medium_volatility_threshold)
+            ):
+                exposure_scale = float(risk_regime_medium_exposure_scale)
+                risk_regime_bucket = "medium"
+                medium_risk_regime_days += 1
 
         picks = group.sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
         if picks.empty:
@@ -199,11 +220,15 @@ def backtest_from_scores(
             skipped_gap_risk_days += 1
             continue
 
+        if exposure_scale <= 0:
+            continue
+
         gross_return = float(_numeric(picks["trade_return"]).mean())
-        net_return = gross_return - fee_rate
+        net_return = (gross_return - fee_rate) * exposure_scale
         equity *= 1 + net_return
         symbols = picks["symbol"].tolist()
         selection_counter.update(symbols)
+        exposure_scales.append(exposure_scale)
 
         daily_rows.append({
             "trade_date": trade_date,
@@ -216,6 +241,8 @@ def backtest_from_scores(
             "average_gap_abs": average_gap_abs,
             "market_signal_momentum5_mean": market_signal_momentum5_mean,
             "market_signal_volatility10_mean": market_signal_volatility10_mean,
+            "risk_regime_bucket": risk_regime_bucket,
+            "exposure_scale": exposure_scale,
         })
 
     daily = pd.DataFrame(daily_rows)
@@ -224,14 +251,20 @@ def backtest_from_scores(
         "scored_trade_days": int(scored_trade_days),
         "skipped_low_conviction_days": int(skipped_low_conviction_days),
         "skipped_gap_risk_days": int(skipped_gap_risk_days),
-        "skipped_risk_regime_days": int(skipped_risk_regime_days),
+        "medium_risk_regime_days": int(medium_risk_regime_days),
+        "high_risk_regime_days": int(high_risk_regime_days),
         "selected_trade_days": int(len(daily)),
         "selection_rate": float(len(daily) / scored_trade_days) if scored_trade_days > 0 else 0.0,
+        "average_exposure_scale": float(sum(exposure_scales) / len(exposure_scales)) if exposure_scales else 0.0,
         "min_score_spread": float(min_score_spread),
         "max_average_gap_abs": float(max_average_gap_abs) if max_average_gap_abs is not None else None,
         "risk_regime_filter_enabled": bool(risk_regime_filter_enabled),
+        "risk_regime_medium_momentum_threshold": float(risk_regime_medium_momentum_threshold) if risk_regime_medium_momentum_threshold is not None else None,
+        "risk_regime_medium_volatility_threshold": float(risk_regime_medium_volatility_threshold) if risk_regime_medium_volatility_threshold is not None else None,
+        "risk_regime_medium_exposure_scale": float(risk_regime_medium_exposure_scale),
         "risk_regime_momentum_threshold": float(risk_regime_momentum_threshold) if risk_regime_momentum_threshold is not None else None,
         "risk_regime_volatility_threshold": float(risk_regime_volatility_threshold) if risk_regime_volatility_threshold is not None else None,
+        "risk_regime_high_exposure_scale": float(risk_regime_high_exposure_scale),
     })
     return daily, summary
 
@@ -287,9 +320,11 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
             else "Max Average Gap Abs: disabled"
         ),
         (
-            f"Risk Regime Filter: enabled (mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f})"
+            "Risk Regime Scaling: enabled "
+            f"(medium: mom5<={float(config.get('risk-regime-medium-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-medium-volatility-threshold')):.4f}, scale={float(config.get('risk-regime-medium-exposure-scale', 1.0)):.2f}; "
+            f"high: mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f}, scale={float(config.get('risk-regime-high-exposure-scale', 0.0)):.2f})"
             if config.get("risk-regime-filter-enabled")
-            else "Risk Regime Filter: disabled"
+            else "Risk Regime Scaling: disabled"
         ),
         "Feature Fields:",
         "- momentum_20: close / close[-20] - 1",
@@ -303,9 +338,11 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
         f"- Scored Trade Days: {summary['scored_trade_days']}",
         f"- Selected Trade Days: {summary['selected_trade_days']}",
         f"- Selection Rate: {summary['selection_rate']:.2%}",
+        f"- Average Exposure Scale: {summary['average_exposure_scale']:.2%}",
         f"- Skipped Low Conviction Days: {summary['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {summary['skipped_gap_risk_days']}",
-        f"- Skipped Risk Regime Days: {summary['skipped_risk_regime_days']}",
+        f"- Medium Risk Regime Days: {summary['medium_risk_regime_days']}",
+        f"- High Risk Regime Days: {summary['high_risk_regime_days']}",
         f"- Final Equity: {summary['final_equity']:.6f}",
         f"- Total Return: {summary['total_return']:.2%}",
         f"- Annualized Return: {summary['annualized_return']:.2%}",
@@ -351,6 +388,17 @@ def run_backtest(config: dict) -> dict:
             else None
         ),
         risk_regime_filter_enabled=bool(config.get("risk-regime-filter-enabled", False)),
+        risk_regime_medium_momentum_threshold=(
+            float(config["risk-regime-medium-momentum-threshold"])
+            if config.get("risk-regime-medium-momentum-threshold") is not None
+            else None
+        ),
+        risk_regime_medium_volatility_threshold=(
+            float(config["risk-regime-medium-volatility-threshold"])
+            if config.get("risk-regime-medium-volatility-threshold") is not None
+            else None
+        ),
+        risk_regime_medium_exposure_scale=float(config.get("risk-regime-medium-exposure-scale", 1.0) or 1.0),
         risk_regime_momentum_threshold=(
             float(config["risk-regime-momentum-threshold"])
             if config.get("risk-regime-momentum-threshold") is not None
@@ -361,6 +409,7 @@ def run_backtest(config: dict) -> dict:
             if config.get("risk-regime-volatility-threshold") is not None
             else None
         ),
+        risk_regime_high_exposure_scale=float(config.get("risk-regime-high-exposure-scale", 0.0) or 0.0),
     )
 
     summary = {
@@ -389,8 +438,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score-spread", type=float)
     parser.add_argument("--max-average-gap-abs", type=float)
     parser.add_argument("--risk-regime-filter-enabled", action="store_true")
+    parser.add_argument("--risk-regime-medium-momentum-threshold", type=float)
+    parser.add_argument("--risk-regime-medium-volatility-threshold", type=float)
+    parser.add_argument("--risk-regime-medium-exposure-scale", type=float)
     parser.add_argument("--risk-regime-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-volatility-threshold", type=float)
+    parser.add_argument("--risk-regime-high-exposure-scale", type=float)
     parser.add_argument("--include-money-market-etfs", action="store_true")
     return parser
 
@@ -405,8 +458,12 @@ def main() -> int:
         "fee-rate": args.fee_rate,
         "min-score-spread": args.min_score_spread,
         "max-average-gap-abs": args.max_average_gap_abs,
+        "risk-regime-medium-momentum-threshold": args.risk_regime_medium_momentum_threshold,
+        "risk-regime-medium-volatility-threshold": args.risk_regime_medium_volatility_threshold,
+        "risk-regime-medium-exposure-scale": args.risk_regime_medium_exposure_scale,
         "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
         "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
+        "risk-regime-high-exposure-scale": args.risk_regime_high_exposure_scale,
     }
     if args.risk_regime_filter_enabled:
         overrides["risk-regime-filter-enabled"] = True

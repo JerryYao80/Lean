@@ -44,8 +44,12 @@ def default_config() -> dict:
         "min-score-spread": 0.7,
         "max-average-gap-abs": 0.016,
         "risk-regime-filter-enabled": True,
+        "risk-regime-medium-momentum-threshold": 0.0,
+        "risk-regime-medium-volatility-threshold": 1.25,
+        "risk-regime-medium-exposure-scale": 0.9,
         "risk-regime-momentum-threshold": -0.005,
         "risk-regime-volatility-threshold": 1.4,
+        "risk-regime-high-exposure-scale": 0.1,
         "trial-count": 500,
         "horizon-days": 63,
         "block-size": 5,
@@ -131,6 +135,17 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
             else None
         ),
         risk_regime_filter_enabled=bool(config.get("risk-regime-filter-enabled", False)),
+        risk_regime_medium_momentum_threshold=(
+            float(config["risk-regime-medium-momentum-threshold"])
+            if config.get("risk-regime-medium-momentum-threshold") is not None
+            else None
+        ),
+        risk_regime_medium_volatility_threshold=(
+            float(config["risk-regime-medium-volatility-threshold"])
+            if config.get("risk-regime-medium-volatility-threshold") is not None
+            else None
+        ),
+        risk_regime_medium_exposure_scale=float(config.get("risk-regime-medium-exposure-scale", 1.0) or 1.0),
         risk_regime_momentum_threshold=(
             float(config["risk-regime-momentum-threshold"])
             if config.get("risk-regime-momentum-threshold") is not None
@@ -141,6 +156,7 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
             if config.get("risk-regime-volatility-threshold") is not None
             else None
         ),
+        risk_regime_high_exposure_scale=float(config.get("risk-regime-high-exposure-scale", 0.0) or 0.0),
     )
     if not daily.empty and not regime_frame.empty:
         daily = daily.merge(regime_frame, on="trade_date", how="left")
@@ -431,9 +447,11 @@ def build_report_text(report: dict, config: dict) -> str:
             else "Max Average Gap Abs: disabled"
         ),
         (
-            f"Risk Regime Filter: enabled (mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f})"
+            "Risk Regime Scaling: enabled "
+            f"(medium: mom5<={float(config.get('risk-regime-medium-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-medium-volatility-threshold')):.4f}, scale={float(config.get('risk-regime-medium-exposure-scale', 1.0)):.2f}; "
+            f"high: mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f}, scale={float(config.get('risk-regime-high-exposure-scale', 0.0)):.2f})"
             if config.get("risk-regime-filter-enabled")
-            else "Risk Regime Filter: disabled"
+            else "Risk Regime Scaling: disabled"
         ),
         f"Slippage Probability: {float(config['slippage-probability']):.2%}",
         f"Slippage Mean: {float(config['slippage-mean']):.2%}",
@@ -451,7 +469,9 @@ def build_report_text(report: dict, config: dict) -> str:
         f"- Selection Rate: {base['selection_rate']:.2%}",
         f"- Skipped Low Conviction Days: {base['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {base['skipped_gap_risk_days']}",
-        f"- Skipped Risk Regime Days: {base['skipped_risk_regime_days']}",
+        f"- Average Exposure Scale: {base['average_exposure_scale']:.2%}",
+        f"- Medium Risk Regime Days: {base['medium_risk_regime_days']}",
+        f"- High Risk Regime Days: {base['high_risk_regime_days']}",
         f"- Final Equity: {base['final_equity']:.6f}",
         f"- Total Return: {base['total_return']:.2%}",
         f"- Annualized Return: {base['annualized_return']:.2%}",
@@ -581,8 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score-spread", type=float)
     parser.add_argument("--max-average-gap-abs", type=float)
     parser.add_argument("--risk-regime-filter-enabled", action="store_true")
+    parser.add_argument("--risk-regime-medium-momentum-threshold", type=float)
+    parser.add_argument("--risk-regime-medium-volatility-threshold", type=float)
+    parser.add_argument("--risk-regime-medium-exposure-scale", type=float)
     parser.add_argument("--risk-regime-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-volatility-threshold", type=float)
+    parser.add_argument("--risk-regime-high-exposure-scale", type=float)
     parser.add_argument("--trial-count", type=int)
     parser.add_argument("--horizon-days", type=int)
     parser.add_argument("--block-size", type=int)
@@ -610,8 +634,12 @@ def main() -> int:
         "fee-rate": args.fee_rate,
         "min-score-spread": args.min_score_spread,
         "max-average-gap-abs": args.max_average_gap_abs,
+        "risk-regime-medium-momentum-threshold": args.risk_regime_medium_momentum_threshold,
+        "risk-regime-medium-volatility-threshold": args.risk_regime_medium_volatility_threshold,
+        "risk-regime-medium-exposure-scale": args.risk_regime_medium_exposure_scale,
         "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
         "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
+        "risk-regime-high-exposure-scale": args.risk_regime_high_exposure_scale,
         "trial-count": args.trial_count,
         "horizon-days": args.horizon_days,
         "block-size": args.block_size,

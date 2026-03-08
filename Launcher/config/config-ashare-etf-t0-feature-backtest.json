@@ -10,7 +10,11 @@
   "min-score-spread": 0.7,
   "max-average-gap-abs": 0.016,
   "risk-regime-filter-enabled": true,
+  "risk-regime-medium-momentum-threshold": 0.0,
+  "risk-regime-medium-volatility-threshold": 1.25,
+  "risk-regime-medium-exposure-scale": 0.9,
   "risk-regime-momentum-threshold": -0.005,
   "risk-regime-volatility-threshold": 1.4,
+  "risk-regime-high-exposure-scale": 0.1,
   "report-file": "../bin/Debug/bt.log"
 }

@@ -186,8 +186,12 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
                 "min-score-spread": 0.1,
                 "max-average-gap-abs": 0.05,
                 "risk-regime-filter-enabled": True,
+                "risk-regime-medium-momentum-threshold": 0.0,
+                "risk-regime-medium-volatility-threshold": 1.25,
+                "risk-regime-medium-exposure-scale": 0.9,
                 "risk-regime-momentum-threshold": -0.5,
                 "risk-regime-volatility-threshold": 10.0,
+                "risk-regime-high-exposure-scale": 0.1,
                 "trial-count": 32,
                 "horizon-days": 15,
                 "block-size": 4,
@@ -219,7 +223,8 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
         self.assertIn("regime_combined_stress", report_text)
         self.assertIn("execution_stress", report["scenarios"])
         self.assertIn("regime_stress", report["scenarios"])
-        self.assertIn("Risk Regime Filter", report_text)
+        self.assertIn("Risk Regime Scaling", report_text)
+        self.assertIn("Average Exposure Scale", report_text)
 
 
 if __name__ == "__main__":

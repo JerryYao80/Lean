@@ -48,8 +48,12 @@ namespace QuantConnect.Algorithm.CSharp
         private decimal _minScoreSpread;
         private decimal? _maxAverageGapAbs;
         private bool _riskRegimeFilterEnabled;
+        private decimal? _riskRegimeMediumMomentumThreshold;
+        private decimal? _riskRegimeMediumVolatilityThreshold;
+        private decimal _riskRegimeMediumExposureScale;
         private decimal? _riskRegimeMomentumThreshold;
         private decimal? _riskRegimeVolatilityThreshold;
+        private decimal _riskRegimeHighExposureScale;
         private decimal _targetPortfolioExposure;
         private bool _excludeMoneyMarketEtfs;
         private string _executionMode;
@@ -67,8 +71,12 @@ namespace QuantConnect.Algorithm.CSharp
             _minScoreSpread = GetDecimalParameter("min-score-spread", 0.7m);
             _maxAverageGapAbs = GetOptionalDecimalParameter("max-average-gap-abs");
             _riskRegimeFilterEnabled = GetBoolParameter("risk-regime-filter-enabled", false);
+            _riskRegimeMediumMomentumThreshold = GetOptionalDecimalParameter("risk-regime-medium-momentum-threshold");
+            _riskRegimeMediumVolatilityThreshold = GetOptionalDecimalParameter("risk-regime-medium-volatility-threshold");
+            _riskRegimeMediumExposureScale = GetDecimalParameter("risk-regime-medium-exposure-scale", 1.0m);
             _riskRegimeMomentumThreshold = GetOptionalDecimalParameter("risk-regime-momentum-threshold");
             _riskRegimeVolatilityThreshold = GetOptionalDecimalParameter("risk-regime-volatility-threshold");
+            _riskRegimeHighExposureScale = GetDecimalParameter("risk-regime-high-exposure-scale", 0.0m);
             _targetPortfolioExposure = GetDecimalParameter("target-portfolio-exposure", 0.95m);
             _excludeMoneyMarketEtfs = GetBoolParameter("exclude-money-market-etfs", true);
             _executionMode = (GetParameter("execution-mode") ?? "synthetic").Trim().ToLowerInvariant();
@@ -186,22 +194,33 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            if (_riskRegimeFilterEnabled && _riskRegimeMomentumThreshold.HasValue && _riskRegimeVolatilityThreshold.HasValue)
+            var marketSignalMomentum5Mean = dailyFeatures.Values
+                .Where(feature => feature.SignalMomentum5.HasValue)
+                .Select(feature => feature.SignalMomentum5.Value)
+                .DefaultIfEmpty(0m)
+                .Average();
+            var marketSignalVolatility10Mean = dailyFeatures.Values
+                .Where(feature => feature.SignalVolatility10.HasValue)
+                .Select(feature => feature.SignalVolatility10.Value)
+                .DefaultIfEmpty(0m)
+                .Average();
+            var dailyExposureScale = 1m;
+            var riskRegimeBucket = "normal";
+            if (_riskRegimeFilterEnabled)
             {
-                var marketSignalMomentum5Mean = dailyFeatures.Values
-                    .Where(feature => feature.SignalMomentum5.HasValue)
-                    .Select(feature => feature.SignalMomentum5.Value)
-                    .DefaultIfEmpty(0m)
-                    .Average();
-                var marketSignalVolatility10Mean = dailyFeatures.Values
-                    .Where(feature => feature.SignalVolatility10.HasValue)
-                    .Select(feature => feature.SignalVolatility10.Value)
-                    .DefaultIfEmpty(0m)
-                    .Average();
-                if (marketSignalMomentum5Mean <= _riskRegimeMomentumThreshold.Value && marketSignalVolatility10Mean >= _riskRegimeVolatilityThreshold.Value)
+                if (_riskRegimeMomentumThreshold.HasValue && _riskRegimeVolatilityThreshold.HasValue &&
+                    marketSignalMomentum5Mean <= _riskRegimeMomentumThreshold.Value &&
+                    marketSignalVolatility10Mean >= _riskRegimeVolatilityThreshold.Value)
                 {
-                    Log($"{Time:yyyy-MM-dd} skip trading: risk regime detected mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
-                    return;
+                    dailyExposureScale = _riskRegimeHighExposureScale;
+                    riskRegimeBucket = "high";
+                }
+                else if (_riskRegimeMediumMomentumThreshold.HasValue && _riskRegimeMediumVolatilityThreshold.HasValue &&
+                    marketSignalMomentum5Mean <= _riskRegimeMediumMomentumThreshold.Value &&
+                    marketSignalVolatility10Mean >= _riskRegimeMediumVolatilityThreshold.Value)
+                {
+                    dailyExposureScale = _riskRegimeMediumExposureScale;
+                    riskRegimeBucket = "medium";
                 }
             }
 
@@ -230,8 +249,19 @@ namespace QuantConnect.Algorithm.CSharp
                 }
             }
 
+            if (dailyExposureScale <= 0m)
+            {
+                Log($"{Time:yyyy-MM-dd} skip trading: risk regime scaling bucket={riskRegimeBucket} scale={dailyExposureScale:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
+                return;
+            }
+
+            if (dailyExposureScale < 1m)
+            {
+                Log($"{Time:yyyy-MM-dd} risk regime scaling bucket={riskRegimeBucket} scale={dailyExposureScale:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
+            }
+
             var availableCash = Portfolio.CashBook[AccountCurrency].Amount;
-            var targetBudget = Math.Min(Portfolio.TotalPortfolioValue, availableCash) * _targetPortfolioExposure;
+            var targetBudget = Math.Min(Portfolio.TotalPortfolioValue, availableCash) * _targetPortfolioExposure * dailyExposureScale;
             var remainingBudget = targetBudget;
             var remainingSlots = ranked.Count;
             var portfolioValueBefore = Portfolio.TotalPortfolioValue;

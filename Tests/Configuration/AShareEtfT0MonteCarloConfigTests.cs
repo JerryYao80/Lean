@@ -51,8 +51,12 @@ namespace QuantConnect.Tests.Configuration
             Assert.That((string)parameters["min-score-spread"], Is.EqualTo("0.7"));
             Assert.That((string)parameters["max-average-gap-abs"], Is.EqualTo("0.016"));
             Assert.That((string)parameters["risk-regime-filter-enabled"], Is.EqualTo("true"));
+            Assert.That((string)parameters["risk-regime-medium-momentum-threshold"], Is.EqualTo("0.0"));
+            Assert.That((string)parameters["risk-regime-medium-volatility-threshold"], Is.EqualTo("1.25"));
+            Assert.That((string)parameters["risk-regime-medium-exposure-scale"], Is.EqualTo("0.9"));
             Assert.That((string)parameters["risk-regime-momentum-threshold"], Is.EqualTo("-0.005"));
             Assert.That((string)parameters["risk-regime-volatility-threshold"], Is.EqualTo("1.4"));
+            Assert.That((string)parameters["risk-regime-high-exposure-scale"], Is.EqualTo("0.1"));
             Assert.That((string)parameters["monte-carlo-enabled"], Is.EqualTo("true"));
             Assert.That((string)parameters["monte-carlo-trials"], Is.EqualTo("500"));
             Assert.That((string)parameters["monte-carlo-horizon-days"], Is.EqualTo("63"));
