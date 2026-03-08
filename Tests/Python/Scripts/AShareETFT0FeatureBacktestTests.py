@@ -347,6 +347,48 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertAlmostEqual(daily.iloc[1]["portfolio_risk_overlay_scale"], 0.25, places=10)
         self.assertAlmostEqual(summary["average_portfolio_quarter_kelly_scale"], 0.625, places=10)
 
+    def test_backtest_from_scores_higher_kelly_fraction_scales_less_aggressively(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 2.0, "trade_return": 0.10},
+            {"trade_date": "20240110", "symbol": "B", "score": 1.0, "trade_return": 0.0},
+            {"trade_date": "20240111", "symbol": "A", "score": 2.0, "trade_return": -0.09},
+            {"trade_date": "20240111", "symbol": "B", "score": 1.0, "trade_return": 0.0},
+            {"trade_date": "20240112", "symbol": "A", "score": 2.0, "trade_return": 0.02},
+            {"trade_date": "20240112", "symbol": "B", "score": 1.0, "trade_return": 0.0},
+        ])
+
+        quarter_daily, _ = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.0,
+            portfolio_quarter_kelly_enabled=True,
+            portfolio_quarter_kelly_lookback=5,
+            portfolio_quarter_kelly_min_observations=2,
+            portfolio_quarter_kelly_floor_scale=0.0,
+            portfolio_quarter_kelly_cap_scale=1.0,
+            portfolio_quarter_kelly_fraction=0.25,
+            portfolio_quarter_kelly_medium_regime_multiplier=0.75,
+            portfolio_quarter_kelly_high_regime_multiplier=0.5,
+        )
+        half_daily, _ = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.0,
+            portfolio_quarter_kelly_enabled=True,
+            portfolio_quarter_kelly_lookback=5,
+            portfolio_quarter_kelly_min_observations=2,
+            portfolio_quarter_kelly_floor_scale=0.0,
+            portfolio_quarter_kelly_cap_scale=1.0,
+            portfolio_quarter_kelly_fraction=0.5,
+            portfolio_quarter_kelly_medium_regime_multiplier=0.75,
+            portfolio_quarter_kelly_high_regime_multiplier=0.5,
+        )
+
+        self.assertLess(quarter_daily.iloc[2]["portfolio_quarter_kelly_scale"], half_daily.iloc[2]["portfolio_quarter_kelly_scale"])
+        self.assertAlmostEqual(quarter_daily.iloc[2]["portfolio_quarter_kelly_scale"], 0.1385, places=3)
+        self.assertAlmostEqual(half_daily.iloc[2]["portfolio_quarter_kelly_scale"], 0.2770, places=3)
+
     def test_backtest_from_scores_applies_vol_target_scale_after_high_volatility(self):
         module = load_module()
         scored = pd.DataFrame([

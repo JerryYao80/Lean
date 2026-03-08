@@ -38,6 +38,7 @@
   "portfolio-quarter-kelly-min-observations": 10,
   "portfolio-quarter-kelly-floor-scale": 0.25,
   "portfolio-quarter-kelly-cap-scale": 1.0,
+  "portfolio-quarter-kelly-fraction": 0.25,
   "portfolio-quarter-kelly-medium-regime-multiplier": 0.75,
   "portfolio-quarter-kelly-high-regime-multiplier": 0.5,
   "report-file": "../bin/Debug/bt.log"

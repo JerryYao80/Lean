@@ -73,6 +73,7 @@ def default_config() -> dict:
         "portfolio-quarter-kelly-min-observations": 10,
         "portfolio-quarter-kelly-floor-scale": 0.25,
         "portfolio-quarter-kelly-cap-scale": 1.0,
+        "portfolio-quarter-kelly-fraction": 0.25,
         "portfolio-quarter-kelly-medium-regime-multiplier": 0.75,
         "portfolio-quarter-kelly-high-regime-multiplier": 0.5,
         "trial-count": 500,
@@ -208,6 +209,7 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
         portfolio_quarter_kelly_min_observations=int(config.get("portfolio-quarter-kelly-min-observations", 10) or 10),
         portfolio_quarter_kelly_floor_scale=float(config.get("portfolio-quarter-kelly-floor-scale", 0.25) or 0.25),
         portfolio_quarter_kelly_cap_scale=float(config.get("portfolio-quarter-kelly-cap-scale", 1.0) or 1.0),
+        portfolio_quarter_kelly_fraction=float(config.get("portfolio-quarter-kelly-fraction", 0.25) or 0.25),
         portfolio_quarter_kelly_medium_regime_multiplier=float(config.get("portfolio-quarter-kelly-medium-regime-multiplier", 0.75) or 0.75),
         portfolio_quarter_kelly_high_regime_multiplier=float(config.get("portfolio-quarter-kelly-high-regime-multiplier", 0.5) or 0.5),
     )
@@ -533,7 +535,7 @@ def build_report_text(report: dict, config: dict) -> str:
         (
             "Portfolio Risk Overlay: enabled "
             f"(vol_target={float(config.get('portfolio-vol-target-daily-vol', 0.012) or 0.0):.4%}, lookback={int(config.get('portfolio-vol-target-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-vol-target-floor-scale', 0.5) or 0.0):.2f}/{float(config.get('portfolio-vol-target-cap-scale', 1.0) or 0.0):.2f}; "
-            f"quarter_kelly lookback={int(config.get('portfolio-quarter-kelly-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-quarter-kelly-floor-scale', 0.25) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-cap-scale', 1.0) or 0.0):.2f}, regime mult={float(config.get('portfolio-quarter-kelly-medium-regime-multiplier', 0.75) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-high-regime-multiplier', 0.5) or 0.0):.2f})"
+            f"quarter_kelly lookback={int(config.get('portfolio-quarter-kelly-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-quarter-kelly-floor-scale', 0.25) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-cap-scale', 1.0) or 0.0):.2f}, fraction={float(config.get('portfolio-quarter-kelly-fraction', 0.25) or 0.0):.2f}, regime mult={float(config.get('portfolio-quarter-kelly-medium-regime-multiplier', 0.75) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-high-regime-multiplier', 0.5) or 0.0):.2f})"
             if config.get("portfolio-vol-target-enabled") or config.get("portfolio-quarter-kelly-enabled")
             else "Portfolio Risk Overlay: disabled"
         ),
@@ -717,6 +719,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--portfolio-quarter-kelly-min-observations", type=int)
     parser.add_argument("--portfolio-quarter-kelly-floor-scale", type=float)
     parser.add_argument("--portfolio-quarter-kelly-cap-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-fraction", type=float)
     parser.add_argument("--portfolio-quarter-kelly-medium-regime-multiplier", type=float)
     parser.add_argument("--portfolio-quarter-kelly-high-regime-multiplier", type=float)
     parser.add_argument("--trial-count", type=int)
@@ -771,6 +774,7 @@ def main() -> int:
         "portfolio-quarter-kelly-min-observations": args.portfolio_quarter_kelly_min_observations,
         "portfolio-quarter-kelly-floor-scale": args.portfolio_quarter_kelly_floor_scale,
         "portfolio-quarter-kelly-cap-scale": args.portfolio_quarter_kelly_cap_scale,
+        "portfolio-quarter-kelly-fraction": args.portfolio_quarter_kelly_fraction,
         "portfolio-quarter-kelly-medium-regime-multiplier": args.portfolio_quarter_kelly_medium_regime_multiplier,
         "portfolio-quarter-kelly-high-regime-multiplier": args.portfolio_quarter_kelly_high_regime_multiplier,
         "trial-count": args.trial_count,

@@ -231,6 +231,69 @@ namespace QuantConnect.Tests.Algorithm
             }
         }
 
+        [Test]
+        public void VolTargetScaleReturnsOneWithoutEnoughHistory()
+        {
+            var scale = AShareEtfT0FeatureIntradayAlgorithm.ComputePortfolioVolTargetScale(
+                new List<decimal> { 0.01m },
+                0.012m,
+                40,
+                2,
+                0.5m,
+                1.0m);
+
+            Assert.AreEqual(1.0m, scale);
+        }
+
+        [Test]
+        public void FreshFeatureSnapshotRequiresMatchingSessionDate()
+        {
+            var feature = new AShareEtfT0FeatureData
+            {
+                EndTime = new DateTime(2024, 2, 7),
+                SignalMomentum20 = 0.1m,
+                SignalMomentum5 = 0.2m,
+                SignalLiquidity5 = 0.3m,
+                SignalCloseLocation = 0.4m,
+                SignalVolatility10 = 0.5m,
+                SignalGapAbs = 0.6m,
+            };
+
+            Assert.That(AShareEtfT0FeatureIntradayAlgorithm.IsFreshFeatureSnapshot(feature, new DateTime(2024, 2, 7)), Is.True);
+            Assert.That(AShareEtfT0FeatureIntradayAlgorithm.IsFreshFeatureSnapshot(feature, new DateTime(2024, 2, 8)), Is.False);
+        }
+
+        [Test]
+        public void FreshFeatureSnapshotRequiresAllCoreSignals()
+        {
+            var feature = new AShareEtfT0FeatureData
+            {
+                EndTime = new DateTime(2024, 2, 7),
+                SignalMomentum20 = 0.1m,
+                SignalMomentum5 = 0.2m,
+                SignalLiquidity5 = 0.3m,
+                SignalCloseLocation = 0.4m,
+                SignalVolatility10 = 0.5m,
+            };
+
+            Assert.That(AShareEtfT0FeatureIntradayAlgorithm.IsFreshFeatureSnapshot(feature, new DateTime(2024, 2, 7)), Is.False);
+        }
+
+        [Test]
+        public void VolTargetScaleShrinksWhenRealizedVolExceedsTarget()
+        {
+            var scale = AShareEtfT0FeatureIntradayAlgorithm.ComputePortfolioVolTargetScale(
+                new List<decimal> { 0.04m, -0.02m, 0.03m, -0.01m },
+                0.01m,
+                4,
+                2,
+                0.25m,
+                1.0m);
+
+            Assert.That(scale, Is.LessThan(1.0m));
+            Assert.That(scale, Is.EqualTo(0.3922m).Within(0.0002m));
+        }
+
         private static SubscriptionDataConfig CreateConfig(Symbol underlying)
         {
             var customSymbol = Symbol.CreateBase(typeof(AShareEtfT0FeatureData), underlying, underlying.ID.Market);

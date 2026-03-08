@@ -40,6 +40,7 @@ namespace QuantConnect.Algorithm.CSharp
         private readonly Dictionary<Symbol, Symbol> _featureToUnderlying = new Dictionary<Symbol, Symbol>();
         private readonly Dictionary<Symbol, AShareEtfT0FeatureData> _latestFeaturesByUnderlying = new Dictionary<Symbol, AShareEtfT0FeatureData>();
         private readonly List<TradeDecision> _tradeDecisions = new List<TradeDecision>();
+        private readonly List<decimal> _realizedReturns = new List<decimal>();
         private readonly List<DailySummaryRow> _dailySummaries = new List<DailySummaryRow>();
         private readonly List<AllocationRow> _allocationRows = new List<AllocationRow>();
         private readonly List<ActionPlanRow> _actionPlanRows = new List<ActionPlanRow>();
@@ -60,6 +61,12 @@ namespace QuantConnect.Algorithm.CSharp
         private int _riskRegimeHighTopN;
         private decimal _riskRegimeHighScoreSpreadAdd;
         private decimal _riskRegimeHighLiquidityQuantile;
+        private bool _portfolioVolTargetEnabled;
+        private decimal _portfolioVolTargetDailyVol;
+        private int _portfolioVolTargetLookback;
+        private int _portfolioVolTargetMinObservations;
+        private decimal _portfolioVolTargetFloorScale;
+        private decimal _portfolioVolTargetCapScale;
         private decimal _targetPortfolioExposure;
         private bool _excludeMoneyMarketEtfs;
         private string _executionMode;
@@ -90,6 +97,12 @@ namespace QuantConnect.Algorithm.CSharp
             _riskRegimeHighTopN = GetIntParameter("risk-regime-high-top-n", _topN);
             _riskRegimeHighScoreSpreadAdd = GetDecimalParameter("risk-regime-high-score-spread-add", 0m);
             _riskRegimeHighLiquidityQuantile = GetDecimalParameter("risk-regime-high-liquidity-quantile", 0m);
+            _portfolioVolTargetEnabled = GetBoolParameter("portfolio-vol-target-enabled", false);
+            _portfolioVolTargetDailyVol = GetDecimalParameter("portfolio-vol-target-daily-vol", 0.012m);
+            _portfolioVolTargetLookback = GetIntParameter("portfolio-vol-target-lookback", 40);
+            _portfolioVolTargetMinObservations = GetIntParameter("portfolio-vol-target-min-observations", 10);
+            _portfolioVolTargetFloorScale = GetDecimalParameter("portfolio-vol-target-floor-scale", 0.5m);
+            _portfolioVolTargetCapScale = GetDecimalParameter("portfolio-vol-target-cap-scale", 1.0m);
             _signalSettings = new AShareEtfT0FeatureSignalSettings
             {
                 NavPremiumZ20Weight = GetDecimalParameter("conditional-signal-nav-premium-z20-weight", 0m),
@@ -161,15 +174,14 @@ namespace QuantConnect.Algorithm.CSharp
                 throw new InvalidOperationException("No eligible A-share T+0 ETF symbols were added.");
             }
 
-            Schedule.On(
-                DateRules.EveryDay(_anchorSymbol),
-                TimeRules.BeforeMarketOpen(_anchorSymbol, 1),
-                TradeSession);
-
             Log($"AShareEtfT0FeatureIntradayAlgorithm initialized with {_featureToUnderlying.Count} feature subscriptions");
             if (_signalSettings.NavPremiumZ20Weight != 0m)
             {
                 Log($"Conditional NavPremiumZ20 overlay enabled weight={_signalSettings.NavPremiumZ20Weight:F4} orthogonalize={_signalSettings.NavPremiumZ20Orthogonalize} scales={_signalSettings.NavPremiumZ20NormalScale:F2}/{_signalSettings.NavPremiumZ20MediumScale:F2}/{_signalSettings.NavPremiumZ20HighScale:F2}");
+            }
+            if (_portfolioVolTargetEnabled)
+            {
+                Log($"Portfolio vol target enabled target={_portfolioVolTargetDailyVol:F4} lookback={_portfolioVolTargetLookback} minObs={_portfolioVolTargetMinObservations} floor/cap={_portfolioVolTargetFloorScale:F2}/{_portfolioVolTargetCapScale:F2}");
             }
             if (LiveMode)
             {
@@ -179,6 +191,7 @@ namespace QuantConnect.Algorithm.CSharp
 
         public override void OnData(Slice slice)
         {
+            DateTime? sessionDate = null;
             foreach (var pair in slice.Get<AShareEtfT0FeatureData>())
             {
                 if (pair.Value == null)
@@ -189,24 +202,40 @@ namespace QuantConnect.Algorithm.CSharp
                 if (_featureToUnderlying.TryGetValue(pair.Key, out var underlying))
                 {
                     _latestFeaturesByUnderlying[underlying] = pair.Value;
+                    sessionDate ??= pair.Value.EndTime.Date;
                 }
+            }
+
+            if (sessionDate.HasValue)
+            {
+                TradeSession(sessionDate.Value);
             }
         }
 
-        private void TradeSession()
+        private void TradeSession(DateTime sessionDate)
         {
-            if (_lastTradeDate == Time.Date)
+            var currentSessionDate = sessionDate.Date;
+            if (_lastTradeDate == currentSessionDate)
             {
                 return;
             }
-            _lastTradeDate = Time.Date;
+            _lastTradeDate = currentSessionDate;
+            var sessionDateText = currentSessionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
             var dailyFeatures = _latestFeaturesByUnderlying
-                .Where(pair => pair.Value != null && pair.Value.HasSignals)
+                .Where(pair => IsFreshFeatureSnapshot(pair.Value, currentSessionDate))
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
             if (dailyFeatures.Count == 0)
             {
-                Log($"{Time:yyyy-MM-dd} no feature snapshots available");
+                var staleFeatureCount = _latestFeaturesByUnderlying.Count(pair => pair.Value != null && pair.Value.HasSignals);
+                if (staleFeatureCount > 0)
+                {
+                    Log($"{sessionDateText} skip trading: no fresh feature snapshots for current session; stale snapshot count={staleFeatureCount}");
+                }
+                else
+                {
+                    Log($"{sessionDateText} no feature snapshots available");
+                }
                 return;
             }
 
@@ -255,7 +284,7 @@ namespace QuantConnect.Algorithm.CSharp
 
             if (effectiveScoreSpreadThreshold > 0 && scoreSpread < effectiveScoreSpreadThreshold)
             {
-                Log($"{Time:yyyy-MM-dd} skip trading: score spread {scoreSpread:F4} below threshold {effectiveScoreSpreadThreshold:F4}");
+                Log($"{sessionDateText} skip trading: score spread {scoreSpread:F4} below threshold {effectiveScoreSpreadThreshold:F4}");
                 return;
             }
 
@@ -286,7 +315,7 @@ namespace QuantConnect.Algorithm.CSharp
                 .ToList();
             if (ranked.Count == 0)
             {
-                Log($"{Time:yyyy-MM-dd} no tradable symbols after ranking");
+                Log($"{sessionDateText} no tradable symbols after ranking");
                 return;
             }
 
@@ -299,20 +328,25 @@ namespace QuantConnect.Algorithm.CSharp
                     .Average();
                 if (averageGapAbs > _maxAverageGapAbs.Value)
                 {
-                    Log($"{Time:yyyy-MM-dd} skip trading: avg gap abs {averageGapAbs:F4} above threshold {_maxAverageGapAbs.Value:F4}");
+                    Log($"{sessionDateText} skip trading: avg gap abs {averageGapAbs:F4} above threshold {_maxAverageGapAbs.Value:F4}");
                     return;
                 }
             }
 
+            var portfolioVolTargetScale = _portfolioVolTargetEnabled
+                ? ComputePortfolioVolTargetScale(_realizedReturns, _portfolioVolTargetDailyVol, _portfolioVolTargetLookback, _portfolioVolTargetMinObservations, _portfolioVolTargetFloorScale, _portfolioVolTargetCapScale)
+                : 1m;
+            dailyExposureScale = Math.Min(1m, dailyExposureScale * portfolioVolTargetScale);
+
             if (dailyExposureScale <= 0m)
             {
-                Log($"{Time:yyyy-MM-dd} skip trading: risk regime scaling bucket={riskRegimeBucket} scale={dailyExposureScale:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
+                Log($"{sessionDateText} skip trading: risk regime scaling bucket={riskRegimeBucket} scale={dailyExposureScale:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
                 return;
             }
 
-            if (dailyExposureScale < 1m || effectiveTopN < _topN || effectiveScoreSpreadThreshold > _minScoreSpread || liquidityQuantile > 0m)
+            if (dailyExposureScale < 1m || effectiveTopN < _topN || effectiveScoreSpreadThreshold > _minScoreSpread || liquidityQuantile > 0m || portfolioVolTargetScale < 1m)
             {
-                Log($"{Time:yyyy-MM-dd} risk regime controls bucket={riskRegimeBucket} scale={dailyExposureScale:F2} topN={effectiveTopN} spread={effectiveScoreSpreadThreshold:F4} liquidityQ={liquidityQuantile:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
+                Log($"{sessionDateText} risk regime controls bucket={riskRegimeBucket} scale={dailyExposureScale:F2} volTarget={portfolioVolTargetScale:F2} topN={effectiveTopN} spread={effectiveScoreSpreadThreshold:F4} liquidityQ={liquidityQuantile:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
             }
 
             var availableCash = Portfolio.CashBook[AccountCurrency].Amount;
@@ -325,7 +359,7 @@ namespace QuantConnect.Algorithm.CSharp
             var totalDailyPnl = 0m;
             var totalDailyFees = 0m;
             var totalEntryValue = 0m;
-            var tradeDate = Time.Date;
+            var tradeDate = currentSessionDate;
             var selections = new List<string>();
             var dayTrades = new List<TradeDecision>();
 
@@ -395,6 +429,11 @@ namespace QuantConnect.Algorithm.CSharp
 
             var portfolioValueAfter = Portfolio.TotalPortfolioValue;
             var cashAfter = Portfolio.CashBook[AccountCurrency].Amount;
+            var dailyReturn = portfolioValueBefore > 0m ? totalDailyPnl / portfolioValueBefore : 0m;
+            if (dayTrades.Count > 0)
+            {
+                _realizedReturns.Add(dailyReturn);
+            }
             RecordAllocationRows(tradeDate, portfolioValueBefore, portfolioValueAfter, cashBefore, cashAfter, totalEntryValue, totalDailyPnl, dayTrades);
             var dailySummary = new DailySummaryRow
             {
@@ -406,6 +445,13 @@ namespace QuantConnect.Algorithm.CSharp
                 EntryValue = totalEntryValue,
                 Fees = totalDailyFees,
                 NetPnl = totalDailyPnl,
+                DailyReturn = dailyReturn,
+                RiskRegimeBucket = riskRegimeBucket,
+                ExposureScale = dailyExposureScale,
+                PortfolioVolTargetScale = portfolioVolTargetScale,
+                EffectiveTopN = effectiveTopN,
+                EffectiveScoreSpreadThreshold = effectiveScoreSpreadThreshold,
+                LiquidityQuantile = liquidityQuantile,
                 SelectionCount = dayTrades.Count,
                 SelectedSymbols = string.Join("|", dayTrades.Select(trade => trade.Symbol))
             };
@@ -414,11 +460,11 @@ namespace QuantConnect.Algorithm.CSharp
 
             if (selections.Count > 0)
             {
-                Log($"{Time:yyyy-MM-dd} selected {string.Join("; ", selections)} day_pnl={totalDailyPnl:F2} fees={totalDailyFees:F2} nav={portfolioValueAfter:F2}");
+                Log($"{sessionDateText} selected {string.Join("; ", selections)} day_pnl={totalDailyPnl:F2} fees={totalDailyFees:F2} nav={portfolioValueAfter:F2}");
             }
             else
             {
-                Log($"{Time:yyyy-MM-dd} selected none day_pnl={totalDailyPnl:F2} nav={portfolioValueAfter:F2}");
+                Log($"{sessionDateText} selected none day_pnl={totalDailyPnl:F2} nav={portfolioValueAfter:F2}");
             }
         }
 
@@ -510,6 +556,55 @@ namespace QuantConnect.Algorithm.CSharp
 
             var weight = (decimal)(position - lowerIndex);
             return ordered[lowerIndex] + (ordered[upperIndex] - ordered[lowerIndex]) * weight;
+        }
+
+        public static bool IsFreshFeatureSnapshot(AShareEtfT0FeatureData feature, DateTime sessionDate)
+        {
+            return feature != null
+                && feature.HasSignals
+                && feature.EndTime.Date == sessionDate.Date;
+        }
+
+        public static decimal ComputePortfolioVolTargetScale(
+            IReadOnlyList<decimal> realizedReturns,
+            decimal dailyVolTarget,
+            int lookback,
+            int minObservations,
+            decimal floorScale,
+            decimal capScale)
+        {
+            if (realizedReturns == null || realizedReturns.Count == 0 || dailyVolTarget <= 0m)
+            {
+                return 1m;
+            }
+
+            var effectiveLookback = lookback > 0 ? lookback : realizedReturns.Count;
+            var trailing = realizedReturns
+                .Skip(Math.Max(0, realizedReturns.Count - effectiveLookback))
+                .Select(value => (double)value)
+                .ToList();
+            if (trailing.Count < Math.Max(1, minObservations))
+            {
+                return 1m;
+            }
+
+            var mean = trailing.Average();
+            var variance = trailing.Select(value => (value - mean) * (value - mean)).Average();
+            var std = Math.Sqrt(variance);
+            if (double.IsNaN(std) || double.IsInfinity(std) || std <= 0d)
+            {
+                return 1m;
+            }
+
+            var rawScale = (decimal)((double)dailyVolTarget / std);
+            return ClampDecimal(rawScale, floorScale, capScale);
+        }
+
+        private static decimal ClampDecimal(decimal value, decimal lower, decimal upper)
+        {
+            var lowerBound = Math.Min(lower, upper);
+            var upperBound = Math.Max(lower, upper);
+            return Math.Max(lowerBound, Math.Min(value, upperBound));
         }
 
         private void RecordAllocationRows(
@@ -627,7 +722,7 @@ namespace QuantConnect.Algorithm.CSharp
 
         private IEnumerable<string> BuildDailySummaryCsv()
         {
-            yield return "trade_date,portfolio_value_before,portfolio_value_after,cash_before,cash_after,entry_value,fees,net_pnl,selection_count,selected_symbols";
+            yield return "trade_date,portfolio_value_before,portfolio_value_after,cash_before,cash_after,entry_value,fees,net_pnl,daily_return,risk_regime_bucket,exposure_scale,portfolio_vol_target_scale,effective_top_n,effective_score_spread_threshold,liquidity_quantile,selection_count,selected_symbols";
             foreach (var row in _dailySummaries.OrderBy(row => row.TradeDate))
             {
                 yield return string.Join(",", new[]
@@ -640,6 +735,13 @@ namespace QuantConnect.Algorithm.CSharp
                     FormatDecimal(row.EntryValue),
                     FormatDecimal(row.Fees),
                     FormatDecimal(row.NetPnl),
+                    FormatDecimal(row.DailyReturn),
+                    row.RiskRegimeBucket,
+                    FormatDecimal(row.ExposureScale),
+                    FormatDecimal(row.PortfolioVolTargetScale),
+                    row.EffectiveTopN.ToString(CultureInfo.InvariantCulture),
+                    FormatDecimal(row.EffectiveScoreSpreadThreshold),
+                    FormatDecimal(row.LiquidityQuantile),
                     row.SelectionCount.ToString(CultureInfo.InvariantCulture),
                     EscapeCsv(row.SelectedSymbols)
                 });
@@ -750,6 +852,13 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal EntryValue { get; set; }
             public decimal Fees { get; set; }
             public decimal NetPnl { get; set; }
+            public decimal DailyReturn { get; set; }
+            public string RiskRegimeBucket { get; set; }
+            public decimal ExposureScale { get; set; }
+            public decimal PortfolioVolTargetScale { get; set; }
+            public int EffectiveTopN { get; set; }
+            public decimal EffectiveScoreSpreadThreshold { get; set; }
+            public decimal LiquidityQuantile { get; set; }
             public int SelectionCount { get; set; }
             public string SelectedSymbols { get; set; }
         }
@@ -793,7 +902,9 @@ namespace QuantConnect.Algorithm.CSharp
             var customSymbol = QuantConnect.Symbol.CreateBase(typeof(AShareEtfT0FeatureData), underlyingSymbol, underlyingSymbol.ID.Market);
             var featurePath = AShareEtfT0FeatureData.ResolveSourcePath(customSymbol);
             var pricePath = Path.Combine(Globals.DataFolder, "equity", underlyingSymbol.ID.Market.ToLowerInvariant(), "daily", $"{underlyingSymbol.Value}.zip");
-            return File.Exists(featurePath) && File.Exists(pricePath);
+            return File.Exists(featurePath)
+                && File.Exists(pricePath)
+                && File.ReadLines(featurePath).Skip(1).Take(25).Count() >= 25;
         }
 
         private static bool IsMoneyMarketTicker(string ticker)
