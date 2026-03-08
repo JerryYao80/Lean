@@ -57,6 +57,24 @@ def default_config() -> dict:
         "risk-regime-high-top-n": 2,
         "risk-regime-high-score-spread-add": 0.0,
         "risk-regime-high-liquidity-quantile": 0.0,
+        "conditional-signal-nav-premium-z20-weight": 0.0,
+        "conditional-signal-nav-premium-z20-orthogonalize": False,
+        "conditional-signal-nav-premium-z20-normal-scale": 1.0,
+        "conditional-signal-nav-premium-z20-medium-scale": 0.5,
+        "conditional-signal-nav-premium-z20-high-scale": 0.0,
+        "portfolio-vol-target-enabled": False,
+        "portfolio-vol-target-daily-vol": 0.012,
+        "portfolio-vol-target-lookback": 20,
+        "portfolio-vol-target-min-observations": 10,
+        "portfolio-vol-target-floor-scale": 0.5,
+        "portfolio-vol-target-cap-scale": 1.0,
+        "portfolio-quarter-kelly-enabled": False,
+        "portfolio-quarter-kelly-lookback": 20,
+        "portfolio-quarter-kelly-min-observations": 10,
+        "portfolio-quarter-kelly-floor-scale": 0.25,
+        "portfolio-quarter-kelly-cap-scale": 1.0,
+        "portfolio-quarter-kelly-medium-regime-multiplier": 0.75,
+        "portfolio-quarter-kelly-high-regime-multiplier": 0.5,
         "trial-count": 500,
         "horizon-days": 63,
         "block-size": 5,
@@ -130,7 +148,7 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
         prepared_frames.append(frame)
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
-    scored = compute_cross_section_scores(panel)
+    scored = compute_cross_section_scores(panel, config=config)
     regime_frame = build_regime_frame(scored)
     daily, summary = backtest_from_scores(
         scored,
@@ -179,6 +197,19 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
         ),
         risk_regime_high_score_spread_add=float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0),
         risk_regime_high_liquidity_quantile=float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0),
+        portfolio_vol_target_enabled=bool(config.get("portfolio-vol-target-enabled", False)),
+        portfolio_vol_target_daily_vol=float(config.get("portfolio-vol-target-daily-vol", 0.012) or 0.012),
+        portfolio_vol_target_lookback=int(config.get("portfolio-vol-target-lookback", 20) or 20),
+        portfolio_vol_target_min_observations=int(config.get("portfolio-vol-target-min-observations", 10) or 10),
+        portfolio_vol_target_floor_scale=float(config.get("portfolio-vol-target-floor-scale", 0.5) or 0.5),
+        portfolio_vol_target_cap_scale=float(config.get("portfolio-vol-target-cap-scale", 1.0) or 1.0),
+        portfolio_quarter_kelly_enabled=bool(config.get("portfolio-quarter-kelly-enabled", False)),
+        portfolio_quarter_kelly_lookback=int(config.get("portfolio-quarter-kelly-lookback", 20) or 20),
+        portfolio_quarter_kelly_min_observations=int(config.get("portfolio-quarter-kelly-min-observations", 10) or 10),
+        portfolio_quarter_kelly_floor_scale=float(config.get("portfolio-quarter-kelly-floor-scale", 0.25) or 0.25),
+        portfolio_quarter_kelly_cap_scale=float(config.get("portfolio-quarter-kelly-cap-scale", 1.0) or 1.0),
+        portfolio_quarter_kelly_medium_regime_multiplier=float(config.get("portfolio-quarter-kelly-medium-regime-multiplier", 0.75) or 0.75),
+        portfolio_quarter_kelly_high_regime_multiplier=float(config.get("portfolio-quarter-kelly-high-regime-multiplier", 0.5) or 0.5),
     )
     if not daily.empty and not regime_frame.empty:
         daily = daily.merge(regime_frame, on="trade_date", how="left")
@@ -476,6 +507,13 @@ def build_report_text(report: dict, config: dict) -> str:
             else "Risk Regime Scaling: disabled"
         ),
         (
+            "Conditional NavPremiumZ20 Overlay: enabled "
+            f"(weight={float(config.get('conditional-signal-nav-premium-z20-weight', 0.0) or 0.0):.4f}, orthogonalize={bool(config.get('conditional-signal-nav-premium-z20-orthogonalize', False))}, "
+            f"scale normal/medium/high={float(config.get('conditional-signal-nav-premium-z20-normal-scale', 1.0) or 0.0):.2f}/{float(config.get('conditional-signal-nav-premium-z20-medium-scale', 0.5) or 0.0):.2f}/{float(config.get('conditional-signal-nav-premium-z20-high-scale', 0.0) or 0.0):.2f})"
+            if not math.isclose(float(config.get('conditional-signal-nav-premium-z20-weight', 0.0) or 0.0), 0.0)
+            else "Conditional NavPremiumZ20 Overlay: disabled"
+        ),
+        (
             "Risk Regime Signal Shrinkage: enabled "
             f"(medium: top_n={int(config.get('risk-regime-medium-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-medium-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-medium-liquidity-quantile', 0.0) or 0.0):.2f}; "
             f"high: top_n={int(config.get('risk-regime-high-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-high-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-high-liquidity-quantile', 0.0) or 0.0):.2f})"
@@ -491,6 +529,13 @@ def build_report_text(report: dict, config: dict) -> str:
                 )
             )
             else "Risk Regime Signal Shrinkage: inactive"
+        ),
+        (
+            "Portfolio Risk Overlay: enabled "
+            f"(vol_target={float(config.get('portfolio-vol-target-daily-vol', 0.012) or 0.0):.4%}, lookback={int(config.get('portfolio-vol-target-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-vol-target-floor-scale', 0.5) or 0.0):.2f}/{float(config.get('portfolio-vol-target-cap-scale', 1.0) or 0.0):.2f}; "
+            f"quarter_kelly lookback={int(config.get('portfolio-quarter-kelly-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-quarter-kelly-floor-scale', 0.25) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-cap-scale', 1.0) or 0.0):.2f}, regime mult={float(config.get('portfolio-quarter-kelly-medium-regime-multiplier', 0.75) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-high-regime-multiplier', 0.5) or 0.0):.2f})"
+            if config.get("portfolio-vol-target-enabled") or config.get("portfolio-quarter-kelly-enabled")
+            else "Portfolio Risk Overlay: disabled"
         ),
         f"Slippage Probability: {float(config['slippage-probability']):.2%}",
         f"Slippage Mean: {float(config['slippage-mean']):.2%}",
@@ -509,6 +554,9 @@ def build_report_text(report: dict, config: dict) -> str:
         f"- Skipped Low Conviction Days: {base['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {base['skipped_gap_risk_days']}",
         f"- Average Exposure Scale: {base['average_exposure_scale']:.2%}",
+        f"- Average Portfolio Risk Overlay Scale: {base['average_portfolio_risk_overlay_scale']:.2%}",
+        f"- Average Vol Target Scale: {base['average_portfolio_vol_target_scale']:.2%}",
+        f"- Average Quarter-Kelly Scale: {base['average_portfolio_quarter_kelly_scale']:.2%}",
         f"- Average Selected Count: {base['average_selected_count']:.2f}",
         f"- Medium Risk Regime Days: {base['medium_risk_regime_days']}",
         f"- High Risk Regime Days: {base['high_risk_regime_days']}",
@@ -653,6 +701,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-regime-high-top-n", type=int)
     parser.add_argument("--risk-regime-high-score-spread-add", type=float)
     parser.add_argument("--risk-regime-high-liquidity-quantile", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-weight", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-orthogonalize", action="store_true")
+    parser.add_argument("--conditional-signal-nav-premium-z20-normal-scale", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-medium-scale", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-high-scale", type=float)
+    parser.add_argument("--portfolio-vol-target-enabled", action="store_true")
+    parser.add_argument("--portfolio-vol-target-daily-vol", type=float)
+    parser.add_argument("--portfolio-vol-target-lookback", type=int)
+    parser.add_argument("--portfolio-vol-target-min-observations", type=int)
+    parser.add_argument("--portfolio-vol-target-floor-scale", type=float)
+    parser.add_argument("--portfolio-vol-target-cap-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-enabled", action="store_true")
+    parser.add_argument("--portfolio-quarter-kelly-lookback", type=int)
+    parser.add_argument("--portfolio-quarter-kelly-min-observations", type=int)
+    parser.add_argument("--portfolio-quarter-kelly-floor-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-cap-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-medium-regime-multiplier", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-high-regime-multiplier", type=float)
     parser.add_argument("--trial-count", type=int)
     parser.add_argument("--horizon-days", type=int)
     parser.add_argument("--block-size", type=int)
@@ -692,6 +758,21 @@ def main() -> int:
         "risk-regime-high-top-n": args.risk_regime_high_top_n,
         "risk-regime-high-score-spread-add": args.risk_regime_high_score_spread_add,
         "risk-regime-high-liquidity-quantile": args.risk_regime_high_liquidity_quantile,
+        "conditional-signal-nav-premium-z20-weight": args.conditional_signal_nav_premium_z20_weight,
+        "conditional-signal-nav-premium-z20-normal-scale": args.conditional_signal_nav_premium_z20_normal_scale,
+        "conditional-signal-nav-premium-z20-medium-scale": args.conditional_signal_nav_premium_z20_medium_scale,
+        "conditional-signal-nav-premium-z20-high-scale": args.conditional_signal_nav_premium_z20_high_scale,
+        "portfolio-vol-target-daily-vol": args.portfolio_vol_target_daily_vol,
+        "portfolio-vol-target-lookback": args.portfolio_vol_target_lookback,
+        "portfolio-vol-target-min-observations": args.portfolio_vol_target_min_observations,
+        "portfolio-vol-target-floor-scale": args.portfolio_vol_target_floor_scale,
+        "portfolio-vol-target-cap-scale": args.portfolio_vol_target_cap_scale,
+        "portfolio-quarter-kelly-lookback": args.portfolio_quarter_kelly_lookback,
+        "portfolio-quarter-kelly-min-observations": args.portfolio_quarter_kelly_min_observations,
+        "portfolio-quarter-kelly-floor-scale": args.portfolio_quarter_kelly_floor_scale,
+        "portfolio-quarter-kelly-cap-scale": args.portfolio_quarter_kelly_cap_scale,
+        "portfolio-quarter-kelly-medium-regime-multiplier": args.portfolio_quarter_kelly_medium_regime_multiplier,
+        "portfolio-quarter-kelly-high-regime-multiplier": args.portfolio_quarter_kelly_high_regime_multiplier,
         "trial-count": args.trial_count,
         "horizon-days": args.horizon_days,
         "block-size": args.block_size,
@@ -710,6 +791,12 @@ def main() -> int:
         overrides["risk-regime-filter-enabled"] = True
     if args.include_money_market_etfs:
         overrides["exclude-money-market-etfs"] = False
+    if args.conditional_signal_nav_premium_z20_orthogonalize:
+        overrides["conditional-signal-nav-premium-z20-orthogonalize"] = True
+    if args.portfolio_vol_target_enabled:
+        overrides["portfolio-vol-target-enabled"] = True
+    if args.portfolio_quarter_kelly_enabled:
+        overrides["portfolio-quarter-kelly-enabled"] = True
 
     config = load_pipeline_config(args.config, overrides)
     report = run_monte_carlo(config)

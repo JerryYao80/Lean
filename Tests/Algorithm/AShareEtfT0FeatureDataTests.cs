@@ -116,6 +116,121 @@ namespace QuantConnect.Tests.Algorithm
             CollectionAssert.AreEqual(new[] { "C", "B", "A" }, ranked);
         }
 
+
+        [Test]
+        public void SignalModelCanDisableConditionalNavPremiumZ20OverlayInHighRiskBucket()
+        {
+            var symbolA = Symbol.Create("A", SecurityType.Equity, Market.SSE);
+            var symbolB = Symbol.Create("B", SecurityType.Equity, Market.SSE);
+            var symbolC = Symbol.Create("C", SecurityType.Equity, Market.SSE);
+            var features = new Dictionary<Symbol, AShareEtfT0FeatureData>
+            {
+                [symbolA] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 0.01m,
+                    SignalMomentum5 = -0.02m,
+                    SignalLiquidity5 = 100m,
+                    SignalCloseLocation = 0.50m,
+                    SignalVolatility10 = 1.60m,
+                    SignalGapAbs = 0.01m,
+                    SignalNavPremiumZ20 = -1.0m,
+                },
+                [symbolB] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 0.01m,
+                    SignalMomentum5 = -0.02m,
+                    SignalLiquidity5 = 100m,
+                    SignalCloseLocation = 0.50m,
+                    SignalVolatility10 = 1.60m,
+                    SignalGapAbs = 0.01m,
+                    SignalNavPremiumZ20 = 0.0m,
+                },
+                [symbolC] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 0.01m,
+                    SignalMomentum5 = -0.02m,
+                    SignalLiquidity5 = 100m,
+                    SignalCloseLocation = 0.50m,
+                    SignalVolatility10 = 1.60m,
+                    SignalGapAbs = 0.01m,
+                    SignalNavPremiumZ20 = 1.0m,
+                },
+            };
+
+            var scores = AShareEtfT0FeatureSignalModel.ComputeScores(
+                features,
+                new AShareEtfT0FeatureSignalSettings
+                {
+                    NavPremiumZ20Weight = -0.2m,
+                    NavPremiumZ20Orthogonalize = false,
+                    NavPremiumZ20NormalScale = 1.0m,
+                    NavPremiumZ20MediumScale = 0.5m,
+                    NavPremiumZ20HighScale = 0.0m
+                },
+                "high");
+
+            Assert.That(scores.Values.All(score => Math.Abs(score) <= 1e-10m), Is.True);
+        }
+
+        [Test]
+        public void SignalModelOrthogonalizedNavPremiumZ20LeavesBaseScoresUnchangedWhenPerfectlyCollinear()
+        {
+            var symbolA = Symbol.Create("A", SecurityType.Equity, Market.SSE);
+            var symbolB = Symbol.Create("B", SecurityType.Equity, Market.SSE);
+            var symbolC = Symbol.Create("C", SecurityType.Equity, Market.SSE);
+            var features = new Dictionary<Symbol, AShareEtfT0FeatureData>
+            {
+                [symbolA] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 3.0m,
+                    SignalMomentum5 = 3.0m,
+                    SignalLiquidity5 = 3.0m,
+                    SignalCloseLocation = 3.0m,
+                    SignalVolatility10 = 3.0m,
+                    SignalGapAbs = 3.0m,
+                    SignalNavPremiumZ20 = 3.0m,
+                },
+                [symbolB] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 2.0m,
+                    SignalMomentum5 = 2.0m,
+                    SignalLiquidity5 = 2.0m,
+                    SignalCloseLocation = 2.0m,
+                    SignalVolatility10 = 2.0m,
+                    SignalGapAbs = 2.0m,
+                    SignalNavPremiumZ20 = 2.0m,
+                },
+                [symbolC] = new AShareEtfT0FeatureData
+                {
+                    SignalMomentum20 = 1.0m,
+                    SignalMomentum5 = 1.0m,
+                    SignalLiquidity5 = 1.0m,
+                    SignalCloseLocation = 1.0m,
+                    SignalVolatility10 = 1.0m,
+                    SignalGapAbs = 1.0m,
+                    SignalNavPremiumZ20 = 1.0m,
+                },
+            };
+
+            var baseScores = AShareEtfT0FeatureSignalModel.ComputeScores(features);
+            var overlayScores = AShareEtfT0FeatureSignalModel.ComputeScores(
+                features,
+                new AShareEtfT0FeatureSignalSettings
+                {
+                    NavPremiumZ20Weight = -0.2m,
+                    NavPremiumZ20Orthogonalize = true,
+                    NavPremiumZ20NormalScale = 1.0m,
+                    NavPremiumZ20MediumScale = 1.0m,
+                    NavPremiumZ20HighScale = 1.0m
+                },
+                "normal");
+
+            foreach (var symbol in baseScores.Keys)
+            {
+                Assert.That(Math.Abs(baseScores[symbol] - overlayScores[symbol]) <= 1e-10m, Is.True, symbol.Value);
+            }
+        }
+
         private static SubscriptionDataConfig CreateConfig(Symbol underlying)
         {
             var customSymbol = Symbol.CreateBase(typeof(AShareEtfT0FeatureData), underlying, underlying.ID.Market);

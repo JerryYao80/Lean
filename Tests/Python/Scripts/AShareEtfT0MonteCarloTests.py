@@ -231,6 +231,7 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
         self.assertIn("regime_stress", report["scenarios"])
         self.assertIn("Risk Regime Scaling", report_text)
         self.assertIn("Risk Regime Signal Shrinkage", report_text)
+        self.assertIn("Portfolio Risk Overlay", report_text)
         self.assertIn("Average Exposure Scale", report_text)
 
 

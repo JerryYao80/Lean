@@ -68,6 +68,7 @@ namespace QuantConnect.Algorithm.CSharp
         private string _allocationPath;
         private string _actionPlanPath;
         private DateTime _lastTradeDate;
+        private AShareEtfT0FeatureSignalSettings _signalSettings;
 
         public override void Initialize()
         {
@@ -89,6 +90,14 @@ namespace QuantConnect.Algorithm.CSharp
             _riskRegimeHighTopN = GetIntParameter("risk-regime-high-top-n", _topN);
             _riskRegimeHighScoreSpreadAdd = GetDecimalParameter("risk-regime-high-score-spread-add", 0m);
             _riskRegimeHighLiquidityQuantile = GetDecimalParameter("risk-regime-high-liquidity-quantile", 0m);
+            _signalSettings = new AShareEtfT0FeatureSignalSettings
+            {
+                NavPremiumZ20Weight = GetDecimalParameter("conditional-signal-nav-premium-z20-weight", 0m),
+                NavPremiumZ20Orthogonalize = GetBoolParameter("conditional-signal-nav-premium-z20-orthogonalize", false),
+                NavPremiumZ20NormalScale = GetDecimalParameter("conditional-signal-nav-premium-z20-normal-scale", 1.0m),
+                NavPremiumZ20MediumScale = GetDecimalParameter("conditional-signal-nav-premium-z20-medium-scale", 0.5m),
+                NavPremiumZ20HighScale = GetDecimalParameter("conditional-signal-nav-premium-z20-high-scale", 0.0m)
+            };
             _targetPortfolioExposure = GetDecimalParameter("target-portfolio-exposure", 0.95m);
             _excludeMoneyMarketEtfs = GetBoolParameter("exclude-money-market-etfs", true);
             _executionMode = (GetParameter("execution-mode") ?? "synthetic").Trim().ToLowerInvariant();
@@ -158,6 +167,10 @@ namespace QuantConnect.Algorithm.CSharp
                 TradeSession);
 
             Log($"AShareEtfT0FeatureIntradayAlgorithm initialized with {_featureToUnderlying.Count} feature subscriptions");
+            if (_signalSettings.NavPremiumZ20Weight != 0m)
+            {
+                Log($"Conditional NavPremiumZ20 overlay enabled weight={_signalSettings.NavPremiumZ20Weight:F4} orthogonalize={_signalSettings.NavPremiumZ20Orthogonalize} scales={_signalSettings.NavPremiumZ20NormalScale:F2}/{_signalSettings.NavPremiumZ20MediumScale:F2}/{_signalSettings.NavPremiumZ20HighScale:F2}");
+            }
             if (LiveMode)
             {
                 Log("Synthetic execution mode active: this workflow records advisory trades and allocations but does not submit brokerage orders.");
@@ -197,11 +210,6 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            var scores = AShareEtfT0FeatureSignalModel.ComputeScores(dailyFeatures);
-            var orderedScores = scores.Values.OrderBy(value => value).ToList();
-
-            var scoreSpread = orderedScores.Count > 0 ? orderedScores[^1] - GetMedian(orderedScores) : 0m;
-
             var marketSignalMomentum5Mean = dailyFeatures.Values
                 .Where(feature => feature.SignalMomentum5.HasValue)
                 .Select(feature => feature.SignalMomentum5.Value)
@@ -240,6 +248,10 @@ namespace QuantConnect.Algorithm.CSharp
                     liquidityQuantile = _riskRegimeMediumLiquidityQuantile;
                 }
             }
+
+            var scores = AShareEtfT0FeatureSignalModel.ComputeScores(dailyFeatures, _signalSettings, riskRegimeBucket);
+            var orderedScores = scores.Values.OrderBy(value => value).ToList();
+            var scoreSpread = orderedScores.Count > 0 ? orderedScores[^1] - GetMedian(orderedScores) : 0m;
 
             if (effectiveScoreSpreadThreshold > 0 && scoreSpread < effectiveScoreSpreadThreshold)
             {

@@ -317,6 +317,192 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertIn("Selection Rate", log_text)
         self.assertIn("Risk Regime Scaling", log_text)
         self.assertIn("Risk Regime Signal Shrinkage", log_text)
+        self.assertIn("Portfolio Risk Overlay", log_text)
+
+
+    def test_backtest_from_scores_applies_quarter_kelly_floor_after_losses(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 2.0, "trade_return": -0.020},
+            {"trade_date": "20240110", "symbol": "B", "score": 1.0, "trade_return": 0.000},
+            {"trade_date": "20240111", "symbol": "A", "score": 2.0, "trade_return": 0.020},
+            {"trade_date": "20240111", "symbol": "B", "score": 1.0, "trade_return": 0.000},
+        ])
+
+        daily, summary = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.0,
+            portfolio_quarter_kelly_enabled=True,
+            portfolio_quarter_kelly_lookback=5,
+            portfolio_quarter_kelly_min_observations=1,
+            portfolio_quarter_kelly_floor_scale=0.25,
+            portfolio_quarter_kelly_cap_scale=1.0,
+            portfolio_quarter_kelly_medium_regime_multiplier=0.75,
+            portfolio_quarter_kelly_high_regime_multiplier=0.5,
+        )
+
+        self.assertAlmostEqual(daily.iloc[0]["portfolio_quarter_kelly_scale"], 1.0, places=10)
+        self.assertAlmostEqual(daily.iloc[1]["portfolio_quarter_kelly_scale"], 0.25, places=10)
+        self.assertAlmostEqual(daily.iloc[1]["portfolio_risk_overlay_scale"], 0.25, places=10)
+        self.assertAlmostEqual(summary["average_portfolio_quarter_kelly_scale"], 0.625, places=10)
+
+    def test_backtest_from_scores_applies_vol_target_scale_after_high_volatility(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 2.0, "trade_return": 0.040},
+            {"trade_date": "20240110", "symbol": "B", "score": 1.0, "trade_return": 0.000},
+            {"trade_date": "20240111", "symbol": "A", "score": 2.0, "trade_return": -0.020},
+            {"trade_date": "20240111", "symbol": "B", "score": 1.0, "trade_return": 0.000},
+            {"trade_date": "20240112", "symbol": "A", "score": 2.0, "trade_return": 0.020},
+            {"trade_date": "20240112", "symbol": "B", "score": 1.0, "trade_return": 0.000},
+        ])
+
+        daily, summary = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.0,
+            portfolio_vol_target_enabled=True,
+            portfolio_vol_target_daily_vol=0.01,
+            portfolio_vol_target_lookback=5,
+            portfolio_vol_target_min_observations=2,
+            portfolio_vol_target_floor_scale=0.5,
+            portfolio_vol_target_cap_scale=1.0,
+        )
+
+        self.assertAlmostEqual(daily.iloc[0]["portfolio_vol_target_scale"], 1.0, places=10)
+        self.assertAlmostEqual(daily.iloc[1]["portfolio_vol_target_scale"], 1.0, places=10)
+        self.assertLess(daily.iloc[2]["portfolio_vol_target_scale"], 1.0)
+        self.assertLess(summary["average_portfolio_vol_target_scale"], 1.0)
+
+
+    def test_compute_cross_section_scores_disables_conditional_z20_overlay_in_high_risk_regime(self):
+        module = load_module()
+        panel = pd.DataFrame([
+            {
+                "trade_date": "20240110",
+                "symbol": "A",
+                "signal_momentum_20": 0.01,
+                "signal_momentum_5": -0.02,
+                "signal_liquidity_5": 100,
+                "signal_close_location": 0.50,
+                "signal_volatility_10": 1.60,
+                "signal_gap_abs": 0.01,
+                "signal_nav_premium_z20": -1.0,
+                "trade_return": 0.01,
+            },
+            {
+                "trade_date": "20240110",
+                "symbol": "B",
+                "signal_momentum_20": 0.01,
+                "signal_momentum_5": -0.02,
+                "signal_liquidity_5": 100,
+                "signal_close_location": 0.50,
+                "signal_volatility_10": 1.60,
+                "signal_gap_abs": 0.01,
+                "signal_nav_premium_z20": 0.0,
+                "trade_return": 0.01,
+            },
+            {
+                "trade_date": "20240110",
+                "symbol": "C",
+                "signal_momentum_20": 0.01,
+                "signal_momentum_5": -0.02,
+                "signal_liquidity_5": 100,
+                "signal_close_location": 0.50,
+                "signal_volatility_10": 1.60,
+                "signal_gap_abs": 0.01,
+                "signal_nav_premium_z20": 1.0,
+                "trade_return": 0.01,
+            },
+        ])
+
+        base = module.compute_cross_section_scores(panel)
+        scored = module.compute_cross_section_scores(
+            panel,
+            config={
+                "conditional-signal-nav-premium-z20-weight": -0.2,
+                "conditional-signal-nav-premium-z20-normal-scale": 1.0,
+                "conditional-signal-nav-premium-z20-medium-scale": 0.5,
+                "conditional-signal-nav-premium-z20-high-scale": 0.0,
+                "risk-regime-medium-momentum-threshold": 0.0,
+                "risk-regime-medium-volatility-threshold": 1.25,
+                "risk-regime-momentum-threshold": -0.005,
+                "risk-regime-volatility-threshold": 1.4,
+            },
+        )
+
+        merged = base[["symbol", "score"]].merge(scored[["symbol", "score", "score_overlay_nav_premium_z20"]], on="symbol", suffixes=("_base", "_overlay"))
+        self.assertTrue((scored["score_risk_regime_bucket"] == "high").all())
+        self.assertTrue((pd.to_numeric(scored["score_overlay_nav_premium_z20_scale"]) == 0.0).all())
+        self.assertTrue((pd.to_numeric(scored["score_overlay_nav_premium_z20"]).abs() < 1e-12).all())
+        self.assertTrue(((pd.to_numeric(merged["score_base"]) - pd.to_numeric(merged["score_overlay"])) .abs() < 1e-12).all())
+
+    def test_compute_cross_section_scores_orthogonalizes_conditional_z20_overlay(self):
+        module = load_module()
+        panel = pd.DataFrame([
+            {
+                "trade_date": "20240110",
+                "symbol": "A",
+                "signal_momentum_20": 3.0,
+                "signal_momentum_5": 3.0,
+                "signal_liquidity_5": 3.0,
+                "signal_close_location": 3.0,
+                "signal_volatility_10": 3.0,
+                "signal_gap_abs": 3.0,
+                "signal_nav_premium_z20": 3.0,
+                "trade_return": 0.01,
+            },
+            {
+                "trade_date": "20240110",
+                "symbol": "B",
+                "signal_momentum_20": 2.0,
+                "signal_momentum_5": 2.0,
+                "signal_liquidity_5": 2.0,
+                "signal_close_location": 2.0,
+                "signal_volatility_10": 2.0,
+                "signal_gap_abs": 2.0,
+                "signal_nav_premium_z20": 2.0,
+                "trade_return": -0.01,
+            },
+            {
+                "trade_date": "20240110",
+                "symbol": "C",
+                "signal_momentum_20": 1.0,
+                "signal_momentum_5": 1.0,
+                "signal_liquidity_5": 1.0,
+                "signal_close_location": 1.0,
+                "signal_volatility_10": 1.0,
+                "signal_gap_abs": 1.0,
+                "signal_nav_premium_z20": 1.0,
+                "trade_return": -0.02,
+            },
+        ])
+
+        base = module.compute_cross_section_scores(panel)
+        orth = module.compute_cross_section_scores(
+            panel,
+            config={
+                "conditional-signal-nav-premium-z20-weight": -0.2,
+                "conditional-signal-nav-premium-z20-orthogonalize": True,
+                "conditional-signal-nav-premium-z20-normal-scale": 1.0,
+                "conditional-signal-nav-premium-z20-medium-scale": 1.0,
+                "conditional-signal-nav-premium-z20-high-scale": 1.0,
+                "risk-regime-medium-momentum-threshold": -999.0,
+                "risk-regime-medium-volatility-threshold": 999.0,
+                "risk-regime-momentum-threshold": -999.0,
+                "risk-regime-volatility-threshold": 999.0,
+            },
+        )
+
+        merged = base[["symbol", "score"]].merge(
+            orth[["symbol", "score", "score_overlay_nav_premium_z20"]],
+            on="symbol",
+            suffixes=("_base", "_orth"),
+        )
+
+        self.assertTrue((pd.to_numeric(merged["score_overlay_nav_premium_z20"]).abs() < 1e-10).all())
+        self.assertTrue(((pd.to_numeric(merged["score_base"]) - pd.to_numeric(merged["score_orth"])) .abs() < 1e-10).all())
 
 
 if __name__ == "__main__":

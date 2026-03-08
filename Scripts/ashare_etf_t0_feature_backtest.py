@@ -92,6 +92,24 @@ def default_config() -> dict:
         "risk-regime-high-top-n": 2,
         "risk-regime-high-score-spread-add": 0.0,
         "risk-regime-high-liquidity-quantile": 0.0,
+        "conditional-signal-nav-premium-z20-weight": 0.0,
+        "conditional-signal-nav-premium-z20-orthogonalize": False,
+        "conditional-signal-nav-premium-z20-normal-scale": 1.0,
+        "conditional-signal-nav-premium-z20-medium-scale": 0.5,
+        "conditional-signal-nav-premium-z20-high-scale": 0.0,
+        "portfolio-vol-target-enabled": False,
+        "portfolio-vol-target-daily-vol": 0.012,
+        "portfolio-vol-target-lookback": 20,
+        "portfolio-vol-target-min-observations": 10,
+        "portfolio-vol-target-floor-scale": 0.5,
+        "portfolio-vol-target-cap-scale": 1.0,
+        "portfolio-quarter-kelly-enabled": False,
+        "portfolio-quarter-kelly-lookback": 20,
+        "portfolio-quarter-kelly-min-observations": 10,
+        "portfolio-quarter-kelly-floor-scale": 0.25,
+        "portfolio-quarter-kelly-cap-scale": 1.0,
+        "portfolio-quarter-kelly-medium-regime-multiplier": 0.75,
+        "portfolio-quarter-kelly-high-regime-multiplier": 0.5,
         "report-file": str(root / "Launcher" / "bin" / "Debug" / "bt.log"),
     }
 
@@ -141,6 +159,92 @@ def _safe_zscore(series: pd.Series) -> pd.Series:
 
     mean = numeric.mean()
     return (numeric - mean) / std
+
+
+def _safe_residual(series: pd.Series, reference: pd.Series) -> pd.Series:
+    values = _numeric(series)
+    baseline = _numeric(reference)
+    valid = values.notna() & baseline.notna()
+    residual = pd.Series(0.0, index=series.index)
+    if valid.sum() <= 1:
+        return residual
+
+    y = values[valid]
+    x = baseline[valid]
+    x_centered = x - x.mean()
+    y_centered = y - y.mean()
+    denominator = float((x_centered ** 2).sum())
+    if math.isclose(denominator, 0.0):
+        residual.loc[valid] = y_centered
+        return residual
+
+    beta = float((x_centered * y_centered).sum() / denominator)
+    residual.loc[valid] = y_centered - beta * x_centered
+    if float(residual.abs().max()) <= 1e-12:
+        return pd.Series(0.0, index=series.index)
+    return residual
+
+
+def _classify_risk_regime_bucket(group: pd.DataFrame, config: dict | None = None) -> str:
+    config = config or {}
+    market_signal_momentum5_mean = float(_numeric(group.get("signal_momentum_5", pd.Series(dtype=float))).mean()) if "signal_momentum_5" in group.columns else 0.0
+    market_signal_volatility10_mean = float(_numeric(group.get("signal_volatility_10", pd.Series(dtype=float))).mean()) if "signal_volatility_10" in group.columns else 0.0
+
+    high_momentum_threshold = config.get("risk-regime-momentum-threshold")
+    high_volatility_threshold = config.get("risk-regime-volatility-threshold")
+    if (
+        high_momentum_threshold is not None
+        and high_volatility_threshold is not None
+        and market_signal_momentum5_mean <= float(high_momentum_threshold)
+        and market_signal_volatility10_mean >= float(high_volatility_threshold)
+    ):
+        return "high"
+
+    medium_momentum_threshold = config.get("risk-regime-medium-momentum-threshold")
+    medium_volatility_threshold = config.get("risk-regime-medium-volatility-threshold")
+    if (
+        medium_momentum_threshold is not None
+        and medium_volatility_threshold is not None
+        and market_signal_momentum5_mean <= float(medium_momentum_threshold)
+        and market_signal_volatility10_mean >= float(medium_volatility_threshold)
+    ):
+        return "medium"
+
+    return "normal"
+
+
+def _conditional_nav_premium_z20_scale(risk_regime_bucket: str, config: dict | None = None) -> float:
+    config = config or {}
+    key = {
+        "normal": "conditional-signal-nav-premium-z20-normal-scale",
+        "medium": "conditional-signal-nav-premium-z20-medium-scale",
+        "high": "conditional-signal-nav-premium-z20-high-scale",
+    }.get(str(risk_regime_bucket or "normal"), "conditional-signal-nav-premium-z20-normal-scale")
+    return float(config.get(key, 0.0) or 0.0)
+
+
+def _apply_conditional_nav_premium_z20(
+    group: pd.DataFrame,
+    base_score: pd.Series,
+    risk_regime_bucket: str,
+    config: dict | None = None,
+) -> pd.Series:
+    config = config or {}
+    contribution = pd.Series(0.0, index=group.index)
+    weight = float(config.get("conditional-signal-nav-premium-z20-weight", 0.0) or 0.0)
+    if math.isclose(weight, 0.0) or "signal_nav_premium_z20" not in group.columns:
+        return contribution
+
+    scale = _conditional_nav_premium_z20_scale(risk_regime_bucket, config)
+    if math.isclose(scale, 0.0):
+        return contribution
+
+    overlay_signal = _safe_zscore(group["signal_nav_premium_z20"]).fillna(0.0)
+    if bool(config.get("conditional-signal-nav-premium-z20-orthogonalize", False)):
+        overlay_signal = _safe_residual(overlay_signal, base_score)
+        overlay_signal = _safe_zscore(overlay_signal).fillna(0.0)
+
+    return overlay_signal * weight * scale
 
 
 def _safe_ratio_minus_one(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -367,22 +471,30 @@ def build_symbol_feature_frame(
     )
 
 
-def compute_cross_section_scores(panel: pd.DataFrame) -> pd.DataFrame:
+def compute_cross_section_scores(panel: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     required = ["trade_date", "symbol", "trade_return", *BASE_SIGNAL_FIELDS]
     scored = panel.copy()
     scored = scored.dropna(subset=required).reset_index(drop=True)
     if scored.empty:
         return scored
 
+    config = config or {}
     score_frames = []
     for trade_date, group in scored.groupby("trade_date", sort=True):
         group = group.copy()
-        total = pd.Series(0.0, index=group.index)
+        base_total = pd.Series(0.0, index=group.index)
         for field, weight in FEATURE_WEIGHTS.items():
             if field not in group.columns:
                 continue
-            total = total + _safe_zscore(group[field]).fillna(0.0) * weight
-        group["score"] = total
+            base_total = base_total + _safe_zscore(group[field]).fillna(0.0) * weight
+
+        risk_regime_bucket = _classify_risk_regime_bucket(group, config)
+        overlay_nav_premium_z20 = _apply_conditional_nav_premium_z20(group, base_total, risk_regime_bucket, config)
+        group["score_base"] = base_total
+        group["score_overlay_nav_premium_z20"] = overlay_nav_premium_z20
+        group["score_overlay_nav_premium_z20_scale"] = _conditional_nav_premium_z20_scale(risk_regime_bucket, config)
+        group["score_risk_regime_bucket"] = risk_regime_bucket
+        group["score"] = base_total + overlay_nav_premium_z20
         score_frames.append(group)
 
     if not score_frames:
@@ -405,6 +517,77 @@ def _apply_liquidity_whitelist(group: pd.DataFrame, liquidity_quantile: float) -
     return filtered if not filtered.empty else group
 
 
+def _tail_realized_returns(realized_returns: list[float], lookback: int) -> pd.Series:
+    if not realized_returns:
+        return pd.Series(dtype=float)
+
+    values = realized_returns[-int(lookback):] if int(lookback or 0) > 0 else realized_returns
+    return pd.Series([float(value) for value in values], dtype=float)
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    lower_bound = min(float(lower), float(upper))
+    upper_bound = max(float(lower), float(upper))
+    return max(lower_bound, min(float(value), upper_bound))
+
+
+def _portfolio_vol_target_scale(
+    realized_returns: list[float],
+    enabled: bool,
+    daily_vol_target: float,
+    lookback: int,
+    min_observations: int,
+    floor_scale: float,
+    cap_scale: float,
+) -> float:
+    if not enabled:
+        return 1.0
+
+    trailing = _tail_realized_returns(realized_returns, lookback)
+    if len(trailing) < max(1, int(min_observations or 1)):
+        return 1.0
+
+    std = float(trailing.std(ddof=0))
+    if not math.isfinite(std) or std <= 0:
+        return 1.0
+
+    raw_scale = float(daily_vol_target) / std
+    return _clamp(raw_scale, floor_scale, cap_scale)
+
+
+def _portfolio_quarter_kelly_scale(
+    realized_returns: list[float],
+    risk_regime_bucket: str,
+    enabled: bool,
+    lookback: int,
+    min_observations: int,
+    floor_scale: float,
+    cap_scale: float,
+    medium_regime_multiplier: float,
+    high_regime_multiplier: float,
+) -> float:
+    if not enabled:
+        return 1.0
+
+    trailing = _tail_realized_returns(realized_returns, lookback)
+    if len(trailing) < max(1, int(min_observations or 1)):
+        return 1.0
+
+    mean = float(trailing.mean())
+    variance = float(trailing.var(ddof=0))
+    if not math.isfinite(mean) or not math.isfinite(variance):
+        return 1.0
+    if variance <= 0:
+        return float(floor_scale) if mean <= 0 else 1.0
+
+    raw_scale = max(0.0, 0.25 * mean / variance)
+    regime_multiplier = {
+        "medium": float(medium_regime_multiplier),
+        "high": float(high_regime_multiplier),
+    }.get(str(risk_regime_bucket or "normal"), 1.0)
+    return _clamp(raw_scale * regime_multiplier, floor_scale, cap_scale)
+
+
 def backtest_from_scores(
     scored: pd.DataFrame,
     top_n: int = 3,
@@ -424,6 +607,19 @@ def backtest_from_scores(
     risk_regime_high_top_n: int | None = None,
     risk_regime_high_score_spread_add: float = 0.0,
     risk_regime_high_liquidity_quantile: float = 0.0,
+    portfolio_vol_target_enabled: bool = False,
+    portfolio_vol_target_daily_vol: float = 0.012,
+    portfolio_vol_target_lookback: int = 20,
+    portfolio_vol_target_min_observations: int = 10,
+    portfolio_vol_target_floor_scale: float = 0.5,
+    portfolio_vol_target_cap_scale: float = 1.0,
+    portfolio_quarter_kelly_enabled: bool = False,
+    portfolio_quarter_kelly_lookback: int = 20,
+    portfolio_quarter_kelly_min_observations: int = 10,
+    portfolio_quarter_kelly_floor_scale: float = 0.25,
+    portfolio_quarter_kelly_cap_scale: float = 1.0,
+    portfolio_quarter_kelly_medium_regime_multiplier: float = 0.75,
+    portfolio_quarter_kelly_high_regime_multiplier: float = 0.5,
 ) -> tuple[pd.DataFrame, dict]:
     daily_rows = []
     selection_counter: Counter[str] = Counter()
@@ -435,6 +631,10 @@ def backtest_from_scores(
     high_risk_regime_days = 0
     exposure_scales = []
     selected_counts = []
+    portfolio_risk_overlay_scales = []
+    portfolio_vol_target_scales = []
+    portfolio_quarter_kelly_scales = []
+    realized_returns: list[float] = []
 
     for trade_date, group in scored.groupby("trade_date", sort=True):
         scored_trade_days += 1
@@ -492,6 +692,29 @@ def backtest_from_scores(
             skipped_gap_risk_days += 1
             continue
 
+        vol_target_scale = _portfolio_vol_target_scale(
+            realized_returns,
+            enabled=bool(portfolio_vol_target_enabled),
+            daily_vol_target=float(portfolio_vol_target_daily_vol),
+            lookback=int(portfolio_vol_target_lookback),
+            min_observations=int(portfolio_vol_target_min_observations),
+            floor_scale=float(portfolio_vol_target_floor_scale),
+            cap_scale=float(portfolio_vol_target_cap_scale),
+        )
+        quarter_kelly_scale = _portfolio_quarter_kelly_scale(
+            realized_returns,
+            risk_regime_bucket=risk_regime_bucket,
+            enabled=bool(portfolio_quarter_kelly_enabled),
+            lookback=int(portfolio_quarter_kelly_lookback),
+            min_observations=int(portfolio_quarter_kelly_min_observations),
+            floor_scale=float(portfolio_quarter_kelly_floor_scale),
+            cap_scale=float(portfolio_quarter_kelly_cap_scale),
+            medium_regime_multiplier=float(portfolio_quarter_kelly_medium_regime_multiplier),
+            high_regime_multiplier=float(portfolio_quarter_kelly_high_regime_multiplier),
+        )
+        portfolio_risk_overlay_scale = min(1.0, float(vol_target_scale) * float(quarter_kelly_scale))
+        exposure_scale = min(1.0, float(exposure_scale) * portfolio_risk_overlay_scale)
+
         if exposure_scale <= 0:
             continue
 
@@ -502,6 +725,10 @@ def backtest_from_scores(
         selection_counter.update(symbols)
         exposure_scales.append(exposure_scale)
         selected_counts.append(len(symbols))
+        portfolio_risk_overlay_scales.append(portfolio_risk_overlay_scale)
+        portfolio_vol_target_scales.append(vol_target_scale)
+        portfolio_quarter_kelly_scales.append(quarter_kelly_scale)
+        realized_returns.append(net_return)
 
         daily_rows.append({
             "trade_date": trade_date,
@@ -520,6 +747,9 @@ def backtest_from_scores(
             "effective_top_n": int(max(1, effective_top_n)),
             "effective_min_score_spread": float(effective_min_score_spread),
             "liquidity_quantile": float(liquidity_quantile),
+            "portfolio_risk_overlay_scale": float(portfolio_risk_overlay_scale),
+            "portfolio_vol_target_scale": float(vol_target_scale),
+            "portfolio_quarter_kelly_scale": float(quarter_kelly_scale),
         })
 
     daily = pd.DataFrame(daily_rows)
@@ -534,6 +764,9 @@ def backtest_from_scores(
         "selection_rate": float(len(daily) / scored_trade_days) if scored_trade_days > 0 else 0.0,
         "average_exposure_scale": float(sum(exposure_scales) / len(exposure_scales)) if exposure_scales else 0.0,
         "average_selected_count": float(sum(selected_counts) / len(selected_counts)) if selected_counts else 0.0,
+        "average_portfolio_risk_overlay_scale": float(sum(portfolio_risk_overlay_scales) / len(portfolio_risk_overlay_scales)) if portfolio_risk_overlay_scales else 0.0,
+        "average_portfolio_vol_target_scale": float(sum(portfolio_vol_target_scales) / len(portfolio_vol_target_scales)) if portfolio_vol_target_scales else 0.0,
+        "average_portfolio_quarter_kelly_scale": float(sum(portfolio_quarter_kelly_scales) / len(portfolio_quarter_kelly_scales)) if portfolio_quarter_kelly_scales else 0.0,
         "min_score_spread": float(min_score_spread),
         "max_average_gap_abs": float(max_average_gap_abs) if max_average_gap_abs is not None else None,
         "risk_regime_filter_enabled": bool(risk_regime_filter_enabled),
@@ -549,6 +782,19 @@ def backtest_from_scores(
         "risk_regime_high_top_n": int(risk_regime_high_top_n) if risk_regime_high_top_n is not None else None,
         "risk_regime_high_score_spread_add": float(risk_regime_high_score_spread_add or 0.0),
         "risk_regime_high_liquidity_quantile": float(risk_regime_high_liquidity_quantile or 0.0),
+        "portfolio_vol_target_enabled": bool(portfolio_vol_target_enabled),
+        "portfolio_vol_target_daily_vol": float(portfolio_vol_target_daily_vol),
+        "portfolio_vol_target_lookback": int(portfolio_vol_target_lookback),
+        "portfolio_vol_target_min_observations": int(portfolio_vol_target_min_observations),
+        "portfolio_vol_target_floor_scale": float(portfolio_vol_target_floor_scale),
+        "portfolio_vol_target_cap_scale": float(portfolio_vol_target_cap_scale),
+        "portfolio_quarter_kelly_enabled": bool(portfolio_quarter_kelly_enabled),
+        "portfolio_quarter_kelly_lookback": int(portfolio_quarter_kelly_lookback),
+        "portfolio_quarter_kelly_min_observations": int(portfolio_quarter_kelly_min_observations),
+        "portfolio_quarter_kelly_floor_scale": float(portfolio_quarter_kelly_floor_scale),
+        "portfolio_quarter_kelly_cap_scale": float(portfolio_quarter_kelly_cap_scale),
+        "portfolio_quarter_kelly_medium_regime_multiplier": float(portfolio_quarter_kelly_medium_regime_multiplier),
+        "portfolio_quarter_kelly_high_regime_multiplier": float(portfolio_quarter_kelly_high_regime_multiplier),
     })
     return daily, summary
 
@@ -611,6 +857,13 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
             else "Risk Regime Scaling: disabled"
         ),
         (
+            "Conditional NavPremiumZ20 Overlay: enabled "
+            f"(weight={float(config.get('conditional-signal-nav-premium-z20-weight', 0.0) or 0.0):.4f}, orthogonalize={bool(config.get('conditional-signal-nav-premium-z20-orthogonalize', False))}, "
+            f"scale normal/medium/high={float(config.get('conditional-signal-nav-premium-z20-normal-scale', 1.0) or 0.0):.2f}/{float(config.get('conditional-signal-nav-premium-z20-medium-scale', 0.5) or 0.0):.2f}/{float(config.get('conditional-signal-nav-premium-z20-high-scale', 0.0) or 0.0):.2f})"
+            if not math.isclose(float(config.get('conditional-signal-nav-premium-z20-weight', 0.0) or 0.0), 0.0)
+            else "Conditional NavPremiumZ20 Overlay: disabled"
+        ),
+        (
             "Risk Regime Signal Shrinkage: enabled "
             f"(medium: top_n={int(config.get('risk-regime-medium-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-medium-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-medium-liquidity-quantile', 0.0) or 0.0):.2f}; "
             f"high: top_n={int(config.get('risk-regime-high-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-high-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-high-liquidity-quantile', 0.0) or 0.0):.2f})"
@@ -627,6 +880,13 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
             )
             else "Risk Regime Signal Shrinkage: inactive"
         ),
+        (
+            "Portfolio Risk Overlay: enabled "
+            f"(vol_target={float(config.get('portfolio-vol-target-daily-vol', 0.012) or 0.0):.4%}, lookback={int(config.get('portfolio-vol-target-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-vol-target-floor-scale', 0.5) or 0.0):.2f}/{float(config.get('portfolio-vol-target-cap-scale', 1.0) or 0.0):.2f}; "
+            f"quarter_kelly lookback={int(config.get('portfolio-quarter-kelly-lookback', 20) or 20)}, floor/cap={float(config.get('portfolio-quarter-kelly-floor-scale', 0.25) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-cap-scale', 1.0) or 0.0):.2f}, regime mult={float(config.get('portfolio-quarter-kelly-medium-regime-multiplier', 0.75) or 0.0):.2f}/{float(config.get('portfolio-quarter-kelly-high-regime-multiplier', 0.5) or 0.0):.2f})"
+            if config.get("portfolio-vol-target-enabled") or config.get("portfolio-quarter-kelly-enabled")
+            else "Portfolio Risk Overlay: disabled"
+        ),
         "Feature Fields:",
         *FEATURE_FIELD_LINES,
         "Results:",
@@ -635,6 +895,9 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
         f"- Selected Trade Days: {summary['selected_trade_days']}",
         f"- Selection Rate: {summary['selection_rate']:.2%}",
         f"- Average Exposure Scale: {summary['average_exposure_scale']:.2%}",
+        f"- Average Portfolio Risk Overlay Scale: {summary['average_portfolio_risk_overlay_scale']:.2%}",
+        f"- Average Vol Target Scale: {summary['average_portfolio_vol_target_scale']:.2%}",
+        f"- Average Quarter-Kelly Scale: {summary['average_portfolio_quarter_kelly_scale']:.2%}",
         f"- Average Selected Count: {summary['average_selected_count']:.2f}",
         f"- Skipped Low Conviction Days: {summary['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {summary['skipped_gap_risk_days']}",
@@ -674,7 +937,7 @@ def run_backtest(config: dict) -> dict:
         prepared_frames.append(frame)
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
-    scored = compute_cross_section_scores(panel)
+    scored = compute_cross_section_scores(panel, config=config)
     daily, summary = backtest_from_scores(
         scored,
         top_n=int(config["top-n"]),
@@ -722,6 +985,19 @@ def run_backtest(config: dict) -> dict:
         ),
         risk_regime_high_score_spread_add=float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0),
         risk_regime_high_liquidity_quantile=float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0),
+        portfolio_vol_target_enabled=bool(config.get("portfolio-vol-target-enabled", False)),
+        portfolio_vol_target_daily_vol=float(config.get("portfolio-vol-target-daily-vol", 0.012) or 0.012),
+        portfolio_vol_target_lookback=int(config.get("portfolio-vol-target-lookback", 20) or 20),
+        portfolio_vol_target_min_observations=int(config.get("portfolio-vol-target-min-observations", 10) or 10),
+        portfolio_vol_target_floor_scale=float(config.get("portfolio-vol-target-floor-scale", 0.5) or 0.5),
+        portfolio_vol_target_cap_scale=float(config.get("portfolio-vol-target-cap-scale", 1.0) or 1.0),
+        portfolio_quarter_kelly_enabled=bool(config.get("portfolio-quarter-kelly-enabled", False)),
+        portfolio_quarter_kelly_lookback=int(config.get("portfolio-quarter-kelly-lookback", 20) or 20),
+        portfolio_quarter_kelly_min_observations=int(config.get("portfolio-quarter-kelly-min-observations", 10) or 10),
+        portfolio_quarter_kelly_floor_scale=float(config.get("portfolio-quarter-kelly-floor-scale", 0.25) or 0.25),
+        portfolio_quarter_kelly_cap_scale=float(config.get("portfolio-quarter-kelly-cap-scale", 1.0) or 1.0),
+        portfolio_quarter_kelly_medium_regime_multiplier=float(config.get("portfolio-quarter-kelly-medium-regime-multiplier", 0.75) or 0.75),
+        portfolio_quarter_kelly_high_regime_multiplier=float(config.get("portfolio-quarter-kelly-high-regime-multiplier", 0.5) or 0.5),
     )
 
     summary = {
@@ -762,6 +1038,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-regime-high-top-n", type=int)
     parser.add_argument("--risk-regime-high-score-spread-add", type=float)
     parser.add_argument("--risk-regime-high-liquidity-quantile", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-weight", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-orthogonalize", action="store_true")
+    parser.add_argument("--conditional-signal-nav-premium-z20-normal-scale", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-medium-scale", type=float)
+    parser.add_argument("--conditional-signal-nav-premium-z20-high-scale", type=float)
+    parser.add_argument("--portfolio-vol-target-enabled", action="store_true")
+    parser.add_argument("--portfolio-vol-target-daily-vol", type=float)
+    parser.add_argument("--portfolio-vol-target-lookback", type=int)
+    parser.add_argument("--portfolio-vol-target-min-observations", type=int)
+    parser.add_argument("--portfolio-vol-target-floor-scale", type=float)
+    parser.add_argument("--portfolio-vol-target-cap-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-enabled", action="store_true")
+    parser.add_argument("--portfolio-quarter-kelly-lookback", type=int)
+    parser.add_argument("--portfolio-quarter-kelly-min-observations", type=int)
+    parser.add_argument("--portfolio-quarter-kelly-floor-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-cap-scale", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-medium-regime-multiplier", type=float)
+    parser.add_argument("--portfolio-quarter-kelly-high-regime-multiplier", type=float)
     parser.add_argument("--include-money-market-etfs", action="store_true")
     return parser
 
@@ -788,11 +1082,32 @@ def main() -> int:
         "risk-regime-high-top-n": args.risk_regime_high_top_n,
         "risk-regime-high-score-spread-add": args.risk_regime_high_score_spread_add,
         "risk-regime-high-liquidity-quantile": args.risk_regime_high_liquidity_quantile,
+        "conditional-signal-nav-premium-z20-weight": args.conditional_signal_nav_premium_z20_weight,
+        "conditional-signal-nav-premium-z20-normal-scale": args.conditional_signal_nav_premium_z20_normal_scale,
+        "conditional-signal-nav-premium-z20-medium-scale": args.conditional_signal_nav_premium_z20_medium_scale,
+        "conditional-signal-nav-premium-z20-high-scale": args.conditional_signal_nav_premium_z20_high_scale,
+        "portfolio-vol-target-daily-vol": args.portfolio_vol_target_daily_vol,
+        "portfolio-vol-target-lookback": args.portfolio_vol_target_lookback,
+        "portfolio-vol-target-min-observations": args.portfolio_vol_target_min_observations,
+        "portfolio-vol-target-floor-scale": args.portfolio_vol_target_floor_scale,
+        "portfolio-vol-target-cap-scale": args.portfolio_vol_target_cap_scale,
+        "portfolio-quarter-kelly-lookback": args.portfolio_quarter_kelly_lookback,
+        "portfolio-quarter-kelly-min-observations": args.portfolio_quarter_kelly_min_observations,
+        "portfolio-quarter-kelly-floor-scale": args.portfolio_quarter_kelly_floor_scale,
+        "portfolio-quarter-kelly-cap-scale": args.portfolio_quarter_kelly_cap_scale,
+        "portfolio-quarter-kelly-medium-regime-multiplier": args.portfolio_quarter_kelly_medium_regime_multiplier,
+        "portfolio-quarter-kelly-high-regime-multiplier": args.portfolio_quarter_kelly_high_regime_multiplier,
     }
     if args.risk_regime_filter_enabled:
         overrides["risk-regime-filter-enabled"] = True
     if args.include_money_market_etfs:
         overrides["exclude-money-market-etfs"] = False
+    if args.conditional_signal_nav_premium_z20_orthogonalize:
+        overrides["conditional-signal-nav-premium-z20-orthogonalize"] = True
+    if args.portfolio_vol_target_enabled:
+        overrides["portfolio-vol-target-enabled"] = True
+    if args.portfolio_quarter_kelly_enabled:
+        overrides["portfolio-quarter-kelly-enabled"] = True
 
     config = load_pipeline_config(args.config, overrides)
     summary = run_backtest(config)
