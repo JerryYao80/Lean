@@ -81,6 +81,40 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
         self.assertEqual(fee_stressed, [[0.0085, 0.0185], [-0.0015, -0.0115]])
         self.assertEqual(shock_stressed, [[-0.01, 0.0], [-0.02, -0.03]])
 
+    def test_execution_slippage_and_regime_bootstrap(self):
+        module = load_module()
+        paths = [[0.01, 0.02], [0.0, -0.01]]
+        slipped = module.apply_execution_slippage_stress(
+            paths,
+            slippage_probability=1.0,
+            slippage_mean=0.002,
+            slippage_std=0.0,
+            seed=7,
+        )
+        self.assertAlmostEqual(slipped[0][0], 0.008, places=10)
+        self.assertAlmostEqual(slipped[0][1], 0.018, places=10)
+        self.assertAlmostEqual(slipped[1][0], -0.002, places=10)
+        self.assertAlmostEqual(slipped[1][1], -0.012, places=10)
+
+        daily = pd.DataFrame([
+            {"trade_date": "20240101", "net_return": 0.01, "regime": "up_lowvol"},
+            {"trade_date": "20240102", "net_return": -0.02, "regime": "down_highvol"},
+            {"trade_date": "20240103", "net_return": 0.03, "regime": "up_lowvol"},
+        ])
+        weights = {"up_lowvol": 0.25, "down_highvol": 0.75}
+        bootstrapped = module.regime_bootstrap_returns(
+            daily,
+            trial_count=3,
+            horizon_days=4,
+            block_size=2,
+            seed=11,
+            regime_weights=weights,
+        )
+
+        self.assertEqual(len(bootstrapped), 3)
+        self.assertTrue(all(len(path) == 4 for path in bootstrapped))
+        self.assertTrue(all(value in [0.01, -0.02, 0.03] for path in bootstrapped for value in path))
+
     def test_summarize_paths_reports_loss_probability_and_percentiles(self):
         module = load_module()
         paths = [
@@ -149,6 +183,11 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
                 "exclude-money-market-etfs": True,
                 "top-n": 1,
                 "fee-rate": 0.0005,
+                "min-score-spread": 0.1,
+                "max-average-gap-abs": 0.05,
+                "risk-regime-filter-enabled": True,
+                "risk-regime-momentum-threshold": -0.5,
+                "risk-regime-volatility-threshold": 10.0,
                 "trial-count": 32,
                 "horizon-days": 15,
                 "block-size": 4,
@@ -156,6 +195,11 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
                 "shock-probability": 0.10,
                 "shock-mean": 0.015,
                 "shock-std": 0.0,
+                "slippage-probability": 0.2,
+                "slippage-mean": 0.001,
+                "slippage-std": 0.0,
+                "regime-down-multiplier": 1.5,
+                "regime-high-vol-multiplier": 1.2,
                 "seed": 23,
                 "report-file": str(report_file),
             }
@@ -171,6 +215,11 @@ class AShareEtfT0MonteCarloTests(unittest.TestCase):
         self.assertEqual(report["scenarios"]["baseline"]["trial_count"], 32)
         self.assertIn("AShare ETF T+0 Monte Carlo", report_text)
         self.assertIn("combined_stress", report_text)
+        self.assertIn("Selection Rate", report_text)
+        self.assertIn("regime_combined_stress", report_text)
+        self.assertIn("execution_stress", report["scenarios"])
+        self.assertIn("regime_stress", report["scenarios"])
+        self.assertIn("Risk Regime Filter", report_text)
 
 
 if __name__ == "__main__":

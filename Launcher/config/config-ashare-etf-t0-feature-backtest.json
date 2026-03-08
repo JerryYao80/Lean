@@ -5,7 +5,12 @@
   "start-date": "20240101",
   "end-date": "20251231",
   "exclude-money-market-etfs": true,
-  "top-n": 3,
+  "top-n": 2,
   "fee-rate": 0.0006,
+  "min-score-spread": 0.7,
+  "max-average-gap-abs": 0.016,
+  "risk-regime-filter-enabled": true,
+  "risk-regime-momentum-threshold": -0.005,
+  "risk-regime-volatility-threshold": 1.4,
   "report-file": "../bin/Debug/bt.log"
 }

@@ -47,10 +47,21 @@ namespace QuantConnect.Tests.Configuration
             Assert.That(parameters, Is.Not.Null);
             Assert.That((string)parameters["tushare-data-path"], Does.Contain("tushare_data"));
             Assert.That((string)parameters["feature-data-path"], Does.Contain("ashare-etf-t0-features"));
+            Assert.That((string)parameters["top-n"], Is.EqualTo("2"));
+            Assert.That((string)parameters["min-score-spread"], Is.EqualTo("0.7"));
+            Assert.That((string)parameters["max-average-gap-abs"], Is.EqualTo("0.016"));
+            Assert.That((string)parameters["risk-regime-filter-enabled"], Is.EqualTo("true"));
+            Assert.That((string)parameters["risk-regime-momentum-threshold"], Is.EqualTo("-0.005"));
+            Assert.That((string)parameters["risk-regime-volatility-threshold"], Is.EqualTo("1.4"));
             Assert.That((string)parameters["monte-carlo-enabled"], Is.EqualTo("true"));
             Assert.That((string)parameters["monte-carlo-trials"], Is.EqualTo("500"));
             Assert.That((string)parameters["monte-carlo-horizon-days"], Is.EqualTo("63"));
             Assert.That((string)parameters["monte-carlo-block-size"], Is.EqualTo("5"));
+            Assert.That((string)parameters["monte-carlo-slippage-probability"], Is.EqualTo("0.35"));
+            Assert.That((string)parameters["monte-carlo-slippage-mean"], Is.EqualTo("0.001"));
+            Assert.That((string)parameters["monte-carlo-slippage-std"], Is.EqualTo("0.0005"));
+            Assert.That((string)parameters["monte-carlo-regime-down-multiplier"], Is.EqualTo("1.75"));
+            Assert.That((string)parameters["monte-carlo-regime-high-vol-multiplier"], Is.EqualTo("1.25"));
             Assert.That((string)parameters["monte-carlo-seed"], Is.EqualTo("42"));
         }
     }

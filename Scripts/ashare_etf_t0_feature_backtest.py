@@ -41,8 +41,13 @@ def default_config() -> dict:
         "start-date": "20240101",
         "end-date": "20251231",
         "exclude-money-market-etfs": True,
-        "top-n": 3,
+        "top-n": 2,
         "fee-rate": 0.0006,
+        "min-score-spread": 0.7,
+        "max-average-gap-abs": 0.016,
+        "risk-regime-filter-enabled": True,
+        "risk-regime-momentum-threshold": -0.005,
+        "risk-regime-volatility-threshold": 1.4,
         "report-file": str(root / "Launcher" / "bin" / "Debug" / "bt.log"),
     }
 
@@ -143,14 +148,55 @@ def compute_cross_section_scores(panel: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(score_frames, ignore_index=True)
 
 
-def backtest_from_scores(scored: pd.DataFrame, top_n: int = 3, fee_rate: float = 0.0006) -> tuple[pd.DataFrame, dict]:
+def backtest_from_scores(
+    scored: pd.DataFrame,
+    top_n: int = 3,
+    fee_rate: float = 0.0006,
+    min_score_spread: float = 0.0,
+    max_average_gap_abs: float | None = None,
+    risk_regime_filter_enabled: bool = False,
+    risk_regime_momentum_threshold: float | None = None,
+    risk_regime_volatility_threshold: float | None = None,
+) -> tuple[pd.DataFrame, dict]:
     daily_rows = []
     selection_counter: Counter[str] = Counter()
     equity = 1.0
+    scored_trade_days = 0
+    skipped_low_conviction_days = 0
+    skipped_gap_risk_days = 0
+    skipped_risk_regime_days = 0
 
     for trade_date, group in scored.groupby("trade_date", sort=True):
+        scored_trade_days += 1
+        score_series = _numeric(group["score"])
+        if score_series.empty:
+            continue
+
+        score_spread = float(score_series.max() - score_series.median())
+        if min_score_spread > 0 and score_spread < min_score_spread:
+            skipped_low_conviction_days += 1
+            continue
+
+        market_signal_momentum5_mean = float(_numeric(group["signal_momentum_5"]).mean()) if "signal_momentum_5" in group.columns else 0.0
+        market_signal_volatility10_mean = float(_numeric(group["signal_volatility_10"]).mean()) if "signal_volatility_10" in group.columns else 0.0
+        in_risk_regime = (
+            risk_regime_filter_enabled
+            and risk_regime_momentum_threshold is not None
+            and risk_regime_volatility_threshold is not None
+            and market_signal_momentum5_mean <= float(risk_regime_momentum_threshold)
+            and market_signal_volatility10_mean >= float(risk_regime_volatility_threshold)
+        )
+        if in_risk_regime:
+            skipped_risk_regime_days += 1
+            continue
+
         picks = group.sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
         if picks.empty:
+            continue
+
+        average_gap_abs = float(_numeric(picks["signal_gap_abs"]).mean()) if "signal_gap_abs" in picks.columns else 0.0
+        if max_average_gap_abs is not None and average_gap_abs > max_average_gap_abs:
+            skipped_gap_risk_days += 1
             continue
 
         gross_return = float(_numeric(picks["trade_return"]).mean())
@@ -166,10 +212,27 @@ def backtest_from_scores(scored: pd.DataFrame, top_n: int = 3, fee_rate: float =
             "net_return": net_return,
             "equity": equity,
             "score_mean": float(_numeric(picks["score"]).mean()),
+            "score_spread": score_spread,
+            "average_gap_abs": average_gap_abs,
+            "market_signal_momentum5_mean": market_signal_momentum5_mean,
+            "market_signal_volatility10_mean": market_signal_volatility10_mean,
         })
 
     daily = pd.DataFrame(daily_rows)
     summary = summarize_backtest(daily, selection_counter)
+    summary.update({
+        "scored_trade_days": int(scored_trade_days),
+        "skipped_low_conviction_days": int(skipped_low_conviction_days),
+        "skipped_gap_risk_days": int(skipped_gap_risk_days),
+        "skipped_risk_regime_days": int(skipped_risk_regime_days),
+        "selected_trade_days": int(len(daily)),
+        "selection_rate": float(len(daily) / scored_trade_days) if scored_trade_days > 0 else 0.0,
+        "min_score_spread": float(min_score_spread),
+        "max_average_gap_abs": float(max_average_gap_abs) if max_average_gap_abs is not None else None,
+        "risk_regime_filter_enabled": bool(risk_regime_filter_enabled),
+        "risk_regime_momentum_threshold": float(risk_regime_momentum_threshold) if risk_regime_momentum_threshold is not None else None,
+        "risk_regime_volatility_threshold": float(risk_regime_volatility_threshold) if risk_regime_volatility_threshold is not None else None,
+    })
     return daily, summary
 
 
@@ -217,6 +280,17 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
         f"Loaded Symbols: {loaded_symbol_count}",
         f"Top N: {config['top-n']}",
         f"Fee Rate: {config['fee-rate']:.6f}",
+        f"Min Score Spread: {float(config.get('min-score-spread', 0.0)):.4f}",
+        (
+            f"Max Average Gap Abs: {float(config.get('max-average-gap-abs')):.4%}"
+            if config.get("max-average-gap-abs") is not None
+            else "Max Average Gap Abs: disabled"
+        ),
+        (
+            f"Risk Regime Filter: enabled (mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f})"
+            if config.get("risk-regime-filter-enabled")
+            else "Risk Regime Filter: disabled"
+        ),
         "Feature Fields:",
         "- momentum_20: close / close[-20] - 1",
         "- momentum_5: close / close[-5] - 1",
@@ -226,6 +300,12 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
         "- gap_abs: abs(open / pre_close - 1)",
         "Results:",
         f"- Trade Days: {summary['trade_days']}",
+        f"- Scored Trade Days: {summary['scored_trade_days']}",
+        f"- Selected Trade Days: {summary['selected_trade_days']}",
+        f"- Selection Rate: {summary['selection_rate']:.2%}",
+        f"- Skipped Low Conviction Days: {summary['skipped_low_conviction_days']}",
+        f"- Skipped Gap Risk Days: {summary['skipped_gap_risk_days']}",
+        f"- Skipped Risk Regime Days: {summary['skipped_risk_regime_days']}",
         f"- Final Equity: {summary['final_equity']:.6f}",
         f"- Total Return: {summary['total_return']:.2%}",
         f"- Annualized Return: {summary['annualized_return']:.2%}",
@@ -260,7 +340,28 @@ def run_backtest(config: dict) -> dict:
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
     scored = compute_cross_section_scores(panel)
-    daily, summary = backtest_from_scores(scored, top_n=int(config["top-n"]), fee_rate=float(config["fee-rate"]))
+    daily, summary = backtest_from_scores(
+        scored,
+        top_n=int(config["top-n"]),
+        fee_rate=float(config["fee-rate"]),
+        min_score_spread=float(config.get("min-score-spread", 0.0) or 0.0),
+        max_average_gap_abs=(
+            float(config["max-average-gap-abs"])
+            if config.get("max-average-gap-abs") is not None
+            else None
+        ),
+        risk_regime_filter_enabled=bool(config.get("risk-regime-filter-enabled", False)),
+        risk_regime_momentum_threshold=(
+            float(config["risk-regime-momentum-threshold"])
+            if config.get("risk-regime-momentum-threshold") is not None
+            else None
+        ),
+        risk_regime_volatility_threshold=(
+            float(config["risk-regime-volatility-threshold"])
+            if config.get("risk-regime-volatility-threshold") is not None
+            else None
+        ),
+    )
 
     summary = {
         **summary,
@@ -285,6 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date")
     parser.add_argument("--top-n", type=int)
     parser.add_argument("--fee-rate", type=float)
+    parser.add_argument("--min-score-spread", type=float)
+    parser.add_argument("--max-average-gap-abs", type=float)
+    parser.add_argument("--risk-regime-filter-enabled", action="store_true")
+    parser.add_argument("--risk-regime-momentum-threshold", type=float)
+    parser.add_argument("--risk-regime-volatility-threshold", type=float)
     parser.add_argument("--include-money-market-etfs", action="store_true")
     return parser
 
@@ -297,7 +403,13 @@ def main() -> int:
         "end-date": args.end_date,
         "top-n": args.top_n,
         "fee-rate": args.fee_rate,
+        "min-score-spread": args.min_score_spread,
+        "max-average-gap-abs": args.max_average_gap_abs,
+        "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
+        "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
     }
+    if args.risk_regime_filter_enabled:
+        overrides["risk-regime-filter-enabled"] = True
     if args.include_money_market_etfs:
         overrides["exclude-money-market-etfs"] = False
 

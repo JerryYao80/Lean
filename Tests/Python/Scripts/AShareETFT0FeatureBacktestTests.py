@@ -138,6 +138,54 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertEqual(summary["trade_days"], 2)
         self.assertEqual(summary["top_symbols"][0][0], "A")
 
+    def test_backtest_from_scores_skips_low_conviction_and_gap_risk_days(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 0.40, "trade_return": 0.020, "signal_gap_abs": 0.010},
+            {"trade_date": "20240110", "symbol": "B", "score": 0.20, "trade_return": 0.010, "signal_gap_abs": 0.010},
+            {"trade_date": "20240111", "symbol": "A", "score": 1.40, "trade_return": 0.020, "signal_gap_abs": 0.020},
+            {"trade_date": "20240111", "symbol": "B", "score": 0.20, "trade_return": 0.010, "signal_gap_abs": 0.020},
+            {"trade_date": "20240112", "symbol": "A", "score": 1.30, "trade_return": 0.020, "signal_gap_abs": 0.010},
+            {"trade_date": "20240112", "symbol": "B", "score": 0.20, "trade_return": 0.010, "signal_gap_abs": 0.010},
+        ])
+
+        daily, summary = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.001,
+            min_score_spread=0.5,
+            max_average_gap_abs=0.015,
+        )
+
+        self.assertEqual(summary["scored_trade_days"], 3)
+        self.assertEqual(summary["skipped_low_conviction_days"], 1)
+        self.assertEqual(summary["skipped_gap_risk_days"], 1)
+        self.assertEqual(summary["selected_trade_days"], 1)
+        self.assertEqual(len(daily), 1)
+        self.assertEqual(daily.iloc[0]["trade_date"], "20240112")
+
+    def test_backtest_from_scores_skips_risk_regime_days(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 1.2, "trade_return": 0.020, "signal_gap_abs": 0.010, "signal_momentum_5": -0.010, "signal_volatility_10": 1.50},
+            {"trade_date": "20240110", "symbol": "B", "score": 0.2, "trade_return": 0.010, "signal_gap_abs": 0.010, "signal_momentum_5": -0.020, "signal_volatility_10": 1.60},
+            {"trade_date": "20240111", "symbol": "A", "score": 1.2, "trade_return": 0.020, "signal_gap_abs": 0.010, "signal_momentum_5": 0.010, "signal_volatility_10": 1.10},
+            {"trade_date": "20240111", "symbol": "B", "score": 0.2, "trade_return": 0.010, "signal_gap_abs": 0.010, "signal_momentum_5": 0.000, "signal_volatility_10": 1.00},
+        ])
+
+        daily, summary = module.backtest_from_scores(
+            scored,
+            top_n=1,
+            fee_rate=0.001,
+            risk_regime_filter_enabled=True,
+            risk_regime_momentum_threshold=-0.005,
+            risk_regime_volatility_threshold=1.4,
+        )
+
+        self.assertEqual(summary["skipped_risk_regime_days"], 1)
+        self.assertEqual(summary["selected_trade_days"], 1)
+        self.assertEqual(daily.iloc[0]["trade_date"], "20240111")
+
     def test_run_backtest_loads_registry_universe_and_writes_log(self):
         module = load_module()
 
@@ -190,6 +238,11 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
                 "exclude-money-market-etfs": True,
                 "top-n": 1,
                 "fee-rate": 0.0005,
+                "min-score-spread": 0.1,
+                "max-average-gap-abs": 0.05,
+                "risk-regime-filter-enabled": True,
+                "risk-regime-momentum-threshold": -0.5,
+                "risk-regime-volatility-threshold": 10.0,
                 "report-file": str(report_file),
             }
             config_path = root / "config.json"
@@ -202,6 +255,8 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertIn("final_equity", summary)
         self.assertIn("AShare ETF T+0 Feature Strategy", log_text)
         self.assertIn("Final Equity", log_text)
+        self.assertIn("Selection Rate", log_text)
+        self.assertIn("Risk Regime Filter", log_text)
 
 
 if __name__ == "__main__":

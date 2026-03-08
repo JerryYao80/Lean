@@ -39,8 +39,13 @@ def default_config() -> dict:
         "start-date": "20240101",
         "end-date": "20251231",
         "exclude-money-market-etfs": True,
-        "top-n": 3,
+        "top-n": 2,
         "fee-rate": 0.0006,
+        "min-score-spread": 0.7,
+        "max-average-gap-abs": 0.016,
+        "risk-regime-filter-enabled": True,
+        "risk-regime-momentum-threshold": -0.005,
+        "risk-regime-volatility-threshold": 1.4,
         "trial-count": 500,
         "horizon-days": 63,
         "block-size": 5,
@@ -48,6 +53,11 @@ def default_config() -> dict:
         "shock-probability": 0.04,
         "shock-mean": 0.012,
         "shock-std": 0.006,
+        "slippage-probability": 0.35,
+        "slippage-mean": 0.0010,
+        "slippage-std": 0.0005,
+        "regime-down-multiplier": 1.75,
+        "regime-high-vol-multiplier": 1.25,
         "seed": 42,
         "report-file": str(root / "Launcher" / "bin" / "Debug" / "AShareEtfT0FeatureIntradayAlgorithm-monte-carlo.log"),
     }
@@ -109,19 +119,75 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
     scored = compute_cross_section_scores(panel)
+    regime_frame = build_regime_frame(scored)
     daily, summary = backtest_from_scores(
         scored,
         top_n=int(config["top-n"]),
         fee_rate=float(config["fee-rate"]),
+        min_score_spread=float(config.get("min-score-spread", 0.0) or 0.0),
+        max_average_gap_abs=(
+            float(config["max-average-gap-abs"])
+            if config.get("max-average-gap-abs") is not None
+            else None
+        ),
+        risk_regime_filter_enabled=bool(config.get("risk-regime-filter-enabled", False)),
+        risk_regime_momentum_threshold=(
+            float(config["risk-regime-momentum-threshold"])
+            if config.get("risk-regime-momentum-threshold") is not None
+            else None
+        ),
+        risk_regime_volatility_threshold=(
+            float(config["risk-regime-volatility-threshold"])
+            if config.get("risk-regime-volatility-threshold") is not None
+            else None
+        ),
     )
+    if not daily.empty and not regime_frame.empty:
+        daily = daily.merge(regime_frame, on="trade_date", how="left")
 
     summary = {
         **summary,
         "registry_universe": len(universe),
         "loaded_symbols": len(prepared_frames),
         "scored_rows": int(len(scored)),
+        "regime_distribution": regime_frame["regime"].value_counts().to_dict() if not regime_frame.empty else {},
     }
     return daily, summary
+
+
+def build_regime_frame(scored: pd.DataFrame) -> pd.DataFrame:
+    if scored.empty:
+        return pd.DataFrame(columns=["trade_date", "market_return_mean", "market_volatility_mean", "market_gap_mean", "regime"])
+
+    rows = []
+    for trade_date, group in scored.groupby("trade_date", sort=True):
+        rows.append({
+            "trade_date": trade_date,
+            "market_return_mean": float(_numeric(group["trade_return"]).mean()),
+            "market_volatility_mean": float(_numeric(group["signal_volatility_10"]).mean()),
+            "market_gap_mean": float(_numeric(group["signal_gap_abs"]).mean()),
+        })
+
+    regime_frame = pd.DataFrame(rows)
+    if regime_frame.empty:
+        return regime_frame
+
+    low_return = float(regime_frame["market_return_mean"].quantile(0.33))
+    high_return = float(regime_frame["market_return_mean"].quantile(0.67))
+    high_vol = float(regime_frame["market_volatility_mean"].quantile(0.5))
+
+    def classify(row: pd.Series) -> str:
+        if float(row["market_return_mean"]) <= low_return:
+            trend = "down"
+        elif float(row["market_return_mean"]) >= high_return:
+            trend = "up"
+        else:
+            trend = "flat"
+        vol = "highvol" if float(row["market_volatility_mean"]) >= high_vol else "lowvol"
+        return f"{trend}_{vol}"
+
+    regime_frame["regime"] = regime_frame.apply(classify, axis=1)
+    return regime_frame
 
 
 def block_bootstrap_returns(
@@ -174,6 +240,102 @@ def apply_market_shock_stress(
         stressed_paths.append(stressed_path)
 
     return stressed_paths
+
+
+def apply_execution_slippage_stress(
+    paths: list[list[float]],
+    slippage_probability: float,
+    slippage_mean: float,
+    slippage_std: float,
+    seed: int | None = None,
+) -> list[list[float]]:
+    rng = random.Random(seed)
+    stressed_paths: list[list[float]] = []
+
+    for path in paths:
+        stressed_path = []
+        for value in path:
+            slipped = float(value)
+            if slippage_probability > 0 and rng.random() < slippage_probability:
+                slip = abs(rng.gauss(float(slippage_mean), float(slippage_std)))
+                slipped -= slip
+            stressed_path.append(slipped)
+        stressed_paths.append(stressed_path)
+
+    return stressed_paths
+
+
+def build_regime_stress_weights(
+    regime_distribution: dict[str, int] | dict[str, float],
+    down_multiplier: float,
+    high_vol_multiplier: float,
+) -> dict[str, float]:
+    if not regime_distribution:
+        return {}
+
+    weights: dict[str, float] = {}
+    for regime, value in regime_distribution.items():
+        weight = float(value)
+        if regime.startswith("down"):
+            weight *= float(down_multiplier)
+        if regime.endswith("highvol"):
+            weight *= float(high_vol_multiplier)
+        weights[regime] = weight
+
+    total = sum(weights.values())
+    if total <= 0:
+        return {}
+    return {regime: weight / total for regime, weight in weights.items()}
+
+
+def regime_bootstrap_returns(
+    daily: pd.DataFrame,
+    trial_count: int,
+    horizon_days: int,
+    block_size: int,
+    seed: int | None = None,
+    regime_weights: dict[str, float] | None = None,
+) -> list[list[float]]:
+    if trial_count <= 0 or horizon_days <= 0 or block_size <= 0 or daily.empty or "regime" not in daily.columns:
+        returns = _numeric(daily.get("net_return", pd.Series(dtype=float))).dropna().astype(float).tolist()
+        return block_bootstrap_returns(returns, trial_count, horizon_days, block_size, seed)
+
+    cleaned = daily[["regime", "net_return"]].copy()
+    cleaned["net_return"] = _numeric(cleaned["net_return"])
+    cleaned = cleaned.dropna(subset=["regime", "net_return"])
+    if cleaned.empty:
+        return []
+
+    grouped = {
+        regime: group["net_return"].astype(float).tolist()
+        for regime, group in cleaned.groupby("regime", sort=True)
+        if not group.empty
+    }
+    if not grouped:
+        return []
+
+    populations = list(grouped.keys())
+    if regime_weights:
+        weights = [float(regime_weights.get(regime, 0.0)) for regime in populations]
+        if sum(weights) <= 0:
+            weights = [len(grouped[regime]) for regime in populations]
+    else:
+        weights = [len(grouped[regime]) for regime in populations]
+
+    rng = random.Random(seed)
+    paths = []
+    for _ in range(trial_count):
+        path = []
+        while len(path) < horizon_days:
+            regime = rng.choices(populations, weights=weights, k=1)[0]
+            regime_returns = grouped[regime]
+            start = rng.randrange(len(regime_returns))
+            for offset in range(block_size):
+                path.append(float(regime_returns[(start + offset) % len(regime_returns)]))
+                if len(path) >= horizon_days:
+                    break
+        paths.append(path)
+    return paths
 
 
 def compute_path_metrics(path: list[float]) -> dict:
@@ -262,6 +424,20 @@ def build_report_text(report: dict, config: dict) -> str:
         f"Date Range: {config['start-date']} -> {config['end-date']}",
         f"Top N: {config['top-n']}",
         f"Base Fee Rate: {float(config['fee-rate']):.6f}",
+        f"Min Score Spread: {float(config.get('min-score-spread', 0.0)):.4f}",
+        (
+            f"Max Average Gap Abs: {float(config.get('max-average-gap-abs')):.4%}"
+            if config.get("max-average-gap-abs") is not None
+            else "Max Average Gap Abs: disabled"
+        ),
+        (
+            f"Risk Regime Filter: enabled (mom5<={float(config.get('risk-regime-momentum-threshold')):.4f}, vol10>={float(config.get('risk-regime-volatility-threshold')):.4f})"
+            if config.get("risk-regime-filter-enabled")
+            else "Risk Regime Filter: disabled"
+        ),
+        f"Slippage Probability: {float(config['slippage-probability']):.2%}",
+        f"Slippage Mean: {float(config['slippage-mean']):.2%}",
+        f"Slippage Std: {float(config['slippage-std']):.2%}",
         f"Trial Count: {report['trial_count']}",
         f"Horizon Days: {report['horizon_days']}",
         f"Block Size: {report['block_size']}",
@@ -271,12 +447,18 @@ def build_report_text(report: dict, config: dict) -> str:
         f"Shock Std: {float(config['shock-std']):.2%}",
         "Base Backtest:",
         f"- Trade Days: {base['trade_days']}",
+        f"- Selected Trade Days: {base['selected_trade_days']}",
+        f"- Selection Rate: {base['selection_rate']:.2%}",
+        f"- Skipped Low Conviction Days: {base['skipped_low_conviction_days']}",
+        f"- Skipped Gap Risk Days: {base['skipped_gap_risk_days']}",
+        f"- Skipped Risk Regime Days: {base['skipped_risk_regime_days']}",
         f"- Final Equity: {base['final_equity']:.6f}",
         f"- Total Return: {base['total_return']:.2%}",
         f"- Annualized Return: {base['annualized_return']:.2%}",
         f"- Sharpe: {base['sharpe']:.4f}",
         f"- Max Drawdown: {base['max_drawdown']:.2%}",
         f"- Loaded Symbols: {base['loaded_symbols']}",
+        f"- Regime Distribution: {base['regime_distribution']}",
         "Scenarios:",
     ]
 
@@ -322,6 +504,46 @@ def run_monte_carlo(config: dict) -> dict:
         shock_std=float(config.get("shock-std", 0.0)),
         seed=seed + 2,
     )
+    execution_paths = apply_execution_slippage_stress(
+        baseline_paths,
+        slippage_probability=float(config.get("slippage-probability", 0.0)),
+        slippage_mean=float(config.get("slippage-mean", 0.0)),
+        slippage_std=float(config.get("slippage-std", 0.0)),
+        seed=seed + 3,
+    )
+    regime_baseline_paths = regime_bootstrap_returns(
+        daily,
+        trial_count=trial_count,
+        horizon_days=horizon_days,
+        block_size=block_size,
+        seed=seed + 4,
+    )
+    regime_stress_weights = build_regime_stress_weights(
+        base_summary.get("regime_distribution", {}),
+        down_multiplier=float(config.get("regime-down-multiplier", 1.0)),
+        high_vol_multiplier=float(config.get("regime-high-vol-multiplier", 1.0)),
+    )
+    regime_stress_paths = regime_bootstrap_returns(
+        daily,
+        trial_count=trial_count,
+        horizon_days=horizon_days,
+        block_size=block_size,
+        seed=seed + 5,
+        regime_weights=regime_stress_weights,
+    )
+    regime_combined_paths = apply_execution_slippage_stress(
+        apply_market_shock_stress(
+            apply_fee_stress(regime_stress_paths, float(config.get("extra-fee-rate", 0.0))),
+            shock_probability=float(config.get("shock-probability", 0.0)),
+            shock_mean=float(config.get("shock-mean", 0.0)),
+            shock_std=float(config.get("shock-std", 0.0)),
+            seed=seed + 6,
+        ),
+        slippage_probability=float(config.get("slippage-probability", 0.0)),
+        slippage_mean=float(config.get("slippage-mean", 0.0)),
+        slippage_std=float(config.get("slippage-std", 0.0)),
+        seed=seed + 7,
+    )
 
     report = {
         "base_backtest": base_summary,
@@ -329,11 +551,16 @@ def run_monte_carlo(config: dict) -> dict:
         "horizon_days": horizon_days,
         "block_size": block_size,
         "source_trade_days": len(returns),
+        "regime_stress_weights": regime_stress_weights,
         "scenarios": {
             "baseline": summarize_paths(baseline_paths),
             "fee_stress": summarize_paths(fee_paths),
             "shock_stress": summarize_paths(shock_paths),
             "combined_stress": summarize_paths(combined_paths),
+            "execution_stress": summarize_paths(execution_paths),
+            "regime_baseline": summarize_paths(regime_baseline_paths),
+            "regime_stress": summarize_paths(regime_stress_paths),
+            "regime_combined_stress": summarize_paths(regime_combined_paths),
         },
     }
 
@@ -351,6 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date")
     parser.add_argument("--top-n", type=int)
     parser.add_argument("--fee-rate", type=float)
+    parser.add_argument("--min-score-spread", type=float)
+    parser.add_argument("--max-average-gap-abs", type=float)
+    parser.add_argument("--risk-regime-filter-enabled", action="store_true")
+    parser.add_argument("--risk-regime-momentum-threshold", type=float)
+    parser.add_argument("--risk-regime-volatility-threshold", type=float)
     parser.add_argument("--trial-count", type=int)
     parser.add_argument("--horizon-days", type=int)
     parser.add_argument("--block-size", type=int)
@@ -358,6 +590,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shock-probability", type=float)
     parser.add_argument("--shock-mean", type=float)
     parser.add_argument("--shock-std", type=float)
+    parser.add_argument("--slippage-probability", type=float)
+    parser.add_argument("--slippage-mean", type=float)
+    parser.add_argument("--slippage-std", type=float)
+    parser.add_argument("--regime-down-multiplier", type=float)
+    parser.add_argument("--regime-high-vol-multiplier", type=float)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--include-money-market-etfs", action="store_true")
     return parser
@@ -371,6 +608,10 @@ def main() -> int:
         "end-date": args.end_date,
         "top-n": args.top_n,
         "fee-rate": args.fee_rate,
+        "min-score-spread": args.min_score_spread,
+        "max-average-gap-abs": args.max_average_gap_abs,
+        "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
+        "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
         "trial-count": args.trial_count,
         "horizon-days": args.horizon_days,
         "block-size": args.block_size,
@@ -378,8 +619,15 @@ def main() -> int:
         "shock-probability": args.shock_probability,
         "shock-mean": args.shock_mean,
         "shock-std": args.shock_std,
+        "slippage-probability": args.slippage_probability,
+        "slippage-mean": args.slippage_mean,
+        "slippage-std": args.slippage_std,
+        "regime-down-multiplier": args.regime_down_multiplier,
+        "regime-high-vol-multiplier": args.regime_high_vol_multiplier,
         "seed": args.seed,
     }
+    if args.risk_regime_filter_enabled:
+        overrides["risk-regime-filter-enabled"] = True
     if args.include_money_market_etfs:
         overrides["exclude-money-market-etfs"] = False
 
