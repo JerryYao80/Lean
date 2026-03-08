@@ -51,9 +51,15 @@ namespace QuantConnect.Algorithm.CSharp
         private decimal? _riskRegimeMediumMomentumThreshold;
         private decimal? _riskRegimeMediumVolatilityThreshold;
         private decimal _riskRegimeMediumExposureScale;
+        private int _riskRegimeMediumTopN;
+        private decimal _riskRegimeMediumScoreSpreadAdd;
+        private decimal _riskRegimeMediumLiquidityQuantile;
         private decimal? _riskRegimeMomentumThreshold;
         private decimal? _riskRegimeVolatilityThreshold;
         private decimal _riskRegimeHighExposureScale;
+        private int _riskRegimeHighTopN;
+        private decimal _riskRegimeHighScoreSpreadAdd;
+        private decimal _riskRegimeHighLiquidityQuantile;
         private decimal _targetPortfolioExposure;
         private bool _excludeMoneyMarketEtfs;
         private string _executionMode;
@@ -74,9 +80,15 @@ namespace QuantConnect.Algorithm.CSharp
             _riskRegimeMediumMomentumThreshold = GetOptionalDecimalParameter("risk-regime-medium-momentum-threshold");
             _riskRegimeMediumVolatilityThreshold = GetOptionalDecimalParameter("risk-regime-medium-volatility-threshold");
             _riskRegimeMediumExposureScale = GetDecimalParameter("risk-regime-medium-exposure-scale", 1.0m);
+            _riskRegimeMediumTopN = GetIntParameter("risk-regime-medium-top-n", _topN);
+            _riskRegimeMediumScoreSpreadAdd = GetDecimalParameter("risk-regime-medium-score-spread-add", 0m);
+            _riskRegimeMediumLiquidityQuantile = GetDecimalParameter("risk-regime-medium-liquidity-quantile", 0m);
             _riskRegimeMomentumThreshold = GetOptionalDecimalParameter("risk-regime-momentum-threshold");
             _riskRegimeVolatilityThreshold = GetOptionalDecimalParameter("risk-regime-volatility-threshold");
             _riskRegimeHighExposureScale = GetDecimalParameter("risk-regime-high-exposure-scale", 0.0m);
+            _riskRegimeHighTopN = GetIntParameter("risk-regime-high-top-n", _topN);
+            _riskRegimeHighScoreSpreadAdd = GetDecimalParameter("risk-regime-high-score-spread-add", 0m);
+            _riskRegimeHighLiquidityQuantile = GetDecimalParameter("risk-regime-high-liquidity-quantile", 0m);
             _targetPortfolioExposure = GetDecimalParameter("target-portfolio-exposure", 0.95m);
             _excludeMoneyMarketEtfs = GetBoolParameter("exclude-money-market-etfs", true);
             _executionMode = (GetParameter("execution-mode") ?? "synthetic").Trim().ToLowerInvariant();
@@ -187,12 +199,8 @@ namespace QuantConnect.Algorithm.CSharp
 
             var scores = AShareEtfT0FeatureSignalModel.ComputeScores(dailyFeatures);
             var orderedScores = scores.Values.OrderBy(value => value).ToList();
+
             var scoreSpread = orderedScores.Count > 0 ? orderedScores[^1] - GetMedian(orderedScores) : 0m;
-            if (_minScoreSpread > 0 && scoreSpread < _minScoreSpread)
-            {
-                Log($"{Time:yyyy-MM-dd} skip trading: score spread {scoreSpread:F4} below threshold {_minScoreSpread:F4}");
-                return;
-            }
 
             var marketSignalMomentum5Mean = dailyFeatures.Values
                 .Where(feature => feature.SignalMomentum5.HasValue)
@@ -206,6 +214,9 @@ namespace QuantConnect.Algorithm.CSharp
                 .Average();
             var dailyExposureScale = 1m;
             var riskRegimeBucket = "normal";
+            var effectiveTopN = _topN;
+            var effectiveScoreSpreadThreshold = _minScoreSpread;
+            var liquidityQuantile = 0m;
             if (_riskRegimeFilterEnabled)
             {
                 if (_riskRegimeMomentumThreshold.HasValue && _riskRegimeVolatilityThreshold.HasValue &&
@@ -214,6 +225,9 @@ namespace QuantConnect.Algorithm.CSharp
                 {
                     dailyExposureScale = _riskRegimeHighExposureScale;
                     riskRegimeBucket = "high";
+                    effectiveTopN = _riskRegimeHighTopN > 0 ? Math.Min(_topN, _riskRegimeHighTopN) : _topN;
+                    effectiveScoreSpreadThreshold = _minScoreSpread + _riskRegimeHighScoreSpreadAdd;
+                    liquidityQuantile = _riskRegimeHighLiquidityQuantile;
                 }
                 else if (_riskRegimeMediumMomentumThreshold.HasValue && _riskRegimeMediumVolatilityThreshold.HasValue &&
                     marketSignalMomentum5Mean <= _riskRegimeMediumMomentumThreshold.Value &&
@@ -221,13 +235,42 @@ namespace QuantConnect.Algorithm.CSharp
                 {
                     dailyExposureScale = _riskRegimeMediumExposureScale;
                     riskRegimeBucket = "medium";
+                    effectiveTopN = _riskRegimeMediumTopN > 0 ? Math.Min(_topN, _riskRegimeMediumTopN) : _topN;
+                    effectiveScoreSpreadThreshold = _minScoreSpread + _riskRegimeMediumScoreSpreadAdd;
+                    liquidityQuantile = _riskRegimeMediumLiquidityQuantile;
                 }
             }
 
-            var ranked = scores
+            if (effectiveScoreSpreadThreshold > 0 && scoreSpread < effectiveScoreSpreadThreshold)
+            {
+                Log($"{Time:yyyy-MM-dd} skip trading: score spread {scoreSpread:F4} below threshold {effectiveScoreSpreadThreshold:F4}");
+                return;
+            }
+
+            var rankedCandidates = scores
                 .OrderByDescending(pair => pair.Value)
-                .Take(_topN)
                 .Where(pair => Securities.ContainsKey(pair.Key) && Securities[pair.Key].Price > 0)
+                .ToList();
+
+            if (liquidityQuantile > 0m)
+            {
+                var liquidities = rankedCandidates
+                    .Where(pair => dailyFeatures.ContainsKey(pair.Key) && dailyFeatures[pair.Key].SignalLiquidity5.HasValue)
+                    .Select(pair => dailyFeatures[pair.Key].SignalLiquidity5.Value)
+                    .ToList();
+                if (liquidities.Count > 0)
+                {
+                    var liquidityCutoff = GetQuantile(liquidities, liquidityQuantile);
+                    rankedCandidates = rankedCandidates
+                        .Where(pair => dailyFeatures.ContainsKey(pair.Key)
+                            && dailyFeatures[pair.Key].SignalLiquidity5.HasValue
+                            && dailyFeatures[pair.Key].SignalLiquidity5.Value >= liquidityCutoff)
+                        .ToList();
+                }
+            }
+
+            var ranked = rankedCandidates
+                .Take(Math.Max(1, effectiveTopN))
                 .ToList();
             if (ranked.Count == 0)
             {
@@ -255,12 +298,13 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            if (dailyExposureScale < 1m)
+            if (dailyExposureScale < 1m || effectiveTopN < _topN || effectiveScoreSpreadThreshold > _minScoreSpread || liquidityQuantile > 0m)
             {
-                Log($"{Time:yyyy-MM-dd} risk regime scaling bucket={riskRegimeBucket} scale={dailyExposureScale:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
+                Log($"{Time:yyyy-MM-dd} risk regime controls bucket={riskRegimeBucket} scale={dailyExposureScale:F2} topN={effectiveTopN} spread={effectiveScoreSpreadThreshold:F4} liquidityQ={liquidityQuantile:F2} mom5={marketSignalMomentum5Mean:F4} vol10={marketSignalVolatility10Mean:F4}");
             }
 
             var availableCash = Portfolio.CashBook[AccountCurrency].Amount;
+
             var targetBudget = Math.Min(Portfolio.TotalPortfolioValue, availableCash) * _targetPortfolioExposure * dailyExposureScale;
             var remainingBudget = targetBudget;
             var remainingSlots = ranked.Count;
@@ -423,6 +467,37 @@ namespace QuantConnect.Algorithm.CSharp
             var commission = Math.Max(orderValue * CommissionRate, MinimumCommission);
             var transferFee = symbol.ID.Market == Market.SSE ? absoluteQuantity * ShanghaiTransferFeeRate : 0m;
             return commission + transferFee;
+        }
+
+
+        private static decimal GetQuantile(IReadOnlyList<decimal> values, decimal quantile)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return 0m;
+            }
+
+            var ordered = values.OrderBy(value => value).ToList();
+            if (quantile <= 0m)
+            {
+                return ordered[0];
+            }
+
+            if (quantile >= 1m)
+            {
+                return ordered[^1];
+            }
+
+            var position = (ordered.Count - 1) * (double)quantile;
+            var lowerIndex = (int)Math.Floor(position);
+            var upperIndex = (int)Math.Ceiling(position);
+            if (lowerIndex == upperIndex)
+            {
+                return ordered[lowerIndex];
+            }
+
+            var weight = (decimal)(position - lowerIndex);
+            return ordered[lowerIndex] + (ordered[upperIndex] - ordered[lowerIndex]) * weight;
         }
 
         private void RecordAllocationRows(

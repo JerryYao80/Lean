@@ -48,14 +48,29 @@ namespace QuantConnect.Algorithm.CSharp
 
             foreach (var featureWeight in FeatureWeights)
             {
-                var values = eligible
-                    .Select(pair => GetFeatureValue(pair.Value, featureWeight.Key).GetValueOrDefault())
-                    .ToList();
-                var zScores = SafeZScores(values);
-
+                var indicesWithValues = new List<int>();
+                var values = new List<decimal>();
                 for (var index = 0; index < eligible.Count; index++)
                 {
-                    scores[eligible[index].Key] += zScores[index] * featureWeight.Value;
+                    var value = GetFeatureValue(eligible[index].Value, featureWeight.Key);
+                    if (!value.HasValue)
+                    {
+                        continue;
+                    }
+
+                    indicesWithValues.Add(index);
+                    values.Add(value.Value);
+                }
+
+                if (values.Count <= 1)
+                {
+                    continue;
+                }
+
+                var zScores = SafeZScores(values);
+                for (var index = 0; index < indicesWithValues.Count; index++)
+                {
+                    scores[eligible[indicesWithValues[index]].Key] += zScores[index] * featureWeight.Value;
                 }
             }
 
@@ -72,6 +87,14 @@ namespace QuantConnect.Algorithm.CSharp
                 nameof(AShareEtfT0FeatureData.SignalCloseLocation) => data.SignalCloseLocation,
                 nameof(AShareEtfT0FeatureData.SignalVolatility10) => data.SignalVolatility10,
                 nameof(AShareEtfT0FeatureData.SignalGapAbs) => data.SignalGapAbs,
+                nameof(AShareEtfT0FeatureData.SignalNavPremium1) => data.SignalNavPremium1,
+                nameof(AShareEtfT0FeatureData.SignalNavPremiumZ20) => data.SignalNavPremiumZ20,
+                nameof(AShareEtfT0FeatureData.SignalShareChange5) => data.SignalShareChange5,
+                nameof(AShareEtfT0FeatureData.SignalSizeChange5) => data.SignalSizeChange5,
+                nameof(AShareEtfT0FeatureData.SignalExcessGap) => data.SignalExcessGap,
+                nameof(AShareEtfT0FeatureData.SignalExcessIntraday) => data.SignalExcessIntraday,
+                nameof(AShareEtfT0FeatureData.SignalTrackingError10) => data.SignalTrackingError10,
+                nameof(AShareEtfT0FeatureData.SignalIndexMomentum5) => data.SignalIndexMomentum5,
                 _ => null,
             };
         }

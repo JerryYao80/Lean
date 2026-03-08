@@ -26,7 +26,26 @@ class AShareEtfT0FeatureExportTests(unittest.TestCase):
                     "path": "fund_daily/ts_code={symbol}/data.parquet",
                     "date_field": "trade_date",
                     "symbol_field": "ts_code",
-                }
+                },
+                "fund_nav": {
+                    "path": "fund_nav/ts_code={symbol}/data.parquet",
+                    "date_field": "nav_date",
+                    "symbol_field": "ts_code",
+                },
+                "etf_basic": {
+                    "path": "etf_basic/data.parquet",
+                    "symbol_field": "ts_code",
+                },
+                "etf_share_size": {
+                    "path": "etf_share_size/year=*/data.parquet",
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
+                },
+                "index_daily": {
+                    "path": "index_daily/ts_code={symbol}/data.parquet",
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
+                },
             }
         }
         path = root / "catalog.json"
@@ -47,12 +66,22 @@ class AShareEtfT0FeatureExportTests(unittest.TestCase):
         )
         return registry
 
-    def make_parquet(self, root: Path, ts_code: str, rows: list[dict]) -> None:
-        target = root / "fund_daily" / f"ts_code={ts_code}"
+    def make_symbol_parquet(self, root: Path, dataset: str, ts_code: str, rows: list[dict]) -> None:
+        target = root / dataset / f"ts_code={ts_code}"
         target.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_parquet(target / "data.parquet", index=False)
 
-    def test_export_feature_universe_writes_shifted_signal_columns(self):
+    def make_year_parquet(self, root: Path, dataset: str, year: int, rows: list[dict]) -> None:
+        target = root / dataset / f"year={year}"
+        target.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_parquet(target / "data.parquet", index=False)
+
+    def make_static_parquet(self, root: Path, dataset: str, rows: list[dict]) -> None:
+        target = root / dataset
+        target.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_parquet(target / "data.parquet", index=False)
+
+    def test_export_feature_universe_writes_extended_shifted_signal_columns(self):
         module = load_module()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -62,24 +91,96 @@ class AShareEtfT0FeatureExportTests(unittest.TestCase):
             report_path = root / "feature-report.json"
             config_path = root / "config.json"
 
-            rows = []
+            fund_rows = []
+            nav_rows = []
+            share_rows = []
+            index_rows = []
             for day in range(1, 27):
-                rows.append(
+                date = f"202401{day:02d}"
+                etf_open = 1.00 + day * 0.01
+                etf_close = 1.01 + day * 0.01
+                index_open = 4000 + day * 2
+                index_close = 4002 + day * 2
+                fund_rows.append(
                     {
                         "ts_code": "510300.SH",
-                        "trade_date": f"202401{day:02d}",
+                        "trade_date": date,
                         "pre_close": 0.99 + day * 0.01,
-                        "open": 1.00 + day * 0.01,
+                        "open": etf_open,
                         "high": 1.02 + day * 0.01,
                         "low": 0.98 + day * 0.01,
-                        "close": 1.01 + day * 0.01,
+                        "close": etf_close,
                         "pct_chg": 0.1 + day * 0.01,
                         "amount": 1000 + day * 10,
                         "vol": 100 + day,
                     }
                 )
+                nav_rows.append(
+                    {
+                        "ts_code": "510300.SH",
+                        "ann_date": date,
+                        "nav_date": date,
+                        "unit_nav": 0.995 + day * 0.01,
+                        "accum_nav": 0.995 + day * 0.01,
+                        "accum_div": None,
+                        "net_asset": None,
+                        "total_netasset": None,
+                        "adj_nav": 0.995 + day * 0.01,
+                        "update_flag": "0",
+                    }
+                )
+                share_rows.append(
+                    {
+                        "trade_date": date,
+                        "ts_code": "510300.SH",
+                        "etf_name": "沪深300ETF",
+                        "total_share": 1000000 + day * 1000,
+                        "total_size": 2000000 + day * 2000,
+                        "exchange": "SSE",
+                    }
+                )
+                index_rows.append(
+                    {
+                        "ts_code": "000300.SH",
+                        "trade_date": date,
+                        "close": index_close,
+                        "open": index_open,
+                        "high": index_close + 5,
+                        "low": index_open - 5,
+                        "pre_close": 3998 + day * 2,
+                        "change": 4,
+                        "pct_chg": 0.1,
+                        "vol": 100000 + day,
+                        "amount": 200000 + day,
+                    }
+                )
 
-            self.make_parquet(tushare_root, "510300.SH", rows)
+            self.make_symbol_parquet(tushare_root, "fund_daily", "510300.SH", fund_rows)
+            self.make_symbol_parquet(tushare_root, "fund_nav", "510300.SH", nav_rows)
+            self.make_year_parquet(tushare_root, "etf_share_size", 2024, share_rows)
+            self.make_symbol_parquet(tushare_root, "index_daily", "000300.SH", index_rows)
+            self.make_static_parquet(
+                tushare_root,
+                "etf_basic",
+                [
+                    {
+                        "ts_code": "510300.SH",
+                        "csname": "华泰柏瑞沪深300ETF",
+                        "extname": "沪深300ETF华泰柏瑞",
+                        "cname": "华泰柏瑞沪深300交易型开放式指数证券投资基金",
+                        "index_code": "000300.SH",
+                        "index_name": "沪深300指数",
+                        "setup_date": "20120504",
+                        "list_date": "20120528",
+                        "list_status": "L",
+                        "exchange": "SH",
+                        "mgr_name": "华泰柏瑞基金",
+                        "custod_name": "中国工商银行股份有限公司",
+                        "mgt_fee": 0.15,
+                        "etf_type": "纯境内",
+                    }
+                ],
+            )
 
             config = {
                 "registry-file": str(self.make_registry(root)),
@@ -97,17 +198,17 @@ class AShareEtfT0FeatureExportTests(unittest.TestCase):
             feature_frame = pd.read_csv(feature_root / "sse" / "daily" / "510300.csv", dtype={"trade_date": str})
 
         self.assertEqual(report["exported_count"], 1)
-        self.assertIn("signal_momentum_20", feature_frame.columns)
-        self.assertIn("signal_liquidity_5", feature_frame.columns)
-        self.assertIn("momentum_5", feature_frame.columns)
-        self.assertIn("trade_return", feature_frame.columns)
+        self.assertIn("signal_nav_premium_1", feature_frame.columns)
+        self.assertIn("signal_excess_gap", feature_frame.columns)
+        self.assertIn("signal_tracking_error_10", feature_frame.columns)
+        self.assertIn("signal_index_momentum_5", feature_frame.columns)
 
         current_row = feature_frame.loc[feature_frame["trade_date"] == "20240122"].iloc[0]
         previous_row = feature_frame.loc[feature_frame["trade_date"] == "20240121"].iloc[0]
 
-        self.assertAlmostEqual(current_row["signal_momentum_5"], previous_row["momentum_5"], places=10)
-        self.assertAlmostEqual(current_row["signal_gap_abs"], previous_row["gap_abs"], places=10)
-        self.assertAlmostEqual(current_row["signal_close_location"], previous_row["close_location"], places=10)
+        self.assertAlmostEqual(current_row["signal_nav_premium_1"], previous_row["nav_premium_1"], places=10)
+        self.assertAlmostEqual(current_row["signal_excess_gap"], previous_row["excess_gap"], places=10)
+        self.assertAlmostEqual(current_row["signal_index_momentum_5"], previous_row["index_momentum_5"], places=10)
 
     def test_collect_feature_coverage_report_flags_missing_symbols(self):
         module = load_module()
@@ -119,8 +220,9 @@ class AShareEtfT0FeatureExportTests(unittest.TestCase):
             registry = self.make_registry(root)
             catalog = self.make_catalog(root)
 
-            self.make_parquet(
+            self.make_symbol_parquet(
                 tushare_root,
+                "fund_daily",
                 "510300.SH",
                 [
                     {

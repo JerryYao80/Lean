@@ -19,6 +19,16 @@
       "path": "etf_basic/data.parquet",
       "symbol_field": "ts_code"
     },
+    "etf_share_size": {
+      "path": "etf_share_size/year=*/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "index_daily": {
+      "path": "index_daily/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
     "daily_basic": {
       "path": "daily_basic/ts_code={symbol}/data.parquet",
       "date_field": "trade_date",

@@ -199,6 +199,42 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertEqual(daily.iloc[2]["risk_regime_bucket"], "normal")
         self.assertAlmostEqual(daily.iloc[-1]["equity"], expected_equity, places=10)
 
+
+    def test_backtest_from_scores_applies_signal_shrinkage_and_liquidity_whitelist(self):
+        module = load_module()
+        scored = pd.DataFrame([
+            {"trade_date": "20240110", "symbol": "A", "score": 1.5, "trade_return": 0.020, "signal_gap_abs": 0.010, "signal_momentum_5": -0.010, "signal_volatility_10": 1.50, "signal_liquidity_5": 10},
+            {"trade_date": "20240110", "symbol": "B", "score": 1.2, "trade_return": 0.015, "signal_gap_abs": 0.010, "signal_momentum_5": -0.010, "signal_volatility_10": 1.60, "signal_liquidity_5": 100},
+            {"trade_date": "20240110", "symbol": "C", "score": 0.8, "trade_return": 0.010, "signal_gap_abs": 0.010, "signal_momentum_5": -0.010, "signal_volatility_10": 1.55, "signal_liquidity_5": 90},
+            {"trade_date": "20240111", "symbol": "A", "score": 1.4, "trade_return": 0.020, "signal_gap_abs": 0.010, "signal_momentum_5": -0.001, "signal_volatility_10": 1.30, "signal_liquidity_5": 50},
+            {"trade_date": "20240111", "symbol": "B", "score": 1.1, "trade_return": 0.015, "signal_gap_abs": 0.010, "signal_momentum_5": -0.001, "signal_volatility_10": 1.35, "signal_liquidity_5": 80},
+            {"trade_date": "20240111", "symbol": "C", "score": 0.7, "trade_return": 0.005, "signal_gap_abs": 0.010, "signal_momentum_5": -0.001, "signal_volatility_10": 1.28, "signal_liquidity_5": 60},
+            {"trade_date": "20240112", "symbol": "A", "score": 1.3, "trade_return": 0.020, "signal_gap_abs": 0.010, "signal_momentum_5": 0.010, "signal_volatility_10": 1.10, "signal_liquidity_5": 40},
+            {"trade_date": "20240112", "symbol": "B", "score": 1.1, "trade_return": 0.015, "signal_gap_abs": 0.010, "signal_momentum_5": 0.000, "signal_volatility_10": 1.00, "signal_liquidity_5": 70},
+            {"trade_date": "20240112", "symbol": "C", "score": 0.6, "trade_return": 0.005, "signal_gap_abs": 0.010, "signal_momentum_5": 0.000, "signal_volatility_10": 1.00, "signal_liquidity_5": 65},
+        ])
+
+        daily, summary = module.backtest_from_scores(
+            scored,
+            top_n=2,
+            fee_rate=0.001,
+            risk_regime_filter_enabled=True,
+            risk_regime_medium_momentum_threshold=0.0,
+            risk_regime_medium_volatility_threshold=1.25,
+            risk_regime_medium_exposure_scale=1.0,
+            risk_regime_medium_top_n=1,
+            risk_regime_momentum_threshold=-0.005,
+            risk_regime_volatility_threshold=1.4,
+            risk_regime_high_exposure_scale=0.5,
+            risk_regime_high_top_n=1,
+            risk_regime_high_liquidity_quantile=0.5,
+        )
+
+        self.assertEqual(daily.iloc[0]["selected_symbols"], "B")
+        self.assertEqual(daily.iloc[1]["selected_symbols"], "A")
+        self.assertEqual(daily.iloc[2]["selected_symbols"], "A,B")
+        self.assertAlmostEqual(summary["average_selected_count"], 4 / 3, places=10)
+
     def test_run_backtest_loads_registry_universe_and_writes_log(self):
         module = load_module()
 
@@ -257,9 +293,15 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
                 "risk-regime-medium-momentum-threshold": 0.0,
                 "risk-regime-medium-volatility-threshold": 1.25,
                 "risk-regime-medium-exposure-scale": 0.9,
+                "risk-regime-medium-top-n": 1,
+                "risk-regime-medium-score-spread-add": 0.0,
+                "risk-regime-medium-liquidity-quantile": 0.0,
                 "risk-regime-momentum-threshold": -0.5,
                 "risk-regime-volatility-threshold": 10.0,
                 "risk-regime-high-exposure-scale": 0.1,
+                "risk-regime-high-top-n": 1,
+                "risk-regime-high-score-spread-add": 0.0,
+                "risk-regime-high-liquidity-quantile": 0.0,
                 "report-file": str(report_file),
             }
             config_path = root / "config.json"
@@ -274,6 +316,7 @@ class AShareETFT0FeatureBacktestTests(unittest.TestCase):
         self.assertIn("Final Equity", log_text)
         self.assertIn("Selection Rate", log_text)
         self.assertIn("Risk Regime Scaling", log_text)
+        self.assertIn("Risk Regime Signal Shrinkage", log_text)
 
 
 if __name__ == "__main__":

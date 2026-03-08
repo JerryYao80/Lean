@@ -52,7 +52,7 @@ namespace QuantConnect.Tests.Algorithm
         {
             var underlying = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
             var config = CreateConfig(underlying);
-            const string line = "20240122,1.000000,1.010000,1.030000,0.990000,1.020000,1.200000,1000000,500000,0.009901,0.010000,0.750000,0.040000,0.030000,0.080000,0.012000,1200000,0.010000,-0.050000,-0.020000,1100000,0.650000,0.015000,0.008000";
+            const string line = "20240122,1.000000,1.010000,1.030000,0.990000,1.020000,1.200000,1000000,500000,0.009901,0.010000,0.750000,0.040000,0.030000,0.080000,0.012000,1200000,0.010000,1.015000,1.016000,1500000,2500000,0.004926,1.250000,0.020000,0.030000,0.002000,0.001500,0.002500,0.015000,0.008000,0.006500,0.003000,-0.050000,-0.020000,1100000,0.650000,0.015000,0.008000,-0.003000,-0.400000,0.012000,0.020000,-0.001000,-0.002000,0.004000,-0.010000";
 
             var data = new AShareEtfT0FeatureData().Reader(config, line, new DateTime(2024, 1, 22), false) as AShareEtfT0FeatureData;
 
@@ -64,6 +64,10 @@ namespace QuantConnect.Tests.Algorithm
             Assert.AreEqual(0.75m, data.CloseLocation);
             Assert.AreEqual(-0.05m, data.SignalMomentum20);
             Assert.AreEqual(1100000m, data.SignalLiquidity5);
+            Assert.AreEqual(1.015m, data.UnitNav);
+            Assert.AreEqual(0.004926m, data.NavPremium1);
+            Assert.AreEqual(-0.003m, data.SignalNavPremium1);
+            Assert.AreEqual(-0.01m, data.SignalIndexMomentum5);
         }
 
         [Test]

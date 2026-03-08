@@ -54,9 +54,15 @@ namespace QuantConnect.Tests.Configuration
             Assert.That((string)parameters["risk-regime-medium-momentum-threshold"], Is.EqualTo("0.0"));
             Assert.That((string)parameters["risk-regime-medium-volatility-threshold"], Is.EqualTo("1.25"));
             Assert.That((string)parameters["risk-regime-medium-exposure-scale"], Is.EqualTo("0.9"));
+            Assert.That((string)parameters["risk-regime-medium-top-n"], Is.EqualTo("2"));
+            Assert.That((string)parameters["risk-regime-medium-score-spread-add"], Is.EqualTo("0.0"));
+            Assert.That((string)parameters["risk-regime-medium-liquidity-quantile"], Is.EqualTo("0.0"));
             Assert.That((string)parameters["risk-regime-momentum-threshold"], Is.EqualTo("-0.005"));
             Assert.That((string)parameters["risk-regime-volatility-threshold"], Is.EqualTo("1.4"));
             Assert.That((string)parameters["risk-regime-high-exposure-scale"], Is.EqualTo("0.1"));
+            Assert.That((string)parameters["risk-regime-high-top-n"], Is.EqualTo("2"));
+            Assert.That((string)parameters["risk-regime-high-score-spread-add"], Is.EqualTo("0.0"));
+            Assert.That((string)parameters["risk-regime-high-liquidity-quantile"], Is.EqualTo("0.0"));
             Assert.That((string)parameters["monte-carlo-enabled"], Is.EqualTo("true"));
             Assert.That((string)parameters["monte-carlo-trials"], Is.EqualTo("500"));
             Assert.That((string)parameters["monte-carlo-horizon-days"], Is.EqualTo("63"));

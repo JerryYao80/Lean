@@ -11,7 +11,7 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-from ashare_etf_t0_feature_backtest import prepare_symbol_frame
+from ashare_etf_t0_feature_backtest import build_etf_metadata_lookup, build_symbol_feature_frame
 from tushare_data_layer import TushareDataLayer
 from tushare_lean_export import load_registry_universe
 
@@ -42,12 +42,35 @@ FEATURE_COLUMNS = [
     "volatility_10",
     "liquidity_5",
     "gap_abs",
+    "unit_nav",
+    "adj_nav",
+    "total_share",
+    "total_size",
+    "nav_premium_1",
+    "nav_premium_z20",
+    "share_change_5",
+    "size_change_5",
+    "index_gap_return",
+    "index_trade_return",
+    "index_close_return_1",
+    "index_momentum_5",
+    "excess_gap",
+    "excess_intraday",
+    "tracking_error_10",
     "signal_momentum_20",
     "signal_momentum_5",
     "signal_liquidity_5",
     "signal_close_location",
     "signal_volatility_10",
     "signal_gap_abs",
+    "signal_nav_premium_1",
+    "signal_nav_premium_z20",
+    "signal_share_change_5",
+    "signal_size_change_5",
+    "signal_excess_gap",
+    "signal_excess_intraday",
+    "signal_tracking_error_10",
+    "signal_index_momentum_5",
 ]
 
 
@@ -115,17 +138,18 @@ def build_feature_frame(
     ts_code: str,
     start_date: str | None = None,
     end_date: str | None = None,
+    metadata_lookup: dict[str, dict] | None = None,
 ) -> pd.DataFrame:
-    frame = layer.load_dataset(
-        "fund_daily",
-        symbol=ts_code,
+    prepared = build_symbol_feature_frame(
+        layer,
+        ts_code,
         start_date=start_date,
         end_date=end_date,
+        metadata_lookup=metadata_lookup,
     )
-    if frame.empty:
-        return frame
+    if prepared.empty:
+        return prepared
 
-    prepared = prepare_symbol_frame(ts_code, frame)
     available_columns = [column for column in FEATURE_COLUMNS if column in prepared.columns]
     return prepared[available_columns].reset_index(drop=True)
 
@@ -141,13 +165,14 @@ def collect_feature_coverage_report(
 ) -> dict:
     universe = load_registry_universe(registry_file, exclude_money_market=exclude_money_market)
     layer = TushareDataLayer(tushare_data_path, dataset_catalog)
+    metadata_lookup = build_etf_metadata_lookup(layer)
     parquet_available = 0
     feature_export_count = 0
     missing_parquet = []
     missing_feature_export = []
 
     for ts_code in universe:
-        frame = build_feature_frame(layer, ts_code, start_date=start_date, end_date=end_date)
+        frame = build_feature_frame(layer, ts_code, start_date=start_date, end_date=end_date, metadata_lookup=metadata_lookup)
         if frame.empty:
             missing_parquet.append(ts_code)
         else:
@@ -180,7 +205,8 @@ def export_symbol(
     end_date: str | None,
 ) -> bool:
     layer = TushareDataLayer(tushare_data_path, dataset_catalog)
-    frame = build_feature_frame(layer, ts_code, start_date=start_date, end_date=end_date)
+    metadata_lookup = build_etf_metadata_lookup(layer)
+    frame = build_feature_frame(layer, ts_code, start_date=start_date, end_date=end_date, metadata_lookup=metadata_lookup)
     if frame.empty:
         return False
 
@@ -195,18 +221,24 @@ def export_feature_universe(config: dict) -> dict:
         config["registry-file"],
         exclude_money_market=config.get("exclude-money-market-etfs", True),
     )
+    layer = TushareDataLayer(config["tushare-data-path"], config["dataset-catalog"])
+    metadata_lookup = build_etf_metadata_lookup(layer)
 
     exported_symbols = []
     for ts_code in universe:
-        if export_symbol(
+        frame = build_feature_frame(
+            layer,
             ts_code,
-            config["tushare-data-path"],
-            config["dataset-catalog"],
-            config["feature-data-path"],
-            config.get("start-date"),
-            config.get("end-date"),
-        ):
-            exported_symbols.append(ts_code)
+            start_date=config.get("start-date"),
+            end_date=config.get("end-date"),
+            metadata_lookup=metadata_lookup,
+        )
+        if frame.empty:
+            continue
+        path = feature_daily_path(config["feature-data-path"], ts_code)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(path, index=False, float_format="%.10f")
+        exported_symbols.append(ts_code)
 
     report = collect_feature_coverage_report(
         registry_file=config["registry-file"],

@@ -26,6 +26,40 @@ FEATURE_WEIGHTS = {
     "signal_volatility_10": 0.15,
     "signal_gap_abs": -0.05,
 }
+BASE_SIGNAL_FIELDS = [
+    "signal_momentum_20",
+    "signal_momentum_5",
+    "signal_liquidity_5",
+    "signal_close_location",
+    "signal_volatility_10",
+    "signal_gap_abs",
+]
+EXTENDED_SIGNAL_FIELDS = [
+    "signal_nav_premium_1",
+    "signal_nav_premium_z20",
+    "signal_share_change_5",
+    "signal_size_change_5",
+    "signal_excess_gap",
+    "signal_excess_intraday",
+    "signal_tracking_error_10",
+    "signal_index_momentum_5",
+]
+FEATURE_FIELD_LINES = [
+    "- momentum_20: close / close[-20] - 1",
+    "- momentum_5: close / close[-5] - 1",
+    "- liquidity_5: rolling mean(amount, 5)",
+    "- close_location: (close - low) / (high - low)",
+    "- volatility_10: rolling std(pct_chg, 10)",
+    "- gap_abs: abs(open / pre_close - 1)",
+    "- nav_premium_1: close / unit_nav - 1",
+    "- nav_premium_z20: rolling zscore(nav_premium_1, 20)",
+    "- share_change_5: total_share / total_share[-5] - 1",
+    "- size_change_5: total_size / total_size[-5] - 1",
+    "- excess_gap: etf gap_return - index gap_return",
+    "- excess_intraday: etf trade_return - index trade_return",
+    "- tracking_error_10: rolling std(etf_close_ret - index_close_ret, 10)",
+    "- index_momentum_5: index close / close[-5] - 1",
+]
 
 
 def repo_root() -> Path:
@@ -49,9 +83,15 @@ def default_config() -> dict:
         "risk-regime-medium-momentum-threshold": 0.0,
         "risk-regime-medium-volatility-threshold": 1.25,
         "risk-regime-medium-exposure-scale": 0.9,
+        "risk-regime-medium-top-n": 2,
+        "risk-regime-medium-score-spread-add": 0.0,
+        "risk-regime-medium-liquidity-quantile": 0.0,
         "risk-regime-momentum-threshold": -0.005,
         "risk-regime-volatility-threshold": 1.4,
         "risk-regime-high-exposure-scale": 0.1,
+        "risk-regime-high-top-n": 2,
+        "risk-regime-high-score-spread-add": 0.0,
+        "risk-regime-high-liquidity-quantile": 0.0,
         "report-file": str(root / "Launcher" / "bin" / "Debug" / "bt.log"),
     }
 
@@ -103,7 +143,75 @@ def _safe_zscore(series: pd.Series) -> pd.Series:
     return (numeric - mean) / std
 
 
-def prepare_symbol_frame(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
+def _safe_ratio_minus_one(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    numer = _numeric(numerator)
+    denom = _numeric(denominator).replace(0, float("nan"))
+    return numer / denom - 1
+
+
+def _window_return(series: pd.Series, periods: int) -> pd.Series:
+    numeric = _numeric(series).replace(0, float("nan"))
+    return numeric / numeric.shift(periods).replace(0, float("nan")) - 1
+
+
+def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
+    numeric = _numeric(series)
+    rolling_mean = numeric.rolling(window).mean()
+    rolling_std = numeric.rolling(window).std(ddof=0).replace(0, float("nan"))
+    return (numeric - rolling_mean) / rolling_std
+
+
+def _normalize_reference_frame(
+    frame: pd.DataFrame | None,
+    date_field: str,
+    numeric_fields: list[str],
+    rename_map: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    if frame is None or frame.empty or date_field not in frame.columns:
+        return pd.DataFrame()
+
+    data = frame.copy()
+    data[date_field] = data[date_field].astype(str).str.zfill(8)
+    for field in numeric_fields:
+        if field in data.columns:
+            data[field] = _numeric(data[field])
+
+    keep = [date_field, *[field for field in numeric_fields if field in data.columns]]
+    data = data[keep].drop_duplicates(subset=[date_field], keep="last")
+    if rename_map:
+        data = data.rename(columns=rename_map)
+    return data.sort_values("trade_date").reset_index(drop=True)
+
+
+def build_etf_metadata_lookup(layer: TushareDataLayer) -> dict[str, dict]:
+    if "etf_basic" not in layer.catalog:
+        return {}
+
+    frame = layer.load_dataset("etf_basic")
+    if frame.empty or "ts_code" not in frame.columns:
+        return {}
+
+    metadata = {}
+    for _, row in frame.iterrows():
+        ts_code = str(row.get("ts_code") or "").strip()
+        if not ts_code:
+            continue
+        metadata[ts_code] = {
+            "index_code": row.get("index_code"),
+            "index_name": row.get("index_name"),
+            "mgt_fee": row.get("mgt_fee"),
+            "etf_type": row.get("etf_type"),
+        }
+    return metadata
+
+
+def prepare_symbol_frame(
+    symbol: str,
+    frame: pd.DataFrame,
+    nav_frame: pd.DataFrame | None = None,
+    share_size_frame: pd.DataFrame | None = None,
+    index_frame: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     data = frame.copy()
     data["trade_date"] = data["trade_date"].astype(str).str.zfill(8)
     data = data.sort_values("trade_date").reset_index(drop=True)
@@ -113,25 +221,154 @@ def prepare_symbol_frame(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
             data[column] = _numeric(data[column])
 
     data["symbol"] = symbol
-    data["trade_return"] = data["close"] / data["open"] - 1
-    data["gap_return"] = data["open"] / data["pre_close"] - 1
-    price_range = (data["high"] - data["low"]).replace(0, float("nan"))
-    data["close_location"] = ((data["close"] - data["low"]) / price_range).clip(0, 1).fillna(0.5)
-    data["range_pct"] = (data["high"] - data["low"]) / data["pre_close"]
-    data["momentum_5"] = data["close"] / data["close"].shift(5) - 1
-    data["momentum_20"] = data["close"] / data["close"].shift(20) - 1
-    data["volatility_10"] = data["pct_chg"].rolling(10).std(ddof=0)
-    data["liquidity_5"] = data["amount"].rolling(5).mean()
-    data["gap_abs"] = data["gap_return"].abs()
+    data["trade_return"] = _safe_ratio_minus_one(data["close"], data["open"])
+    data["gap_return"] = _safe_ratio_minus_one(data["open"], data["pre_close"])
+    price_range = (_numeric(data["high"]) - _numeric(data["low"])).replace(0, float("nan"))
+    data["close_location"] = ((_numeric(data["close"]) - _numeric(data["low"])) / price_range).clip(0, 1).fillna(0.5)
+    data["range_pct"] = _safe_ratio_minus_one(data["high"], data["pre_close"]) - _safe_ratio_minus_one(data["low"], data["pre_close"])
+    data["momentum_5"] = _window_return(data["close"], 5)
+    data["momentum_20"] = _window_return(data["close"], 20)
+    data["volatility_10"] = _numeric(data["pct_chg"]).rolling(10).std(ddof=0)
+    data["liquidity_5"] = _numeric(data["amount"]).rolling(5).mean()
+    data["gap_abs"] = _numeric(data["gap_return"]).abs()
 
-    for feature in ["momentum_20", "momentum_5", "liquidity_5", "close_location", "volatility_10", "gap_abs"]:
-        data[f"signal_{feature}"] = data[feature].shift(1)
+    nav = _normalize_reference_frame(
+        nav_frame,
+        date_field="nav_date",
+        numeric_fields=["unit_nav", "adj_nav"],
+        rename_map={"nav_date": "trade_date"},
+    )
+    if not nav.empty:
+        data = data.merge(nav, on="trade_date", how="left")
+    else:
+        data["unit_nav"] = None
+        data["adj_nav"] = None
+
+    shares = _normalize_reference_frame(
+        share_size_frame,
+        date_field="trade_date",
+        numeric_fields=["total_share", "total_size"],
+    )
+    if not shares.empty:
+        data = data.merge(shares, on="trade_date", how="left")
+    else:
+        data["total_share"] = None
+        data["total_size"] = None
+
+    index_daily = _normalize_reference_frame(
+        index_frame,
+        date_field="trade_date",
+        numeric_fields=["pre_close", "open", "close"],
+        rename_map={
+            "pre_close": "index_pre_close",
+            "open": "index_open",
+            "close": "index_close",
+        },
+    )
+    if not index_daily.empty:
+        data = data.merge(index_daily, on="trade_date", how="left")
+    else:
+        data["index_pre_close"] = None
+        data["index_open"] = None
+        data["index_close"] = None
+
+    data["nav_premium_1"] = _safe_ratio_minus_one(data["close"], data["unit_nav"])
+    data["nav_premium_z20"] = _rolling_zscore(data["nav_premium_1"], 20)
+    data["share_change_5"] = _window_return(data["total_share"], 5)
+    data["size_change_5"] = _window_return(data["total_size"], 5)
+    data["index_gap_return"] = _safe_ratio_minus_one(data["index_open"], data["index_pre_close"])
+    data["index_trade_return"] = _safe_ratio_minus_one(data["index_close"], data["index_open"])
+    data["index_close_return_1"] = _safe_ratio_minus_one(data["index_close"], data["index_pre_close"])
+    data["index_momentum_5"] = _window_return(data["index_close"], 5)
+    data["excess_gap"] = _numeric(data["gap_return"]) - _numeric(data["index_gap_return"])
+    data["excess_intraday"] = _numeric(data["trade_return"]) - _numeric(data["index_trade_return"])
+    close_return_1 = _safe_ratio_minus_one(data["close"], data["pre_close"])
+    data["tracking_error_10"] = (close_return_1 - _numeric(data["index_close_return_1"])).rolling(10).std(ddof=0)
+
+    shifted_features = [
+        "momentum_20",
+        "momentum_5",
+        "liquidity_5",
+        "close_location",
+        "volatility_10",
+        "gap_abs",
+        "nav_premium_1",
+        "nav_premium_z20",
+        "share_change_5",
+        "size_change_5",
+        "excess_gap",
+        "excess_intraday",
+        "tracking_error_10",
+        "index_momentum_5",
+    ]
+    for feature in shifted_features:
+        data[f"signal_{feature}"] = _numeric(data[feature]).shift(1)
 
     return data.astype(object).where(pd.notna(data), None)
 
 
+def build_symbol_feature_frame(
+    layer: TushareDataLayer,
+    symbol: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    metadata_lookup: dict[str, dict] | None = None,
+) -> pd.DataFrame:
+    frame = layer.load_dataset(
+        "fund_daily",
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        fields=["pre_close", "open", "high", "low", "close", "pct_chg", "amount", "vol"],
+    )
+    if frame.empty:
+        return frame
+
+    metadata_lookup = metadata_lookup or {}
+    metadata = metadata_lookup.get(symbol, {})
+    index_code = metadata.get("index_code")
+
+    nav_frame = pd.DataFrame()
+    if "fund_nav" in layer.catalog:
+        nav_frame = layer.load_dataset(
+            "fund_nav",
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            fields=["unit_nav", "adj_nav"],
+        )
+
+    share_size_frame = pd.DataFrame()
+    if "etf_share_size" in layer.catalog:
+        share_size_frame = layer.load_dataset(
+            "etf_share_size",
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            fields=["total_share", "total_size"],
+        )
+
+    index_frame = pd.DataFrame()
+    if index_code and "index_daily" in layer.catalog:
+        index_frame = layer.load_dataset(
+            "index_daily",
+            symbol=str(index_code),
+            start_date=start_date,
+            end_date=end_date,
+            fields=["pre_close", "open", "close"],
+        )
+
+    return prepare_symbol_frame(
+        symbol,
+        frame,
+        nav_frame=nav_frame,
+        share_size_frame=share_size_frame,
+        index_frame=index_frame,
+    )
+
+
 def compute_cross_section_scores(panel: pd.DataFrame) -> pd.DataFrame:
-    required = ["trade_date", "symbol", "trade_return", *FEATURE_WEIGHTS.keys()]
+    required = ["trade_date", "symbol", "trade_return", *BASE_SIGNAL_FIELDS]
     scored = panel.copy()
     scored = scored.dropna(subset=required).reset_index(drop=True)
     if scored.empty:
@@ -142,7 +379,9 @@ def compute_cross_section_scores(panel: pd.DataFrame) -> pd.DataFrame:
         group = group.copy()
         total = pd.Series(0.0, index=group.index)
         for field, weight in FEATURE_WEIGHTS.items():
-            total = total + _safe_zscore(group[field]) * weight
+            if field not in group.columns:
+                continue
+            total = total + _safe_zscore(group[field]).fillna(0.0) * weight
         group["score"] = total
         score_frames.append(group)
 
@@ -150,6 +389,20 @@ def compute_cross_section_scores(panel: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=list(scored.columns) + ["score"])
 
     return pd.concat(score_frames, ignore_index=True)
+
+
+def _apply_liquidity_whitelist(group: pd.DataFrame, liquidity_quantile: float) -> pd.DataFrame:
+    quantile = float(liquidity_quantile or 0.0)
+    if quantile <= 0 or "signal_liquidity_5" not in group.columns:
+        return group
+
+    liquidity = _numeric(group["signal_liquidity_5"])
+    if liquidity.dropna().empty:
+        return group
+
+    cutoff = float(liquidity.quantile(min(max(quantile, 0.0), 1.0)))
+    filtered = group[liquidity >= cutoff].copy()
+    return filtered if not filtered.empty else group
 
 
 def backtest_from_scores(
@@ -162,9 +415,15 @@ def backtest_from_scores(
     risk_regime_medium_momentum_threshold: float | None = None,
     risk_regime_medium_volatility_threshold: float | None = None,
     risk_regime_medium_exposure_scale: float = 1.0,
+    risk_regime_medium_top_n: int | None = None,
+    risk_regime_medium_score_spread_add: float = 0.0,
+    risk_regime_medium_liquidity_quantile: float = 0.0,
     risk_regime_momentum_threshold: float | None = None,
     risk_regime_volatility_threshold: float | None = None,
     risk_regime_high_exposure_scale: float = 0.0,
+    risk_regime_high_top_n: int | None = None,
+    risk_regime_high_score_spread_add: float = 0.0,
+    risk_regime_high_liquidity_quantile: float = 0.0,
 ) -> tuple[pd.DataFrame, dict]:
     daily_rows = []
     selection_counter: Counter[str] = Counter()
@@ -175,6 +434,7 @@ def backtest_from_scores(
     medium_risk_regime_days = 0
     high_risk_regime_days = 0
     exposure_scales = []
+    selected_counts = []
 
     for trade_date, group in scored.groupby("trade_date", sort=True):
         scored_trade_days += 1
@@ -182,15 +442,13 @@ def backtest_from_scores(
         if score_series.empty:
             continue
 
-        score_spread = float(score_series.max() - score_series.median())
-        if min_score_spread > 0 and score_spread < min_score_spread:
-            skipped_low_conviction_days += 1
-            continue
-
         market_signal_momentum5_mean = float(_numeric(group["signal_momentum_5"]).mean()) if "signal_momentum_5" in group.columns else 0.0
         market_signal_volatility10_mean = float(_numeric(group["signal_volatility_10"]).mean()) if "signal_volatility_10" in group.columns else 0.0
         exposure_scale = 1.0
         risk_regime_bucket = "normal"
+        effective_top_n = int(top_n)
+        effective_min_score_spread = float(min_score_spread)
+        liquidity_quantile = 0.0
         if risk_regime_filter_enabled:
             if (
                 risk_regime_momentum_threshold is not None
@@ -201,6 +459,10 @@ def backtest_from_scores(
                 exposure_scale = float(risk_regime_high_exposure_scale)
                 risk_regime_bucket = "high"
                 high_risk_regime_days += 1
+                if risk_regime_high_top_n is not None and int(risk_regime_high_top_n) > 0:
+                    effective_top_n = min(int(top_n), int(risk_regime_high_top_n))
+                effective_min_score_spread = float(min_score_spread) + float(risk_regime_high_score_spread_add or 0.0)
+                liquidity_quantile = float(risk_regime_high_liquidity_quantile or 0.0)
             elif (
                 risk_regime_medium_momentum_threshold is not None
                 and risk_regime_medium_volatility_threshold is not None
@@ -210,8 +472,18 @@ def backtest_from_scores(
                 exposure_scale = float(risk_regime_medium_exposure_scale)
                 risk_regime_bucket = "medium"
                 medium_risk_regime_days += 1
+                if risk_regime_medium_top_n is not None and int(risk_regime_medium_top_n) > 0:
+                    effective_top_n = min(int(top_n), int(risk_regime_medium_top_n))
+                effective_min_score_spread = float(min_score_spread) + float(risk_regime_medium_score_spread_add or 0.0)
+                liquidity_quantile = float(risk_regime_medium_liquidity_quantile or 0.0)
 
-        picks = group.sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
+        score_spread = float(score_series.max() - score_series.median())
+        if effective_min_score_spread > 0 and score_spread < effective_min_score_spread:
+            skipped_low_conviction_days += 1
+            continue
+
+        working_group = _apply_liquidity_whitelist(group, liquidity_quantile)
+        picks = working_group.sort_values("score", ascending=False).head(max(1, effective_top_n)).reset_index(drop=True)
         if picks.empty:
             continue
 
@@ -229,10 +501,12 @@ def backtest_from_scores(
         symbols = picks["symbol"].tolist()
         selection_counter.update(symbols)
         exposure_scales.append(exposure_scale)
+        selected_counts.append(len(symbols))
 
         daily_rows.append({
             "trade_date": trade_date,
             "selected_symbols": ",".join(symbols),
+            "selected_count": int(len(symbols)),
             "gross_return": gross_return,
             "net_return": net_return,
             "equity": equity,
@@ -243,6 +517,9 @@ def backtest_from_scores(
             "market_signal_volatility10_mean": market_signal_volatility10_mean,
             "risk_regime_bucket": risk_regime_bucket,
             "exposure_scale": exposure_scale,
+            "effective_top_n": int(max(1, effective_top_n)),
+            "effective_min_score_spread": float(effective_min_score_spread),
+            "liquidity_quantile": float(liquidity_quantile),
         })
 
     daily = pd.DataFrame(daily_rows)
@@ -256,15 +533,22 @@ def backtest_from_scores(
         "selected_trade_days": int(len(daily)),
         "selection_rate": float(len(daily) / scored_trade_days) if scored_trade_days > 0 else 0.0,
         "average_exposure_scale": float(sum(exposure_scales) / len(exposure_scales)) if exposure_scales else 0.0,
+        "average_selected_count": float(sum(selected_counts) / len(selected_counts)) if selected_counts else 0.0,
         "min_score_spread": float(min_score_spread),
         "max_average_gap_abs": float(max_average_gap_abs) if max_average_gap_abs is not None else None,
         "risk_regime_filter_enabled": bool(risk_regime_filter_enabled),
         "risk_regime_medium_momentum_threshold": float(risk_regime_medium_momentum_threshold) if risk_regime_medium_momentum_threshold is not None else None,
         "risk_regime_medium_volatility_threshold": float(risk_regime_medium_volatility_threshold) if risk_regime_medium_volatility_threshold is not None else None,
         "risk_regime_medium_exposure_scale": float(risk_regime_medium_exposure_scale),
+        "risk_regime_medium_top_n": int(risk_regime_medium_top_n) if risk_regime_medium_top_n is not None else None,
+        "risk_regime_medium_score_spread_add": float(risk_regime_medium_score_spread_add or 0.0),
+        "risk_regime_medium_liquidity_quantile": float(risk_regime_medium_liquidity_quantile or 0.0),
         "risk_regime_momentum_threshold": float(risk_regime_momentum_threshold) if risk_regime_momentum_threshold is not None else None,
         "risk_regime_volatility_threshold": float(risk_regime_volatility_threshold) if risk_regime_volatility_threshold is not None else None,
         "risk_regime_high_exposure_scale": float(risk_regime_high_exposure_scale),
+        "risk_regime_high_top_n": int(risk_regime_high_top_n) if risk_regime_high_top_n is not None else None,
+        "risk_regime_high_score_spread_add": float(risk_regime_high_score_spread_add or 0.0),
+        "risk_regime_high_liquidity_quantile": float(risk_regime_high_liquidity_quantile or 0.0),
     })
     return daily, summary
 
@@ -326,19 +610,32 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
             if config.get("risk-regime-filter-enabled")
             else "Risk Regime Scaling: disabled"
         ),
+        (
+            "Risk Regime Signal Shrinkage: enabled "
+            f"(medium: top_n={int(config.get('risk-regime-medium-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-medium-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-medium-liquidity-quantile', 0.0) or 0.0):.2f}; "
+            f"high: top_n={int(config.get('risk-regime-high-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-high-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-high-liquidity-quantile', 0.0) or 0.0):.2f})"
+            if (
+                config.get("risk-regime-filter-enabled")
+                and (
+                    int(config.get("risk-regime-medium-top-n", config["top-n"]) or config["top-n"]) < int(config["top-n"])
+                    or int(config.get("risk-regime-high-top-n", config["top-n"]) or config["top-n"]) < int(config["top-n"])
+                    or float(config.get("risk-regime-medium-score-spread-add", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-medium-liquidity-quantile", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0) > 0
+                )
+            )
+            else "Risk Regime Signal Shrinkage: inactive"
+        ),
         "Feature Fields:",
-        "- momentum_20: close / close[-20] - 1",
-        "- momentum_5: close / close[-5] - 1",
-        "- liquidity_5: rolling mean(amount, 5)",
-        "- close_location: (close - low) / (high - low)",
-        "- volatility_10: rolling std(pct_chg, 10)",
-        "- gap_abs: abs(open / pre_close - 1)",
+        *FEATURE_FIELD_LINES,
         "Results:",
         f"- Trade Days: {summary['trade_days']}",
         f"- Scored Trade Days: {summary['scored_trade_days']}",
         f"- Selected Trade Days: {summary['selected_trade_days']}",
         f"- Selection Rate: {summary['selection_rate']:.2%}",
         f"- Average Exposure Scale: {summary['average_exposure_scale']:.2%}",
+        f"- Average Selected Count: {summary['average_selected_count']:.2f}",
         f"- Skipped Low Conviction Days: {summary['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {summary['skipped_gap_risk_days']}",
         f"- Medium Risk Regime Days: {summary['medium_risk_regime_days']}",
@@ -357,6 +654,7 @@ def build_report_text(summary: dict, config: dict, universe_count: int, loaded_s
 
 def run_backtest(config: dict) -> dict:
     data_layer = TushareDataLayer(config["tushare-data-path"], config["dataset-catalog"])
+    metadata_lookup = build_etf_metadata_lookup(data_layer)
     universe = load_registry_universe(
         config["registry-file"],
         exclude_money_market=config.get("exclude-money-market-etfs", True),
@@ -364,16 +662,16 @@ def run_backtest(config: dict) -> dict:
 
     prepared_frames = []
     for symbol in universe:
-        frame = data_layer.load_dataset(
-            "fund_daily",
-            symbol=symbol,
+        frame = build_symbol_feature_frame(
+            data_layer,
+            symbol,
             start_date=config["start-date"],
             end_date=config["end-date"],
-            fields=["pre_close", "open", "high", "low", "close", "pct_chg", "amount", "vol"],
+            metadata_lookup=metadata_lookup,
         )
         if frame.empty or len(frame) < 25:
             continue
-        prepared_frames.append(prepare_symbol_frame(symbol, frame))
+        prepared_frames.append(frame)
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
     scored = compute_cross_section_scores(panel)
@@ -399,6 +697,13 @@ def run_backtest(config: dict) -> dict:
             else None
         ),
         risk_regime_medium_exposure_scale=float(config.get("risk-regime-medium-exposure-scale", 1.0) or 1.0),
+        risk_regime_medium_top_n=(
+            int(config["risk-regime-medium-top-n"])
+            if config.get("risk-regime-medium-top-n") is not None
+            else None
+        ),
+        risk_regime_medium_score_spread_add=float(config.get("risk-regime-medium-score-spread-add", 0.0) or 0.0),
+        risk_regime_medium_liquidity_quantile=float(config.get("risk-regime-medium-liquidity-quantile", 0.0) or 0.0),
         risk_regime_momentum_threshold=(
             float(config["risk-regime-momentum-threshold"])
             if config.get("risk-regime-momentum-threshold") is not None
@@ -410,6 +715,13 @@ def run_backtest(config: dict) -> dict:
             else None
         ),
         risk_regime_high_exposure_scale=float(config.get("risk-regime-high-exposure-scale", 0.0) or 0.0),
+        risk_regime_high_top_n=(
+            int(config["risk-regime-high-top-n"])
+            if config.get("risk-regime-high-top-n") is not None
+            else None
+        ),
+        risk_regime_high_score_spread_add=float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0),
+        risk_regime_high_liquidity_quantile=float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0),
     )
 
     summary = {
@@ -441,9 +753,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-regime-medium-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-medium-volatility-threshold", type=float)
     parser.add_argument("--risk-regime-medium-exposure-scale", type=float)
+    parser.add_argument("--risk-regime-medium-top-n", type=int)
+    parser.add_argument("--risk-regime-medium-score-spread-add", type=float)
+    parser.add_argument("--risk-regime-medium-liquidity-quantile", type=float)
     parser.add_argument("--risk-regime-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-volatility-threshold", type=float)
     parser.add_argument("--risk-regime-high-exposure-scale", type=float)
+    parser.add_argument("--risk-regime-high-top-n", type=int)
+    parser.add_argument("--risk-regime-high-score-spread-add", type=float)
+    parser.add_argument("--risk-regime-high-liquidity-quantile", type=float)
     parser.add_argument("--include-money-market-etfs", action="store_true")
     return parser
 
@@ -461,9 +779,15 @@ def main() -> int:
         "risk-regime-medium-momentum-threshold": args.risk_regime_medium_momentum_threshold,
         "risk-regime-medium-volatility-threshold": args.risk_regime_medium_volatility_threshold,
         "risk-regime-medium-exposure-scale": args.risk_regime_medium_exposure_scale,
+        "risk-regime-medium-top-n": args.risk_regime_medium_top_n,
+        "risk-regime-medium-score-spread-add": args.risk_regime_medium_score_spread_add,
+        "risk-regime-medium-liquidity-quantile": args.risk_regime_medium_liquidity_quantile,
         "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
         "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
         "risk-regime-high-exposure-scale": args.risk_regime_high_exposure_scale,
+        "risk-regime-high-top-n": args.risk_regime_high_top_n,
+        "risk-regime-high-score-spread-add": args.risk_regime_high_score_spread_add,
+        "risk-regime-high-liquidity-quantile": args.risk_regime_high_liquidity_quantile,
     }
     if args.risk_regime_filter_enabled:
         overrides["risk-regime-filter-enabled"] = True

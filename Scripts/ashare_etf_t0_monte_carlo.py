@@ -15,8 +15,9 @@ if str(CURRENT_DIR) not in sys.path:
 
 from ashare_etf_t0_feature_backtest import (
     backtest_from_scores,
+    build_etf_metadata_lookup,
+    build_symbol_feature_frame,
     compute_cross_section_scores,
-    prepare_symbol_frame,
 )
 from tushare_data_layer import TushareDataLayer
 from tushare_lean_export import load_registry_universe
@@ -47,9 +48,15 @@ def default_config() -> dict:
         "risk-regime-medium-momentum-threshold": 0.0,
         "risk-regime-medium-volatility-threshold": 1.25,
         "risk-regime-medium-exposure-scale": 0.9,
+        "risk-regime-medium-top-n": 2,
+        "risk-regime-medium-score-spread-add": 0.0,
+        "risk-regime-medium-liquidity-quantile": 0.0,
         "risk-regime-momentum-threshold": -0.005,
         "risk-regime-volatility-threshold": 1.4,
         "risk-regime-high-exposure-scale": 0.1,
+        "risk-regime-high-top-n": 2,
+        "risk-regime-high-score-spread-add": 0.0,
+        "risk-regime-high-liquidity-quantile": 0.0,
         "trial-count": 500,
         "horizon-days": 63,
         "block-size": 5,
@@ -103,6 +110,7 @@ def _numeric(series: pd.Series) -> pd.Series:
 
 def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
     data_layer = TushareDataLayer(config["tushare-data-path"], config["dataset-catalog"])
+    metadata_lookup = build_etf_metadata_lookup(data_layer)
     universe = load_registry_universe(
         config["registry-file"],
         exclude_money_market=config.get("exclude-money-market-etfs", True),
@@ -110,16 +118,16 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
 
     prepared_frames = []
     for symbol in universe:
-        frame = data_layer.load_dataset(
-            "fund_daily",
-            symbol=symbol,
+        frame = build_symbol_feature_frame(
+            data_layer,
+            symbol,
             start_date=config["start-date"],
             end_date=config["end-date"],
-            fields=PRICE_FIELDS,
+            metadata_lookup=metadata_lookup,
         )
         if frame.empty or len(frame) < 25:
             continue
-        prepared_frames.append(prepare_symbol_frame(symbol, frame))
+        prepared_frames.append(frame)
 
     panel = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
     scored = compute_cross_section_scores(panel)
@@ -146,6 +154,13 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
             else None
         ),
         risk_regime_medium_exposure_scale=float(config.get("risk-regime-medium-exposure-scale", 1.0) or 1.0),
+        risk_regime_medium_top_n=(
+            int(config["risk-regime-medium-top-n"])
+            if config.get("risk-regime-medium-top-n") is not None
+            else None
+        ),
+        risk_regime_medium_score_spread_add=float(config.get("risk-regime-medium-score-spread-add", 0.0) or 0.0),
+        risk_regime_medium_liquidity_quantile=float(config.get("risk-regime-medium-liquidity-quantile", 0.0) or 0.0),
         risk_regime_momentum_threshold=(
             float(config["risk-regime-momentum-threshold"])
             if config.get("risk-regime-momentum-threshold") is not None
@@ -157,6 +172,13 @@ def build_base_backtest(config: dict) -> tuple[pd.DataFrame, dict]:
             else None
         ),
         risk_regime_high_exposure_scale=float(config.get("risk-regime-high-exposure-scale", 0.0) or 0.0),
+        risk_regime_high_top_n=(
+            int(config["risk-regime-high-top-n"])
+            if config.get("risk-regime-high-top-n") is not None
+            else None
+        ),
+        risk_regime_high_score_spread_add=float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0),
+        risk_regime_high_liquidity_quantile=float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0),
     )
     if not daily.empty and not regime_frame.empty:
         daily = daily.merge(regime_frame, on="trade_date", how="left")
@@ -453,6 +475,23 @@ def build_report_text(report: dict, config: dict) -> str:
             if config.get("risk-regime-filter-enabled")
             else "Risk Regime Scaling: disabled"
         ),
+        (
+            "Risk Regime Signal Shrinkage: enabled "
+            f"(medium: top_n={int(config.get('risk-regime-medium-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-medium-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-medium-liquidity-quantile', 0.0) or 0.0):.2f}; "
+            f"high: top_n={int(config.get('risk-regime-high-top-n', config['top-n']) or config['top-n'])}, spread_add={float(config.get('risk-regime-high-score-spread-add', 0.0) or 0.0):.4f}, liquidity_q={float(config.get('risk-regime-high-liquidity-quantile', 0.0) or 0.0):.2f})"
+            if (
+                config.get("risk-regime-filter-enabled")
+                and (
+                    int(config.get("risk-regime-medium-top-n", config["top-n"]) or config["top-n"]) < int(config["top-n"])
+                    or int(config.get("risk-regime-high-top-n", config["top-n"]) or config["top-n"]) < int(config["top-n"])
+                    or float(config.get("risk-regime-medium-score-spread-add", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-high-score-spread-add", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-medium-liquidity-quantile", 0.0) or 0.0) > 0
+                    or float(config.get("risk-regime-high-liquidity-quantile", 0.0) or 0.0) > 0
+                )
+            )
+            else "Risk Regime Signal Shrinkage: inactive"
+        ),
         f"Slippage Probability: {float(config['slippage-probability']):.2%}",
         f"Slippage Mean: {float(config['slippage-mean']):.2%}",
         f"Slippage Std: {float(config['slippage-std']):.2%}",
@@ -470,6 +509,7 @@ def build_report_text(report: dict, config: dict) -> str:
         f"- Skipped Low Conviction Days: {base['skipped_low_conviction_days']}",
         f"- Skipped Gap Risk Days: {base['skipped_gap_risk_days']}",
         f"- Average Exposure Scale: {base['average_exposure_scale']:.2%}",
+        f"- Average Selected Count: {base['average_selected_count']:.2f}",
         f"- Medium Risk Regime Days: {base['medium_risk_regime_days']}",
         f"- High Risk Regime Days: {base['high_risk_regime_days']}",
         f"- Final Equity: {base['final_equity']:.6f}",
@@ -604,9 +644,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-regime-medium-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-medium-volatility-threshold", type=float)
     parser.add_argument("--risk-regime-medium-exposure-scale", type=float)
+    parser.add_argument("--risk-regime-medium-top-n", type=int)
+    parser.add_argument("--risk-regime-medium-score-spread-add", type=float)
+    parser.add_argument("--risk-regime-medium-liquidity-quantile", type=float)
     parser.add_argument("--risk-regime-momentum-threshold", type=float)
     parser.add_argument("--risk-regime-volatility-threshold", type=float)
     parser.add_argument("--risk-regime-high-exposure-scale", type=float)
+    parser.add_argument("--risk-regime-high-top-n", type=int)
+    parser.add_argument("--risk-regime-high-score-spread-add", type=float)
+    parser.add_argument("--risk-regime-high-liquidity-quantile", type=float)
     parser.add_argument("--trial-count", type=int)
     parser.add_argument("--horizon-days", type=int)
     parser.add_argument("--block-size", type=int)
@@ -637,9 +683,15 @@ def main() -> int:
         "risk-regime-medium-momentum-threshold": args.risk_regime_medium_momentum_threshold,
         "risk-regime-medium-volatility-threshold": args.risk_regime_medium_volatility_threshold,
         "risk-regime-medium-exposure-scale": args.risk_regime_medium_exposure_scale,
+        "risk-regime-medium-top-n": args.risk_regime_medium_top_n,
+        "risk-regime-medium-score-spread-add": args.risk_regime_medium_score_spread_add,
+        "risk-regime-medium-liquidity-quantile": args.risk_regime_medium_liquidity_quantile,
         "risk-regime-momentum-threshold": args.risk_regime_momentum_threshold,
         "risk-regime-volatility-threshold": args.risk_regime_volatility_threshold,
         "risk-regime-high-exposure-scale": args.risk_regime_high_exposure_scale,
+        "risk-regime-high-top-n": args.risk_regime_high_top_n,
+        "risk-regime-high-score-spread-add": args.risk_regime_high_score_spread_add,
+        "risk-regime-high-liquidity-quantile": args.risk_regime_high_liquidity_quantile,
         "trial-count": args.trial_count,
         "horizon-days": args.horizon_days,
         "block-size": args.block_size,
