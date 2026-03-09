@@ -15,6 +15,7 @@
 
 using NUnit.Framework;
 using QuantConnect;
+using QuantConnect.Securities;
 using QuantConnect.Securities.Equity;
 
 namespace QuantConnect.Tests.Common.Securities
@@ -56,6 +57,32 @@ namespace QuantConnect.Tests.Common.Securities
             var symbol = Symbol.Create("159949", SecurityType.Equity, Market.SZSE);
             var upperLimit = AShareETF.GetUpperPriceLimit(symbol, 1.009m, 0.01m);
             Assert.AreEqual(1.211m, upperLimit);
+        }
+
+        [Test]
+        public void T0EtfKeepsImmediateSettlementAndAllHoldingsSellable()
+        {
+            var security = CreateSecurity("510300", Market.SSE);
+
+            Assert.IsInstanceOf<ImmediateSettlementModel>(security.SettlementModel);
+
+            security.Holdings.SetHoldings(2.5m, 1000m);
+            Assert.AreEqual(1000m, security.Holdings.AvailableQuantity);
+        }
+
+        private static AShareETF CreateSecurity(string ticker, string market)
+        {
+            var symbol = Symbol.Create(ticker, SecurityType.Equity, market);
+            var exchangeHours = MarketHoursDatabase.FromDataFolder().GetExchangeHours(market, symbol, SecurityType.Equity);
+
+            return new AShareETF(
+                symbol,
+                exchangeHours,
+                new Cash(Currencies.CNY, 0m, 1m),
+                new SymbolProperties(ticker, Currencies.CNY, 1m, AShareETF.DefaultMinimumPriceVariation, AShareETF.LotSize, ticker),
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache());
         }
     }
 }

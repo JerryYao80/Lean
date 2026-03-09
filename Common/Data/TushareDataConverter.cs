@@ -194,11 +194,11 @@ namespace QuantConnect.Data
         private List<TradeBar> LoadDailyData(string tsCode)
         {
             var symbol = ConvertToSymbol(tsCode);
-            var dailyPath = Path.Combine(_dataPath, "fund_daily", $"ts_code={tsCode}", "data.parquet");
+            var dailyPath = ResolveDailyDataPath(tsCode);
 
-            if (!File.Exists(dailyPath))
+            if (dailyPath == null)
             {
-                Log.Error($"TushareDataConverter.LoadDailyData(): Daily data file not found: {dailyPath}");
+                Log.Error($"TushareDataConverter.LoadDailyData(): Daily data file not found for {tsCode} in fund_daily or daily datasets under {_dataPath}");
                 return new List<TradeBar>();
             }
 
@@ -244,6 +244,23 @@ print(df.to_json(orient='records'))
 
             Log.Trace($"TushareDataConverter.LoadDailyData(): Cached {result.Count} bars for {tsCode}");
             return result;
+        }
+
+        private string ResolveDailyDataPath(string tsCode)
+        {
+            var fundDailyPath = Path.Combine(_dataPath, "fund_daily", $"ts_code={tsCode}", "data.parquet");
+            if (File.Exists(fundDailyPath))
+            {
+                return fundDailyPath;
+            }
+
+            var stockDailyPath = Path.Combine(_dataPath, "daily", $"ts_code={tsCode}", "data.parquet");
+            if (File.Exists(stockDailyPath))
+            {
+                return stockDailyPath;
+            }
+
+            return null;
         }
 
         private static string ExecutePython(string pythonCode, string context)

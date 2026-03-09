@@ -318,6 +318,12 @@ namespace QuantConnect.Securities
         }
 
         /// <summary>
+        /// Quantity currently available to sell.
+        /// By default all holdings are immediately sellable.
+        /// </summary>
+        public virtual decimal AvailableQuantity => Quantity;
+
+        /// <summary>
         /// Record of the closing profit from the last trade conducted in units of the account's currency.
         /// </summary>
         public virtual decimal LastTradeProfit

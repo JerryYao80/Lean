@@ -5,6 +5,11 @@
       "date_field": "trade_date",
       "symbol_field": "ts_code"
     },
+    "daily": {
+      "path": "daily/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
     "fund_nav": {
       "path": "fund_nav/ts_code={symbol}/data.parquet",
       "date_field": "nav_date",
@@ -17,6 +22,10 @@
     },
     "etf_basic": {
       "path": "etf_basic/data.parquet",
+      "symbol_field": "ts_code"
+    },
+    "stock_basic": {
+      "path": "stock_basic/data.parquet",
       "symbol_field": "ts_code"
     },
     "etf_share_size": {

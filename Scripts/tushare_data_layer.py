@@ -59,8 +59,10 @@ class TushareDataLayer:
             keep = []
             if spec.date_field and spec.date_field in frame.columns:
                 keep.append(spec.date_field)
-            if spec.symbol_field and spec.symbol_field in frame.columns and spec.symbol_field not in keep:
-                keep.append(spec.symbol_field)
+            if spec.symbol_field and spec.symbol_field in frame.columns:
+                should_keep_symbol = symbol is None or spec.symbol_field in fields
+                if should_keep_symbol and spec.symbol_field not in keep:
+                    keep.append(spec.symbol_field)
             for field in fields:
                 if field in frame.columns and field not in keep:
                     keep.append(field)
