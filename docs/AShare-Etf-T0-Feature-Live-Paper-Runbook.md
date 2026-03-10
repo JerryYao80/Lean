@@ -10,6 +10,7 @@
 
 ```text
 Tushare rt_min (1MIN)
+  -> data-source/tushare/rt_min_downloader.py
   -> Scripts/ashare_etf_t0_feature_live_bridge.py
   -> Data/alternative/ashare-etf-t0-live-features/<market>/daily/<ticker>.csv
      - 保留历史特征行
@@ -25,11 +26,13 @@ Tushare rt_min (1MIN)
 
 ## 关键实现点
 
-- 实时桥接脚本直接调用 Tushare `rt_min` 1分钟接口，并聚合为当日特征快照，不修改 `/home/project/tushare-downloader/`。
+- 分钟级原始数据下载入口在 `data-source/tushare/rt_min_downloader.py`，bridge 复用同一套 `rt_min` 标准化与批量降级逻辑。
+- bridge 会把 `rt_min` 聚合成当日特征快照，并写入 `Data/alternative/ashare-etf-t0-live-features`。
 - 策略 live 配置使用新文件 `Launcher/config/config-ashare-etf-t0-feature-live-paper.json`。
 - live 特征目录使用新路径 `Data/alternative/ashare-etf-t0-live-features`，不覆盖原有离线导出目录。
 - 自定义数据新增 `feature_timestamp` 列，解决同一交易日多次刷新时 LEAN 只能接收第一条的问题。
 - 当日 `signal_*` 字段沿用上一交易日的特征值，和离线导出逻辑保持一致。
+- bridge 失败时现在会写 `status=error` 报告，不再出现“只剩旧数据但没有诊断信息”的情况。
 
 ## 启动前准备
 
@@ -80,6 +83,7 @@ python3 Scripts/ashare_etf_t0_feature_live_bridge.py --config Launcher/config/co
 ## 关键输出
 
 - live 特征桥接报告：`Results/ashare-etf-t0-feature-live-bridge-report.json`
+- 原始分钟数据分区：`/home/project/tushare-downloader/tushare_data/rt_min/freq=1MIN/date=YYYYMMDD/ts_code=<code>/data.parquet`
 - 策略成交报告：`Results/ashare-etf-t0-feature-live-trades.csv`
 - 策略日报：`Results/ashare-etf-t0-feature-live-daily-summary.csv`
 - 策略配置：`Launcher/config/config-ashare-etf-t0-feature-live-paper.json`

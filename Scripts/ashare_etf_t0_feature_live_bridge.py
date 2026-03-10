@@ -14,9 +14,13 @@ import pandas as pd
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+TUSHARE_MODULE_DIR = Path(__file__).resolve().parents[1] / 'data-source' / 'tushare'
+if str(TUSHARE_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(TUSHARE_MODULE_DIR))
 
 from ashare_etf_t0_feature_backtest import build_etf_metadata_lookup
 from export_ashare_etf_t0_feature_data import FEATURE_COLUMNS, build_feature_frame, feature_daily_path
+from rt_min_downloader import TushareRtMinClient, coerce_minute_frequency
 from tushare_data_layer import TushareDataLayer
 from tushare_lean_export import load_registry_universe
 
@@ -124,14 +128,7 @@ def _coerce_int(value, default: int) -> int:
 
 
 def _coerce_minute_frequency(value, default: str = '1MIN') -> str:
-    if value is None:
-        return default
-    text = str(value).strip().upper()
-    if not text:
-        return default
-    if text.endswith('MIN') and text[:-3].isdigit():
-        return text
-    return default
+    return coerce_minute_frequency(value, default)
 
 
 def load_live_bridge_config(config_path: str | Path | None = None, overrides: dict | None = None) -> dict:
@@ -257,221 +254,7 @@ def _carry_forward(previous_row: pd.Series, field: str):
     return previous_row.get(field) if field in previous_row.index else None
 
 
-class TushareRealtimeMinuteClient:
-    MAX_RT_MIN_ROWS_PER_REQUEST = 1000
-    TRADING_SESSION_MINUTES = 240
-
-    def __init__(self, token: str, batch_size: int = 25, http_url: str | None = None, frequency: str = '1MIN'):
-        self._token = token
-        self._batch_size = max(1, int(batch_size))
-        self._http_url = (http_url or '').strip()
-        self._frequency = _coerce_minute_frequency(frequency, '1MIN')
-        self._api = None
-        self._supports_batch_queries = True
-
-    def _get_api(self):
-        if self._api is not None:
-            return self._api
-
-        try:
-            import tushare as ts  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError('Python package `tushare` is required for live minute polling.') from exc
-
-        self._api = ts.pro_api(self._token)
-        self._api._DataApi__token = self._token
-        if self._http_url:
-            self._api._DataApi__http_url = self._http_url
-        return self._api
-
-    @staticmethod
-    def _frequency_minutes(frequency: str) -> int:
-        text = _coerce_minute_frequency(frequency, '1MIN')
-        return max(1, int(text[:-3]))
-
-    def _effective_symbols_per_request(self) -> int:
-        minutes = self._frequency_minutes(self._frequency)
-        bars_per_symbol = max(1, math.ceil(self.TRADING_SESSION_MINUTES / minutes))
-        safe_limit = max(1, self.MAX_RT_MIN_ROWS_PER_REQUEST // bars_per_symbol)
-        return max(1, min(self._batch_size, safe_limit))
-
-    @staticmethod
-    def _normalize_trade_time_text(value) -> str:
-        text = str(value or '').strip()
-        if not text:
-            return text
-        if ' ' in text or '-' in text or '/' in text or ':' in text:
-            return text
-        if text.isdigit() and len(text) == 6:
-            return f'{text[:2]}:{text[2:4]}:{text[4:6]}'
-        if text.isdigit() and len(text) == 4:
-            return f'{text[:2]}:{text[2:4]}:00'
-        return text
-
-    @staticmethod
-    def _should_retry_symbols_individually(error: Exception) -> bool:
-        message = str(error)
-        keywords = (
-            '不支持的市场后缀',
-            '检查代码格式',
-            'ts_code',
-            'code format',
-            'market suffix',
-        )
-        return any(keyword in message for keyword in keywords)
-
-    def _call_rt_min(self, api, ts_code: str):
-        return api.rt_min(ts_code=ts_code, freq=self._frequency)
-
-    def _fetch_batch_frames(self, api, batch: list[str]) -> list[pd.DataFrame]:
-        if self._supports_batch_queries:
-            query = ','.join(batch)
-            try:
-                data = self._call_rt_min(api, query)
-                if data is None or data.empty:
-                    return []
-                return [data]
-            except TypeError:
-                try:
-                    data = api.rt_min(ts_code=batch, freq=self._frequency)
-                    if data is None or data.empty:
-                        return []
-                    return [data]
-                except Exception as exc:
-                    if not self._should_retry_symbols_individually(exc):
-                        raise
-                    self._supports_batch_queries = False
-            except Exception as exc:
-                if not self._should_retry_symbols_individually(exc):
-                    raise
-                self._supports_batch_queries = False
-
-        frames: list[pd.DataFrame] = []
-        for ts_code in batch:
-            data = self._call_rt_min(api, ts_code)
-            if data is None or data.empty:
-                continue
-            frames.append(data)
-        return frames
-
-    @classmethod
-    def _parse_trade_timestamps(cls, values: pd.Series) -> pd.Series:
-        normalized = values.astype(str).map(cls._normalize_trade_time_text)
-        parsed = pd.to_datetime(normalized, errors='coerce')
-        missing = parsed.isna()
-        if missing.any():
-            base_date = datetime.now().strftime('%Y-%m-%d')
-            parsed.loc[missing] = pd.to_datetime(base_date + ' ' + normalized.loc[missing], errors='coerce')
-        return parsed
-
-    @classmethod
-    def normalize_minute_bars(cls, frame: pd.DataFrame) -> pd.DataFrame:
-        data = frame.copy()
-        data.columns = [str(column).strip().lower() for column in data.columns]
-        rename_map = {
-            'volume': 'vol',
-            'datetime': 'feature_timestamp',
-        }
-        data = data.rename(columns={key: value for key, value in rename_map.items() if key in data.columns})
-
-        for column in ('open', 'high', 'low', 'close', 'vol', 'amount'):
-            if column in data.columns:
-                data[column] = pd.to_numeric(data[column], errors='coerce')
-
-        if 'trade_time' not in data.columns and 'time' in data.columns:
-            data['trade_time'] = data['time']
-
-        if 'feature_timestamp' not in data.columns:
-            if 'trade_time' in data.columns:
-                timestamps = cls._parse_trade_timestamps(data['trade_time'])
-            else:
-                timestamps = pd.Series(pd.Timestamp(datetime.now()), index=data.index)
-            data['feature_timestamp'] = timestamps.dt.strftime('%Y-%m-%d %H:%M:%S')
-        else:
-            timestamps = pd.to_datetime(data['feature_timestamp'], errors='coerce')
-
-        if 'trade_date' not in data.columns:
-            data['trade_date'] = timestamps.dt.strftime('%Y%m%d')
-        else:
-            data['trade_date'] = data['trade_date'].astype(str).str.replace('-', '', regex=False).str.slice(0, 8)
-
-        if 'price' not in data.columns and 'close' in data.columns:
-            data['price'] = data['close']
-
-        if 'ts_code' in data.columns:
-            data['ts_code'] = data['ts_code'].astype(str)
-
-        return data
-
-    @classmethod
-    def aggregate_minute_bars(cls, frame: pd.DataFrame) -> pd.DataFrame:
-        data = cls.normalize_minute_bars(frame)
-        if data.empty:
-            return pd.DataFrame()
-
-        data['parsed_feature_timestamp'] = pd.to_datetime(data['feature_timestamp'], errors='coerce')
-        data = data.dropna(subset=['parsed_feature_timestamp'])
-        if data.empty:
-            return pd.DataFrame()
-
-        data = data.sort_values(['ts_code', 'parsed_feature_timestamp'], kind='stable').reset_index(drop=True)
-        snapshots: list[dict] = []
-
-        for ts_code, group in data.groupby('ts_code', sort=False):
-            if not str(ts_code).strip():
-                continue
-
-            open_values = group['open'].dropna() if 'open' in group.columns else pd.Series(dtype='float64')
-            high_values = group['high'].dropna() if 'high' in group.columns else pd.Series(dtype='float64')
-            low_values = group['low'].dropna() if 'low' in group.columns else pd.Series(dtype='float64')
-            close_values = group['close'].dropna() if 'close' in group.columns else pd.Series(dtype='float64')
-            vol_values = group['vol'].dropna() if 'vol' in group.columns else pd.Series(dtype='float64')
-            amount_values = group['amount'].dropna() if 'amount' in group.columns else pd.Series(dtype='float64')
-            last_row = group.iloc[-1]
-
-            trade_date = str(last_row.get('trade_date') or '').strip()
-            if len(trade_date) != 8 or not trade_date.isdigit():
-                trade_date = pd.Timestamp(last_row['parsed_feature_timestamp']).strftime('%Y%m%d')
-
-            snapshot = {
-                'ts_code': str(ts_code).strip(),
-                'trade_date': trade_date,
-                'feature_timestamp': pd.Timestamp(last_row['parsed_feature_timestamp']).strftime('%Y-%m-%d %H:%M:%S'),
-                'minute_bar_count': int(len(group.index)),
-            }
-            if not open_values.empty:
-                snapshot['open'] = float(open_values.iloc[0])
-            if not high_values.empty:
-                snapshot['high'] = float(high_values.max())
-            if not low_values.empty:
-                snapshot['low'] = float(low_values.min())
-            if not close_values.empty:
-                snapshot['close'] = float(close_values.iloc[-1])
-                snapshot['price'] = snapshot['close']
-            if not vol_values.empty:
-                snapshot['vol'] = float(vol_values.sum())
-            if not amount_values.empty:
-                snapshot['amount'] = float(amount_values.sum())
-
-            snapshots.append(snapshot)
-
-        return pd.DataFrame(snapshots)
-
-    def fetch_quotes(self, ts_codes: list[str]) -> pd.DataFrame:
-        api = self._get_api()
-        frames: list[pd.DataFrame] = []
-        symbols_per_request = self._effective_symbols_per_request()
-
-        for start in range(0, len(ts_codes), symbols_per_request):
-            batch = ts_codes[start:start + symbols_per_request]
-            frames.extend(self._fetch_batch_frames(api, batch))
-
-        if not frames:
-            return pd.DataFrame()
-
-        return self.aggregate_minute_bars(pd.concat(frames, ignore_index=True))
-
-
+TushareRealtimeMinuteClient = TushareRtMinClient
 TushareRealtimeQuoteClient = TushareRealtimeMinuteClient
 
 
@@ -512,6 +295,24 @@ def prepare_live_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return prepared[LIVE_FEATURE_COLUMNS].copy()
 
 
+def merge_live_feature_history(base_history: pd.DataFrame, existing_frame: pd.DataFrame | None = None) -> pd.DataFrame:
+    frames = []
+    if base_history is not None:
+        frames.append(prepare_live_feature_frame(base_history))
+    if existing_frame is not None and not existing_frame.empty:
+        frames.append(prepare_live_feature_frame(existing_frame))
+
+    if not frames:
+        return prepare_live_feature_frame(pd.DataFrame())
+
+    merged = pd.concat(frames, ignore_index=True)
+    merged['trade_date'] = merged['trade_date'].astype(str).str.zfill(8)
+    merged['feature_timestamp'] = merged['feature_timestamp'].fillna('').astype(str)
+    merged = merged.sort_values(['trade_date', 'feature_timestamp'], kind='stable')
+    merged = merged.drop_duplicates(subset=['trade_date'], keep='last').reset_index(drop=True)
+    return merged[LIVE_FEATURE_COLUMNS].copy()
+
+
 def bootstrap_live_feature_files(config: dict, history_cache: dict[str, pd.DataFrame]) -> int:
     written = 0
     for ts_code, base_history in history_cache.items():
@@ -519,7 +320,8 @@ def bootstrap_live_feature_files(config: dict, history_cache: dict[str, pd.DataF
             continue
         feature_path = feature_daily_path(config['feature-data-path'], ts_code)
         feature_path.parent.mkdir(parents=True, exist_ok=True)
-        prepared = prepare_live_feature_frame(base_history)
+        existing = pd.read_csv(feature_path, dtype={'trade_date': str}) if feature_path.exists() else pd.DataFrame()
+        prepared = merge_live_feature_history(base_history, existing)
         prepared.to_csv(feature_path, index=False, float_format='%.10f')
         written += 1
     return written
@@ -641,7 +443,8 @@ def upsert_live_feature_file(feature_path: str | Path, base_history: pd.DataFram
 
     trade_date = str(live_row['trade_date']).zfill(8)
     frame = frame[frame['trade_date'] != trade_date].copy()
-    frame.loc[len(frame)] = [live_row.get(column) for column in LIVE_FEATURE_COLUMNS]
+    new_row = pd.DataFrame([{column: live_row.get(column) for column in LIVE_FEATURE_COLUMNS}], columns=LIVE_FEATURE_COLUMNS)
+    frame = new_row if frame.empty else pd.concat([frame, new_row], ignore_index=True)
     frame['trade_date'] = frame['trade_date'].astype(str).str.zfill(8)
     frame = frame.sort_values(['trade_date', 'feature_timestamp'], kind='stable').drop_duplicates(subset=['trade_date'], keep='last').reset_index(drop=True)
     frame.to_csv(target, index=False, float_format='%.10f')
@@ -661,6 +464,7 @@ def refresh_live_feature_snapshots(
 
     if quotes.empty:
         report = {
+            'status': 'no_quotes',
             'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
             'session_date': session_date,
             'quote_count': 0,
@@ -695,6 +499,7 @@ def refresh_live_feature_snapshots(
         updated.append(ts_code)
 
     report = {
+        'status': 'ok',
         'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
         'session_date': session_date,
         'quote_count': int(len(quotes.index)),
@@ -710,6 +515,17 @@ def write_report(config: dict, report: dict) -> None:
     report_path = Path(config['live-feature-report-file'])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def get_history_cache_latest_trade_date(history_cache: dict[str, pd.DataFrame]) -> str | None:
+    latest_trade_date = None
+    for frame in history_cache.values():
+        if frame is None or frame.empty or 'trade_date' not in frame.columns:
+            continue
+        candidate = frame['trade_date'].astype(str).str.zfill(8).max()
+        if candidate and (latest_trade_date is None or candidate > latest_trade_date):
+            latest_trade_date = candidate
+    return latest_trade_date
 
 
 def is_china_market_session_open(current_time: datetime) -> bool:
@@ -748,18 +564,32 @@ def run_live_bridge(
             if config.get('live-feature-bootstrap-history', True):
                 bootstrap_written = bootstrap_live_feature_files(config, history_cache)
 
-        if run_outside_market_hours or once or is_china_market_session_open(now):
-            report = refresh_live_feature_snapshots(config, quote_client, history_cache, current_time=now)
-            report['bootstrap_history_written_count'] = bootstrap_written
-            write_report(config, report)
-        else:
+        try:
+            if run_outside_market_hours or once or is_china_market_session_open(now):
+                report = refresh_live_feature_snapshots(config, quote_client, history_cache, current_time=now)
+            else:
+                report = {
+                    'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'session_date': session_date,
+                    'status': 'paused_outside_market_hours',
+                    'feature_data_path': config['feature-data-path'],
+                }
+        except Exception as exc:
             report = {
                 'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
                 'session_date': session_date,
-                'status': 'paused_outside_market_hours',
+                'status': 'error',
+                'error': str(exc),
                 'feature_data_path': config['feature-data-path'],
                 'bootstrap_history_written_count': bootstrap_written,
+                'history_cache_latest_trade_date': get_history_cache_latest_trade_date(history_cache),
             }
+            write_report(config, report)
+            if once:
+                return 1
+        else:
+            report['bootstrap_history_written_count'] = bootstrap_written
+            report['history_cache_latest_trade_date'] = get_history_cache_latest_trade_date(history_cache)
             write_report(config, report)
 
         if once:

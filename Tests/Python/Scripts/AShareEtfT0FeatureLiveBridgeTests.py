@@ -27,6 +27,14 @@ class StaticQuoteClient:
         return self._frame[self._frame['ts_code'].isin(ts_codes)].copy()
 
 
+class FailingQuoteClient:
+    def __init__(self, error: Exception):
+        self._error = error
+
+    def fetch_quotes(self, ts_codes: list[str]) -> pd.DataFrame:
+        raise self._error
+
+
 class AShareEtfT0FeatureLiveBridgeTests(unittest.TestCase):
     def test_build_live_feature_row_uses_previous_day_features_as_signals(self):
         module = load_module()
@@ -261,6 +269,34 @@ class AShareEtfT0FeatureLiveBridgeTests(unittest.TestCase):
         self.assertEqual(frame['trade_date'].tolist(), ['20240101', '20240102'])
         self.assertIn('feature_timestamp', frame.columns)
 
+    def test_bootstrap_live_feature_files_preserves_existing_live_snapshot(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = module.default_config()
+            config['feature-data-path'] = str(root / 'features')
+            history_cache = {
+                '510300.SH': pd.DataFrame([
+                    {'trade_date': '20240122', 'close': 1.0, 'signal_momentum_20': 0.1},
+                    {'trade_date': '20240123', 'close': 1.1, 'signal_momentum_20': 0.2},
+                ])
+            }
+            feature_path = root / 'features' / 'sse' / 'daily' / '510300.csv'
+            feature_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([
+                {'trade_date': '20240122', 'close': 1.0, 'signal_momentum_20': 0.1, 'feature_timestamp': ''},
+                {'trade_date': '20240123', 'close': 1.1, 'signal_momentum_20': 0.2, 'feature_timestamp': ''},
+                {'trade_date': '20240124', 'close': 1.2, 'signal_momentum_20': 0.2, 'feature_timestamp': '2024-01-24 09:35:00'},
+            ]).to_csv(feature_path, index=False)
+
+            module.bootstrap_live_feature_files(config, history_cache)
+            frame = pd.read_csv(feature_path, dtype={'trade_date': str})
+
+        self.assertEqual(frame['trade_date'].tolist(), ['20240122', '20240123', '20240124'])
+        self.assertEqual(frame.loc[frame['trade_date'] == '20240124', 'feature_timestamp'].iloc[0], '2024-01-24 09:35:00')
+        self.assertAlmostEqual(frame.loc[frame['trade_date'] == '20240124', 'close'].iloc[0], 1.2)
+
     def test_refresh_live_feature_snapshots_writes_feature_files(self):
         module = load_module()
 
@@ -310,6 +346,39 @@ class AShareEtfT0FeatureLiveBridgeTests(unittest.TestCase):
 
         self.assertEqual(report['written_count'], 1)
         self.assertEqual(frame.loc[frame['trade_date'] == '20240124', 'feature_timestamp'].iloc[0], '2024-01-24 09:35:00')
+
+    def test_run_live_bridge_once_writes_error_report(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = module.default_config()
+            config['feature-data-path'] = str(root / 'features')
+            config['live-feature-report-file'] = str(root / 'Results' / 'bridge.json')
+            config['tushare-token'] = 'token'
+
+            original_build_history_cache = module.build_history_cache
+            try:
+                module.build_history_cache = lambda *_args, **_kwargs: {
+                    '510300.SH': pd.DataFrame([
+                        {'trade_date': '20240123', 'close': 1.03, 'signal_momentum_20': 0.2},
+                    ])
+                }
+                exit_code = module.run_live_bridge(
+                    config,
+                    quote_client=FailingQuoteClient(RuntimeError('rt_min failed')),
+                    once=True,
+                    run_outside_market_hours=True,
+                )
+            finally:
+                module.build_history_cache = original_build_history_cache
+
+            report = json.loads((root / 'Results' / 'bridge.json').read_text(encoding='utf-8'))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(report['status'], 'error')
+        self.assertIn('rt_min failed', report['error'])
+        self.assertEqual(report['history_cache_latest_trade_date'], '20240123')
 
 
 if __name__ == '__main__':
