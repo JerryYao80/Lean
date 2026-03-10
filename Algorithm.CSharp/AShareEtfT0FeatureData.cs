@@ -73,6 +73,7 @@ namespace QuantConnect.Algorithm.CSharp
         public decimal? SignalExcessIntraday { get; set; }
         public decimal? SignalTrackingError10 { get; set; }
         public decimal? SignalIndexMomentum5 { get; set; }
+        public DateTime? FeatureTimestamp { get; set; }
 
         public Symbol UnderlyingSymbol => Symbol != null && Symbol.HasUnderlying ? Symbol.Underlying : Symbol;
         public bool HasSignals => SignalMomentum20.HasValue
@@ -123,11 +124,14 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             var isExtended = csv.Length >= 47;
+            var featureTimestamp = ParseFeatureTimestamp(GetCsvValue(csv, isExtended ? 47 : 24), tradeDate);
+            var dataTime = isLiveMode && featureTimestamp.HasValue ? featureTimestamp.Value : tradeDate.Date;
             return new AShareEtfT0FeatureData
             {
                 Symbol = config.Symbol,
-                Time = tradeDate.Date,
-                EndTime = tradeDate.Date,
+                Time = dataTime,
+                EndTime = dataTime,
+                FeatureTimestamp = featureTimestamp,
                 Value = ParseNullableDecimal(GetCsvValue(csv, 5)) ?? 0m,
                 PreClose = ParseNullableDecimal(GetCsvValue(csv, 1)),
                 Open = ParseNullableDecimal(GetCsvValue(csv, 2)),
@@ -193,6 +197,39 @@ namespace QuantConnect.Algorithm.CSharp
             return decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : null;
+        }
+
+        private static DateTime? ParseFeatureTimestamp(string value, DateTime tradeDate)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            var formats = new[]
+            {
+                "yyyy-MM-dd HH:mm:ss",
+                "yyyy-MM-ddTHH:mm:ss",
+                "yyyy-MM-ddTHH:mm:ss.fffffff",
+                "yyyyMMdd HH:mm:ss",
+                "yyyyMMddTHH:mm:ss",
+                "yyyyMMddTHH:mm:ss.fffffff",
+                "O"
+            };
+
+            if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var timestamp))
+            {
+                return timestamp;
+            }
+
+            if (TimeSpan.TryParseExact(value, @"hh\:mm\:ss", CultureInfo.InvariantCulture, out var timeOfDay))
+            {
+                return tradeDate.Date.Add(timeOfDay);
+            }
+
+            return DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out timestamp)
+                ? timestamp
+                : (DateTime?)null;
         }
     }
 }

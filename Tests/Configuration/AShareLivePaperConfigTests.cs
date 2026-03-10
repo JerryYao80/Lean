@@ -9,6 +9,7 @@ namespace QuantConnect.Tests.Configuration
     public class AShareLivePaperConfigTests
     {
         [TestCase("config-ashare-etf-live-paper.json", "ETFMomentumStrategy")]
+        [TestCase("config-ashare-etf-t0-feature-live-paper.json", "AShareEtfT0FeatureIntradayAlgorithm")]
         [TestCase("config-ashare-t1-live-paper.json", "AShareT1MeanReversionAlgorithm")]
         [TestCase("config-ashare-t1-momentum-live-paper.json", "AShareT1MomentumAlgorithm")]
         public void LivePaperConfigsDeclareExplicitLiveTradingHandlers(string fileName, string algorithmTypeName)

@@ -70,6 +70,22 @@ namespace QuantConnect.Tests.Algorithm
             Assert.AreEqual(-0.01m, data.SignalIndexMomentum5);
         }
 
+
+        [Test]
+        public void ReaderUsesFeatureTimestampForLiveSnapshots()
+        {
+            var underlying = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
+            var config = CreateConfig(underlying);
+            const string line = "20240122,1.000000,1.010000,1.030000,0.990000,1.020000,1.200000,1000000,500000,0.009901,0.010000,0.750000,0.040000,0.030000,0.080000,0.012000,1200000,0.010000,1.015000,1.016000,1500000,2500000,0.004926,1.250000,0.020000,0.030000,0.002000,0.001500,0.002500,0.015000,0.008000,0.006500,0.003000,-0.050000,-0.020000,1100000,0.650000,0.015000,0.008000,-0.003000,-0.400000,0.012000,0.020000,-0.001000,-0.002000,0.004000,-0.010000,2024-01-22 09:35:00";
+
+            var data = new AShareEtfT0FeatureData().Reader(config, line, new DateTime(2024, 1, 22), true) as AShareEtfT0FeatureData;
+
+            Assert.IsNotNull(data);
+            Assert.AreEqual(new DateTime(2024, 1, 22, 9, 35, 0), data.Time);
+            Assert.AreEqual(new DateTime(2024, 1, 22, 9, 35, 0), data.EndTime);
+            Assert.AreEqual(new DateTime(2024, 1, 22, 9, 35, 0), data.FeatureTimestamp);
+        }
+
         [Test]
         public void SignalModelRanksSymbolsUsingPythonWeights()
         {
