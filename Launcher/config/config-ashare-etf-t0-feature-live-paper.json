@@ -72,7 +72,6 @@
     "tushare-http-url": "http://106.54.191.157:5000",
     "tushare-token-env-var": "TUSHARE_TOKEN",
     "live-feature-poll-interval-seconds": "30",
-    "live-feature-minute-frequency": "1MIN",
     "live-feature-quote-batch-size": "25",
     "live-feature-bootstrap-history": "true",
     "live-feature-report-file": "../../../Results/ashare-etf-t0-feature-live-bridge-report.json"

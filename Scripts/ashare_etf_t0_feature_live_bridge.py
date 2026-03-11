@@ -20,7 +20,7 @@ if str(TUSHARE_MODULE_DIR) not in sys.path:
 
 from ashare_etf_t0_feature_backtest import build_etf_metadata_lookup
 from export_ashare_etf_t0_feature_data import FEATURE_COLUMNS, build_feature_frame, feature_daily_path
-from rt_min_downloader import TushareRtMinClient, coerce_minute_frequency
+from rt_daily_downloader import TushareRtDailyClient
 from tushare_data_layer import TushareDataLayer
 from tushare_lean_export import load_registry_universe
 
@@ -90,7 +90,6 @@ def default_config() -> dict:
         'tushare-http-url': '',
         'tushare-token-env-var': 'TUSHARE_TOKEN',
         'live-feature-poll-interval-seconds': 30,
-        'live-feature-minute-frequency': '1MIN',
         'live-feature-quote-batch-size': 25,
         'live-feature-bootstrap-history': True,
         'live-feature-report-file': str(root / 'Results' / 'ashare-etf-t0-feature-live-bridge-report.json'),
@@ -127,10 +126,6 @@ def _coerce_int(value, default: int) -> int:
         return default
 
 
-def _coerce_minute_frequency(value, default: str = '1MIN') -> str:
-    return coerce_minute_frequency(value, default)
-
-
 def load_live_bridge_config(config_path: str | Path | None = None, overrides: dict | None = None) -> dict:
     config = default_config()
 
@@ -153,7 +148,6 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config['exclude-money-market-etfs'] = _coerce_bool(config.get('exclude-money-market-etfs'), True)
     config['live-feature-bootstrap-history'] = _coerce_bool(config.get('live-feature-bootstrap-history'), True)
     config['live-feature-poll-interval-seconds'] = _coerce_int(config.get('live-feature-poll-interval-seconds'), 30)
-    config['live-feature-minute-frequency'] = _coerce_minute_frequency(config.get('live-feature-minute-frequency'), '1MIN')
     config['live-feature-quote-batch-size'] = _coerce_int(config.get('live-feature-quote-batch-size'), 25)
     return config
 
@@ -254,8 +248,7 @@ def _carry_forward(previous_row: pd.Series, field: str):
     return previous_row.get(field) if field in previous_row.index else None
 
 
-TushareRealtimeMinuteClient = TushareRtMinClient
-TushareRealtimeQuoteClient = TushareRealtimeMinuteClient
+TushareRealtimeQuoteClient = TushareRtDailyClient
 
 
 def build_history_cache(config: dict, session_date: str | None = None) -> dict[str, pd.DataFrame]:
@@ -460,9 +453,16 @@ def refresh_live_feature_snapshots(
     now = current_time or datetime.now()
     session_date = now.strftime('%Y%m%d')
     universe = sorted(history_cache.keys())
+
+    print(f"\n{'='*80}")
+    print(f"🔄 Refreshing live features at {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📅 Session: {session_date} | Universe: {len(universe)} symbols")
+    print(f"{'='*80}")
+
     quotes = quote_client.fetch_quotes(universe)
 
     if quotes.empty:
+        print("\n⚠️  No quotes received from API")
         report = {
             'status': 'no_quotes',
             'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
@@ -475,13 +475,16 @@ def refresh_live_feature_snapshots(
         return report
 
     if 'ts_code' not in quotes.columns:
-        raise RuntimeError('Realtime minute response must include ts_code column.')
+        raise RuntimeError('Realtime quote response must include ts_code column.')
 
     written = 0
     skipped: list[str] = []
     updated: list[str] = []
 
-    for _, quote_row in quotes.iterrows():
+    print(f"\n📝 Processing {len(quotes)} quotes...")
+    print(f"{'─'*80}")
+
+    for idx, (_, quote_row) in enumerate(quotes.iterrows(), 1):
         ts_code = str(quote_row.get('ts_code') or '').strip()
         if not ts_code or ts_code not in history_cache:
             if ts_code:
@@ -491,12 +494,36 @@ def refresh_live_feature_snapshots(
         live_row = build_live_feature_row(history_cache[ts_code], quote_row.to_dict(), session_date=session_date)
         if live_row is None:
             skipped.append(ts_code)
+            print(f"  [{idx}/{len(quotes)}] {ts_code:12s} ❌ Failed to build feature row")
             continue
 
         feature_path = feature_daily_path(config['feature-data-path'], ts_code)
         upsert_live_feature_file(feature_path, history_cache[ts_code], live_row)
         written += 1
         updated.append(ts_code)
+
+        # Display feature summary
+        close = live_row.get('close')
+        pct_chg = live_row.get('pct_chg')
+        momentum_5 = live_row.get('momentum_5')
+        volatility_10 = live_row.get('volatility_10')
+
+        status_line = f"  [{idx}/{len(quotes)}] {ts_code:12s} ✅"
+        if close is not None:
+            status_line += f" ¥{close:8.2f}"
+        if pct_chg is not None:
+            arrow = "📈" if pct_chg > 0 else "📉" if pct_chg < 0 else "➡️"
+            status_line += f" {arrow} {pct_chg:+6.2f}%"
+        if momentum_5 is not None:
+            status_line += f" | M5: {momentum_5*100:+6.2f}%"
+        if volatility_10 is not None:
+            status_line += f" | Vol: {volatility_10:5.2f}"
+
+        print(status_line)
+
+    print(f"{'─'*80}")
+    print(f"✅ Written: {written} | ⏭️  Skipped: {len(skipped)}")
+    print(f"{'='*80}\n")
 
     report = {
         'status': 'ok',
@@ -542,32 +569,40 @@ def run_live_bridge(
     run_outside_market_hours: bool = False,
 ) -> int:
     token = resolve_tushare_token(config)
-    quote_client = quote_client or TushareRealtimeMinuteClient(
+    quote_client = quote_client or TushareRtDailyClient(
         token,
         batch_size=config['live-feature-quote-batch-size'],
         http_url=config.get('tushare-http-url'),
-        frequency=config.get('live-feature-minute-frequency', '1MIN'),
     )
     current_session = datetime.now().strftime('%Y%m%d')
     history_cache = build_history_cache(config, session_date=current_session)
     bootstrap_written = 0
     if config.get('live-feature-bootstrap-history', True):
+        print(f"\n🔧 Bootstrapping historical features...")
         bootstrap_written = bootstrap_live_feature_files(config, history_cache)
+        print(f"✅ Bootstrapped {bootstrap_written} feature files\n")
 
+    iteration = 0
     while True:
+        iteration += 1
         now = datetime.now()
         session_date = now.strftime('%Y%m%d')
         if session_date != current_session:
+            print(f"\n📆 New trading session detected: {session_date}")
             current_session = session_date
             history_cache = build_history_cache(config, session_date=current_session)
             bootstrap_written = 0
             if config.get('live-feature-bootstrap-history', True):
+                print(f"🔧 Bootstrapping historical features for new session...")
                 bootstrap_written = bootstrap_live_feature_files(config, history_cache)
+                print(f"✅ Bootstrapped {bootstrap_written} feature files\n")
 
         try:
             if run_outside_market_hours or once or is_china_market_session_open(now):
                 report = refresh_live_feature_snapshots(config, quote_client, history_cache, current_time=now)
             else:
+                market_status = "⏸️  Market closed - pausing updates"
+                print(f"\n{market_status} (iteration {iteration})")
                 report = {
                     'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
                     'session_date': session_date,
@@ -575,6 +610,7 @@ def run_live_bridge(
                     'feature_data_path': config['feature-data-path'],
                 }
         except Exception as exc:
+            print(f"\n❌ Error during iteration {iteration}: {exc}", file=sys.stderr)
             report = {
                 'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
                 'session_date': session_date,
@@ -595,17 +631,19 @@ def run_live_bridge(
         if once:
             return 0
 
-        time.sleep(max(1, int(config['live-feature-poll-interval-seconds'])))
+        poll_interval = max(1, int(config['live-feature-poll-interval-seconds']))
+        if not once:
+            print(f"⏳ Sleeping {poll_interval}s until next poll (iteration {iteration})...")
+        time.sleep(poll_interval)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Poll Tushare realtime ETF quotes and materialize live feature CSV files for LEAN live-paper.')
+    parser = argparse.ArgumentParser(description='Poll Tushare realtime ETF/stock daily quotes and materialize live feature CSV files for LEAN live-paper.')
     parser.add_argument('--config', default='Launcher/config/config-ashare-etf-t0-feature-live-paper.json')
     parser.add_argument('--token')
     parser.add_argument('--feature-data-path')
     parser.add_argument('--report-file')
     parser.add_argument('--poll-interval-seconds', type=int)
-    parser.add_argument('--minute-frequency')
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--include-money-market-etfs', action='store_true')
     parser.add_argument('--run-outside-market-hours', action='store_true')
@@ -618,7 +656,6 @@ def main() -> int:
         'feature-data-path': args.feature_data_path,
         'live-feature-report-file': args.report_file,
         'live-feature-poll-interval-seconds': args.poll_interval_seconds,
-        'live-feature-minute-frequency': args.minute_frequency,
     }
     if args.include_money_market_etfs:
         overrides['exclude-money-market-etfs'] = False
