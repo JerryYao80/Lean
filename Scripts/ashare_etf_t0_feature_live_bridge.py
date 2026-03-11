@@ -530,6 +530,9 @@ def refresh_live_feature_snapshots(
     # Archive raw quotes for permanent storage
     archive_daily_quotes(config, quotes, session_date)
 
+    # Preview trading signals (read-only, no actual trading)
+    signal_preview = preview_trading_signals(config, Path(config['feature-data-path']))
+
     report = {
         'status': 'ok',
         'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
@@ -539,6 +542,7 @@ def refresh_live_feature_snapshots(
         'updated_symbols': updated,
         'skipped_symbols': skipped,
         'feature_data_path': config['feature-data-path'],
+        'signal_preview': signal_preview,
     }
     return report
 
@@ -572,6 +576,211 @@ def archive_daily_quotes(config: dict, quotes: pd.DataFrame, session_date: str) 
         combined.to_parquet(archive_file, engine='pyarrow', index=False)
     else:
         quotes.to_parquet(archive_file, engine='pyarrow', index=False)
+
+
+def preview_trading_signals(config: dict, feature_data_path: Path) -> dict:
+    """
+    Preview trading signals based on current features (read-only, no trading).
+    Uses the same logic as the C# algorithm for consistency.
+    """
+    print(f"\n{'='*100}")
+    print(f"📊 SIGNAL GENERATION PREVIEW")
+    print(f"{'='*100}")
+
+    # Load configuration
+    top_n = int(config.get('top-n', 2))
+    min_score_spread = float(config.get('min-score-spread', 0.7))
+    max_average_gap_abs = config.get('max-average-gap-abs')
+    if max_average_gap_abs is not None:
+        max_average_gap_abs = float(max_average_gap_abs)
+
+    # Signal weights (matching C# algorithm)
+    signal_weights = {
+        'signal_momentum_20': 0.25,
+        'signal_momentum_5': 0.20,
+        'signal_liquidity_5': 0.15,
+        'signal_close_location': 0.10,
+        'signal_volatility_10': -0.10,
+        'signal_nav_premium_z20': -0.10,
+        'signal_excess_intraday': 0.10,
+        'signal_index_momentum_5': 0.10,
+    }
+
+    # Load all feature files
+    scored_symbols = []
+    feature_files = list(feature_data_path.glob('*/*/*.csv'))
+
+    if not feature_files:
+        print("\n⚠️  No feature files found")
+        print(f"{'='*100}\n")
+        return {'status': 'no_features', 'signals': []}
+
+    print(f"\n🔍 Analyzing {len(feature_files)} symbols...")
+
+    for feature_file in feature_files:
+        try:
+            df = pd.read_csv(feature_file, dtype={'trade_date': str})
+            if df.empty:
+                continue
+
+            # Get latest row
+            latest = df.iloc[-1]
+            ts_code = feature_file.parent.name
+
+            # Filter by gap_abs if configured
+            gap_abs = latest.get('gap_abs')
+            if max_average_gap_abs is not None and gap_abs is not None:
+                if not pd.isna(gap_abs) and float(gap_abs) > max_average_gap_abs:
+                    continue
+
+            # Calculate composite score
+            score = 0.0
+            total_weight = 0.0
+            feature_values = {}
+
+            for feature_name, weight in signal_weights.items():
+                value = latest.get(feature_name)
+                if value is not None and not pd.isna(value):
+                    score += float(value) * weight
+                    total_weight += abs(weight)
+                    feature_values[feature_name] = float(value)
+
+            if total_weight > 0:
+                score = score / total_weight
+
+            scored_symbols.append({
+                'ts_code': ts_code,
+                'score': score,
+                'close': latest.get('close'),
+                'pct_chg': latest.get('pct_chg'),
+                'features': feature_values,
+            })
+
+        except Exception as e:
+            continue
+
+    if not scored_symbols:
+        print("\n⚠️  No valid symbols after filtering")
+        print(f"{'='*100}\n")
+        return {'status': 'no_valid_symbols', 'signals': []}
+
+    # Sort by score descending
+    scored_symbols.sort(key=lambda x: x['score'], reverse=True)
+
+    # Display all symbols with scores
+    print(f"\n📈 SYMBOL RANKING (Total: {len(scored_symbols)})")
+    print(f"{'─'*100}")
+    print(f"  {'Rank':>4s} | {'Symbol':12s} | {'Score':>8s} | {'Price':>10s} | {'Change':>8s} | {'Signal'}")
+    print(f"{'─'*100}")
+
+    signals = []
+    buy_signals = []
+    sell_signals = []
+
+    # Determine buy signals
+    if len(scored_symbols) >= top_n:
+        top_score = scored_symbols[0]['score']
+        nth_score = scored_symbols[top_n - 1]['score']
+        score_spread = top_score - nth_score
+
+        if score_spread >= min_score_spread:
+            # Strong signals - buy top N
+            target_weight = 1.0 / top_n
+            for i in range(top_n):
+                symbol = scored_symbols[i]
+                buy_signals.append({
+                    'ts_code': symbol['ts_code'],
+                    'signal': 'BUY',
+                    'rank': i + 1,
+                    'score': symbol['score'],
+                    'target_weight': target_weight,
+                    'close': symbol['close'],
+                    'pct_chg': symbol['pct_chg'],
+                })
+                signals.append(buy_signals[-1])
+
+            # Sell signals for others
+            for i in range(top_n, len(scored_symbols)):
+                symbol = scored_symbols[i]
+                sell_signals.append({
+                    'ts_code': symbol['ts_code'],
+                    'signal': 'SELL',
+                    'rank': i + 1,
+                    'score': symbol['score'],
+                    'target_weight': 0.0,
+                    'close': symbol['close'],
+                    'pct_chg': symbol['pct_chg'],
+                })
+                signals.append(sell_signals[-1])
+
+            print(f"\n  ✅ Score spread: {score_spread:.4f} >= {min_score_spread:.4f} (threshold)")
+            print(f"  🎯 Generating BUY signals for top {top_n} symbols")
+        else:
+            print(f"\n  ⚠️  Score spread: {score_spread:.4f} < {min_score_spread:.4f} (threshold)")
+            print(f"  ⏸️  No trading signals - spread too narrow")
+    else:
+        print(f"\n  ⚠️  Only {len(scored_symbols)} symbols available (need {top_n})")
+        print(f"  ⏸️  No trading signals - insufficient symbols")
+
+    # Display top symbols
+    display_count = min(20, len(scored_symbols))
+    for i in range(display_count):
+        symbol = scored_symbols[i]
+        rank = i + 1
+
+        # Determine signal
+        signal_str = "HOLD"
+        signal_emoji = "⚪"
+        if any(s['ts_code'] == symbol['ts_code'] and s['signal'] == 'BUY' for s in buy_signals):
+            signal_str = "BUY"
+            signal_emoji = "🟢"
+        elif any(s['ts_code'] == symbol['ts_code'] and s['signal'] == 'SELL' for s in sell_signals):
+            signal_str = "SELL"
+            signal_emoji = "🔴"
+
+        close = symbol.get('close')
+        pct_chg = symbol.get('pct_chg')
+
+        close_str = f"¥{close:8.2f}" if close is not None else "N/A"
+        pct_str = f"{pct_chg:+6.2f}%" if pct_chg is not None else "N/A"
+
+        print(f"  {rank:4d} | {symbol['ts_code']:12s} | {symbol['score']:8.4f} | {close_str:>10s} | {pct_str:>8s} | {signal_emoji} {signal_str}")
+
+    if len(scored_symbols) > display_count:
+        print(f"  ... and {len(scored_symbols) - display_count} more symbols")
+
+    print(f"{'─'*100}")
+
+    # Summary
+    if buy_signals:
+        print(f"\n🟢 BUY SIGNALS ({len(buy_signals)}):")
+        print(f"{'─'*100}")
+        for sig in buy_signals:
+            close_val = sig.get('close')
+            pct_val = sig.get('pct_chg')
+            close_str = f"¥{close_val:8.2f}" if close_val is not None else "N/A"
+            pct_str = f"{pct_val:+6.2f}%" if pct_val is not None else "N/A"
+            print(f"  {sig['ts_code']:12s} | Weight: {sig['target_weight']:6.2%} | Score: {sig['score']:7.4f} | "
+                  f"Price: {close_str:>10s} | Change: {pct_str:>8s}")
+    else:
+        print(f"\n⚪ NO BUY SIGNALS")
+        if len(scored_symbols) < top_n:
+            print(f"  Reason: Only {len(scored_symbols)} symbols available (need {top_n})")
+        elif len(scored_symbols) >= top_n:
+            top_score = scored_symbols[0]['score']
+            nth_score = scored_symbols[top_n - 1]['score']
+            score_spread = top_score - nth_score
+            print(f"  Reason: Score spread {score_spread:.4f} < threshold {min_score_spread:.4f}")
+
+    print(f"{'='*100}\n")
+
+    return {
+        'status': 'ok',
+        'total_symbols': len(scored_symbols),
+        'buy_signals': len(buy_signals),
+        'sell_signals': len(sell_signals),
+        'signals': signals,
+    }
 
 
 def get_history_cache_latest_trade_date(history_cache: dict[str, pd.DataFrame]) -> str | None:
