@@ -31,6 +31,7 @@ PATH_KEYS = {
     'dataset-catalog',
     'feature-data-path',
     'live-feature-report-file',
+    'daily-quote-archive-path',
 }
 LIVE_FEATURE_COLUMNS = [*FEATURE_COLUMNS, 'feature_timestamp']
 SIGNAL_SOURCE_FIELDS = {
@@ -83,6 +84,7 @@ def default_config() -> dict:
         'tushare-data-path': '/home/project/tushare-downloader/tushare_data',
         'dataset-catalog': str(root / 'Launcher' / 'config' / 'config-ashare-dataset-catalog.json'),
         'feature-data-path': str(root / 'Data' / 'alternative' / 'ashare-etf-t0-live-features'),
+        'daily-quote-archive-path': str(root / 'Data' / 'archive' / 'daily_quotes'),
         'start-date': '20240101',
         'end-date': '20261231',
         'exclude-money-market-etfs': True,
@@ -525,6 +527,9 @@ def refresh_live_feature_snapshots(
     print(f"✅ Written: {written} | ⏭️  Skipped: {len(skipped)}")
     print(f"{'='*80}\n")
 
+    # Archive raw quotes for permanent storage
+    archive_daily_quotes(config, quotes, session_date)
+
     report = {
         'status': 'ok',
         'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
@@ -542,6 +547,31 @@ def write_report(config: dict, report: dict) -> None:
     report_path = Path(config['live-feature-report-file'])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def archive_daily_quotes(config: dict, quotes: pd.DataFrame, session_date: str) -> None:
+    """Archive raw daily quotes to permanent storage."""
+    if quotes.empty:
+        return
+
+    archive_root = Path(config.get('daily-quote-archive-path', repo_root() / 'Data' / 'archive' / 'daily_quotes'))
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    # Save as parquet partitioned by date
+    date_partition = archive_root / f"date={session_date}"
+    date_partition.mkdir(parents=True, exist_ok=True)
+
+    archive_file = date_partition / f"quotes_{session_date}.parquet"
+
+    # If file exists, merge with existing data
+    if archive_file.exists():
+        existing = pd.read_parquet(archive_file)
+        combined = pd.concat([existing, quotes], ignore_index=True)
+        # Deduplicate by ts_code, keep latest
+        combined = combined.drop_duplicates(subset=['ts_code'], keep='last')
+        combined.to_parquet(archive_file, engine='pyarrow', index=False)
+    else:
+        quotes.to_parquet(archive_file, engine='pyarrow', index=False)
 
 
 def get_history_cache_latest_trade_date(history_cache: dict[str, pd.DataFrame]) -> str | None:
