@@ -439,7 +439,13 @@ def upsert_live_feature_file(feature_path: str | Path, base_history: pd.DataFram
     trade_date = str(live_row['trade_date']).zfill(8)
     frame = frame[frame['trade_date'] != trade_date].copy()
     new_row = pd.DataFrame([{column: live_row.get(column) for column in LIVE_FEATURE_COLUMNS}], columns=LIVE_FEATURE_COLUMNS)
-    frame = new_row if frame.empty else pd.concat([frame, new_row], ignore_index=True)
+
+    # Fix FutureWarning by ensuring consistent dtypes
+    if frame.empty:
+        frame = new_row
+    else:
+        frame = pd.concat([frame, new_row], ignore_index=True)
+
     frame['trade_date'] = frame['trade_date'].astype(str).str.zfill(8)
     frame = frame.sort_values(['trade_date', 'feature_timestamp'], kind='stable').drop_duplicates(subset=['trade_date'], keep='last').reset_index(drop=True)
     frame.to_csv(target, index=False, float_format='%.10f')
@@ -531,7 +537,7 @@ def refresh_live_feature_snapshots(
     archive_daily_quotes(config, quotes, session_date)
 
     # Preview trading signals (read-only, no actual trading)
-    signal_preview = preview_trading_signals(config, Path(config['feature-data-path']))
+    signal_preview = preview_trading_signals(config, Path(config['feature-data-path']), quotes)
 
     report = {
         'status': 'ok',
@@ -578,7 +584,283 @@ def archive_daily_quotes(config: dict, quotes: pd.DataFrame, session_date: str) 
         quotes.to_parquet(archive_file, engine='pyarrow', index=False)
 
 
-def preview_trading_signals(config: dict, feature_data_path: Path) -> dict:
+def preview_trading_signals(config: dict, feature_data_path: Path, quotes: pd.DataFrame) -> dict:
+    """
+    Preview trading signals based on current features (read-only, no trading).
+    Uses the same logic as the C# algorithm for consistency.
+    """
+    print(f"\n{'='*120}")
+    print(f"📊 SIGNAL GENERATION & PORTFOLIO PREVIEW")
+    print(f"{'='*120}")
+
+    # Load configuration
+    top_n = int(config.get('top-n', 2))
+    min_score_spread = float(config.get('min-score-spread', 0.7))
+    max_average_gap_abs = config.get('max-average-gap-abs')
+    if max_average_gap_abs is not None:
+        max_average_gap_abs = float(max_average_gap_abs)
+
+    target_exposure = float(config.get('target-portfolio-exposure', 0.95))
+    initial_capital = 1_000_000.0  # 初始资金 100万
+
+    # Signal weights (matching C# algorithm)
+    signal_weights = {
+        'signal_momentum_20': 0.25,
+        'signal_momentum_5': 0.20,
+        'signal_liquidity_5': 0.15,
+        'signal_close_location': 0.10,
+        'signal_volatility_10': -0.10,
+        'signal_nav_premium_z20': -0.10,
+        'signal_excess_intraday': 0.10,
+        'signal_index_momentum_5': 0.10,
+    }
+
+    # Load ETF registry for names
+    etf_names = {}
+    try:
+        from tushare_lean_export import load_registry_universe
+        registry_file = config.get('registry-file')
+        if registry_file:
+            # Parse registry file for ETF names (simplified)
+            pass
+    except:
+        pass
+
+    # Load all feature files
+    scored_symbols = []
+    feature_files = list(feature_data_path.glob('*/*/*.csv'))
+
+    if not feature_files:
+        print("\n⚠️  No feature files found")
+        print(f"{'='*120}\n")
+        return {'status': 'no_features', 'signals': []}
+
+    print(f"\n🔍 Analyzing {len(feature_files)} symbols...")
+
+    for feature_file in feature_files:
+        try:
+            df = pd.read_csv(feature_file, dtype={'trade_date': str})
+            if df.empty:
+                continue
+
+            # Get latest row
+            latest = df.iloc[-1]
+            ts_code = feature_file.parent.name
+
+            # Get ETF name from quotes
+            etf_name = ts_code
+            if not quotes.empty and 'name' in quotes.columns:
+                name_row = quotes[quotes['ts_code'] == ts_code]
+                if not name_row.empty:
+                    etf_name = str(name_row.iloc[0]['name'])
+
+            # Filter by gap_abs if configured
+            gap_abs = latest.get('gap_abs')
+            if max_average_gap_abs is not None and gap_abs is not None:
+                if not pd.isna(gap_abs) and float(gap_abs) > max_average_gap_abs:
+                    continue
+
+            # Calculate composite score
+            score = 0.0
+            total_weight = 0.0
+            feature_values = {}
+
+            for feature_name, weight in signal_weights.items():
+                value = latest.get(feature_name)
+                if value is not None and not pd.isna(value):
+                    score += float(value) * weight
+                    total_weight += abs(weight)
+                    feature_values[feature_name] = float(value)
+
+            if total_weight > 0:
+                score = score / total_weight
+
+            scored_symbols.append({
+                'ts_code': ts_code,
+                'name': etf_name,
+                'score': score,
+                'close': latest.get('close'),
+                'pct_chg': latest.get('pct_chg'),
+                'features': feature_values,
+            })
+
+        except Exception as e:
+            continue
+
+    if not scored_symbols:
+        print("\n⚠️  No valid symbols after filtering")
+        print(f"{'='*120}\n")
+        return {'status': 'no_valid_symbols', 'signals': []}
+
+    # Sort by score descending
+    scored_symbols.sort(key=lambda x: x['score'], reverse=True)
+
+    # Display top symbols
+    print(f"\n📈 SYMBOL RANKING (Total: {len(scored_symbols)})")
+    print(f"{'─'*120}")
+    print(f"  {'Rank':>4s} | {'Code':12s} | {'Name':12s} | {'Score':>10s} | {'Price':>10s} | {'Change':>8s} | {'Signal'}")
+    print(f"{'─'*120}")
+
+    signals = []
+    buy_signals = []
+    sell_signals = []
+
+    # Determine buy signals
+    if len(scored_symbols) >= top_n:
+        top_score = scored_symbols[0]['score']
+        nth_score = scored_symbols[top_n - 1]['score']
+        score_spread = top_score - nth_score
+
+        if score_spread >= min_score_spread:
+            # Strong signals - buy top N
+            target_weight = 1.0 / top_n
+            for i in range(top_n):
+                symbol = scored_symbols[i]
+                buy_signals.append({
+                    'ts_code': symbol['ts_code'],
+                    'name': symbol['name'],
+                    'signal': 'BUY',
+                    'rank': i + 1,
+                    'score': symbol['score'],
+                    'target_weight': target_weight,
+                    'close': symbol['close'],
+                    'pct_chg': symbol['pct_chg'],
+                })
+                signals.append(buy_signals[-1])
+
+            # Sell signals for others
+            for i in range(top_n, len(scored_symbols)):
+                symbol = scored_symbols[i]
+                sell_signals.append({
+                    'ts_code': symbol['ts_code'],
+                    'name': symbol['name'],
+                    'signal': 'SELL',
+                    'rank': i + 1,
+                    'score': symbol['score'],
+                    'target_weight': 0.0,
+                    'close': symbol['close'],
+                    'pct_chg': symbol['pct_chg'],
+                })
+                signals.append(sell_signals[-1])
+
+            print(f"\n  ✅ Score spread: {score_spread:.4f} >= {min_score_spread:.4f} (threshold)")
+            print(f"  🎯 Generating BUY signals for top {top_n} symbols")
+        else:
+            print(f"\n  ⚠️  Score spread: {score_spread:.4f} < {min_score_spread:.4f} (threshold)")
+            print(f"  ⏸️  No trading signals - spread too narrow")
+    else:
+        print(f"\n  ⚠️  Only {len(scored_symbols)} symbols available (need {top_n})")
+        print(f"  ⏸️  No trading signals - insufficient symbols")
+
+    # Display top symbols
+    display_count = min(20, len(scored_symbols))
+    for i in range(display_count):
+        symbol = scored_symbols[i]
+        rank = i + 1
+
+        # Determine signal
+        signal_str = "HOLD"
+        signal_emoji = "⚪"
+        if any(s['ts_code'] == symbol['ts_code'] and s['signal'] == 'BUY' for s in buy_signals):
+            signal_str = "BUY"
+            signal_emoji = "🟢"
+        elif any(s['ts_code'] == symbol['ts_code'] and s['signal'] == 'SELL' for s in sell_signals):
+            signal_str = "SELL"
+            signal_emoji = "🔴"
+
+        close = symbol.get('close')
+        pct_chg = symbol.get('pct_chg')
+        name = symbol.get('name', symbol['ts_code'])[:12]
+
+        close_str = f"¥{close:8.2f}" if close is not None else "N/A"
+        pct_str = f"{pct_chg:+6.2f}%" if pct_chg is not None else "N/A"
+
+        print(f"  {rank:4d} | {symbol['ts_code']:12s} | {name:12s} | {symbol['score']:10.4f} | {close_str:>10s} | {pct_str:>8s} | {signal_emoji} {signal_str}")
+
+    if len(scored_symbols) > display_count:
+        print(f"  ... and {len(scored_symbols) - display_count} more symbols")
+
+    print(f"{'─'*120}")
+
+    # Calculate portfolio statistics
+    print(f"\n{'='*120}")
+    print(f"💰 PORTFOLIO STATISTICS")
+    print(f"{'='*120}")
+
+    total_capital = initial_capital
+    cash = initial_capital * (1 - target_exposure)
+    invested_capital = initial_capital * target_exposure
+
+    print(f"\n📊 Capital Allocation:")
+    print(f"  Total Capital:    ¥{total_capital:15,.2f}")
+    print(f"  Target Exposure:  {target_exposure:6.1%}")
+    print(f"  Cash Reserve:     ¥{cash:15,.2f} ({(1-target_exposure):6.1%})")
+    print(f"  To Invest:        ¥{invested_capital:15,.2f} ({target_exposure:6.1%})")
+
+    # Summary
+    if buy_signals:
+        print(f"\n🟢 BUY SIGNALS ({len(buy_signals)}):")
+        print(f"{'─'*120}")
+        print(f"  {'Code':12s} | {'Name':12s} | {'Weight':>8s} | {'Amount':>15s} | {'Price':>10s} | {'Quantity':>10s} | {'Change':>8s}")
+        print(f"{'─'*120}")
+
+        for sig in buy_signals:
+            close_val = sig.get('close')
+            pct_val = sig.get('pct_chg')
+            name = sig.get('name', sig['ts_code'])[:12]
+
+            if close_val is not None and close_val > 0:
+                allocation = invested_capital * sig['target_weight']
+                quantity = int(allocation / close_val / 100) * 100  # Round to lot size (100 shares)
+                actual_amount = quantity * close_val
+
+                close_str = f"¥{close_val:8.2f}"
+                pct_str = f"{pct_val:+6.2f}%" if pct_val is not None else "N/A"
+
+                print(f"  {sig['ts_code']:12s} | {name:12s} | {sig['target_weight']:7.2%} | ¥{actual_amount:14,.2f} | {close_str:>10s} | {quantity:10,d} | {pct_str:>8s}")
+            else:
+                print(f"  {sig['ts_code']:12s} | {name:12s} | {sig['target_weight']:7.2%} | N/A")
+
+        # Portfolio summary
+        total_invested = sum(
+            int(invested_capital * s['target_weight'] / s['close'] / 100) * 100 * s['close']
+            for s in buy_signals if s.get('close') and s['close'] > 0
+        )
+        remaining_cash = total_capital - total_invested
+
+        print(f"{'─'*120}")
+        print(f"\n📈 Portfolio Summary:")
+        print(f"  Positions:        {len(buy_signals)}")
+        print(f"  Total Invested:   ¥{total_invested:15,.2f} ({total_invested/total_capital:6.1%})")
+        print(f"  Remaining Cash:   ¥{remaining_cash:15,.2f} ({remaining_cash/total_capital:6.1%})")
+        print(f"  Total Value:      ¥{total_capital:15,.2f}")
+
+    else:
+        print(f"\n⚪ NO BUY SIGNALS - HOLDING CASH")
+        print(f"  Cash Position:    ¥{total_capital:15,.2f} (100.0%)")
+        if len(scored_symbols) < top_n:
+            print(f"  Reason: Only {len(scored_symbols)} symbols available (need {top_n})")
+        elif len(scored_symbols) >= top_n:
+            top_score = scored_symbols[0]['score']
+            nth_score = scored_symbols[top_n - 1]['score']
+            score_spread = top_score - nth_score
+            print(f"  Reason: Score spread {score_spread:.4f} < threshold {min_score_spread:.4f}")
+
+    print(f"{'='*120}\n")
+
+    return {
+        'status': 'ok',
+        'total_symbols': len(scored_symbols),
+        'buy_signals': len(buy_signals),
+        'sell_signals': len(sell_signals),
+        'signals': signals,
+        'portfolio': {
+            'total_capital': total_capital,
+            'cash': cash if not buy_signals else remaining_cash if buy_signals else total_capital,
+            'invested': total_invested if buy_signals else 0,
+            'positions': len(buy_signals),
+        }
+    }
     """
     Preview trading signals based on current features (read-only, no trading).
     Uses the same logic as the C# algorithm for consistency.
