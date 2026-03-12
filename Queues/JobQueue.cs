@@ -294,7 +294,19 @@ namespace QuantConnect.Queues
             if (!Config.GetBool("close-automatically"))
             {
                 Console.WriteLine("Engine.Main(): Press any key to continue.");
-                System.Console.Read();
+                if (!System.Console.IsInputRedirected)
+                {
+                    try
+                    {
+                        System.Console.Read();
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+                }
             }
         }
     }

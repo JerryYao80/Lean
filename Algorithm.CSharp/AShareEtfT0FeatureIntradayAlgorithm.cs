@@ -74,6 +74,7 @@ namespace QuantConnect.Algorithm.CSharp
         private string _dailySummaryPath;
         private string _allocationPath;
         private string _actionPlanPath;
+        private bool _useFeatureOnlySubscriptions;
         private DateTime _lastTradeDate;
         private AShareEtfT0FeatureSignalSettings _signalSettings;
 
@@ -118,6 +119,7 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 throw new InvalidOperationException($"Unsupported execution-mode '{_executionMode}'. Only 'synthetic' is currently supported for this daily-bar T+0 workflow.");
             }
+            _useFeatureOnlySubscriptions = LiveMode && _executionMode == "synthetic";
 
             SetStartDate(startDate.Year, startDate.Month, startDate.Day);
             SetEndDate(endDate.Year, endDate.Month, endDate.Day);
@@ -152,21 +154,30 @@ namespace QuantConnect.Algorithm.CSharp
 
                 var market = metadata.Market == "SSE" ? Market.SSE : Market.SZSE;
                 var underlyingSymbol = QuantConnect.Symbol.Create(ticker, SecurityType.Equity, market);
-                if (!HasRequiredLocalData(underlyingSymbol))
+                if (!HasRequiredLocalData(underlyingSymbol, requirePriceData: !_useFeatureOnlySubscriptions))
                 {
                     Log($"Skipping {ticker}: missing local price or feature data");
                     continue;
                 }
 
-                var equity = AddEquity(ticker, Resolution.Daily, market);
-                equity.FeeModel = new AShareETFFeeModel();
-                equity.FillModel = new AShareETFFillModel();
-                equity.BuyingPowerModel = new AShareETFBuyingPowerModel();
-                equity.Session.Size = 2;
+                Symbol tradableSymbol;
+                if (_useFeatureOnlySubscriptions)
+                {
+                    tradableSymbol = underlyingSymbol;
+                }
+                else
+                {
+                    var equity = AddEquity(ticker, Resolution.Daily, market);
+                    equity.FeeModel = new AShareETFFeeModel();
+                    equity.FillModel = new AShareETFFillModel();
+                    equity.BuyingPowerModel = new AShareETFBuyingPowerModel();
+                    equity.Session.Size = 2;
+                    tradableSymbol = equity.Symbol;
+                }
 
-                var featureSecurity = AddData<AShareEtfT0FeatureData>(equity.Symbol, Resolution.Daily, TimeZones.Shanghai, false);
-                _featureToUnderlying[featureSecurity.Symbol] = equity.Symbol;
-                _anchorSymbol ??= equity.Symbol;
+                var featureSecurity = AddData<AShareEtfT0FeatureData>(tradableSymbol, Resolution.Daily, TimeZones.Shanghai, false);
+                _featureToUnderlying[featureSecurity.Symbol] = tradableSymbol;
+                _anchorSymbol ??= tradableSymbol;
             }
 
             if (_anchorSymbol == null)
@@ -175,6 +186,10 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             Log($"AShareEtfT0FeatureIntradayAlgorithm initialized with {_featureToUnderlying.Count} feature subscriptions");
+            if (_useFeatureOnlySubscriptions)
+            {
+                Log("Live synthetic mode active: skipping underlying live equity subscriptions and consuming feature files only.");
+            }
             if (_signalSettings.NavPremiumZ20Weight != 0m)
             {
                 Log($"Conditional NavPremiumZ20 overlay enabled weight={_signalSettings.NavPremiumZ20Weight:F4} orthogonalize={_signalSettings.NavPremiumZ20Orthogonalize} scales={_signalSettings.NavPremiumZ20NormalScale:F2}/{_signalSettings.NavPremiumZ20MediumScale:F2}/{_signalSettings.NavPremiumZ20HighScale:F2}");
@@ -290,7 +305,10 @@ namespace QuantConnect.Algorithm.CSharp
 
             var rankedCandidates = scores
                 .OrderByDescending(pair => pair.Value)
-                .Where(pair => Securities.ContainsKey(pair.Key) && Securities[pair.Key].Price > 0)
+                .Where(pair => dailyFeatures.TryGetValue(pair.Key, out var feature)
+                    && feature != null
+                    && feature.Close.HasValue
+                    && feature.Close.Value > 0m)
                 .ToList();
 
             if (liquidityQuantile > 0m)
@@ -477,7 +495,9 @@ namespace QuantConnect.Algorithm.CSharp
         {
             if (feature?.PreClose > 0)
             {
-                var minimumPriceVariation = Securities[symbol].SymbolProperties.MinimumPriceVariation;
+                var minimumPriceVariation = Securities.ContainsKey(symbol)
+                    ? Securities[symbol].SymbolProperties.MinimumPriceVariation
+                    : AShareETF.DefaultMinimumPriceVariation;
                 return AShareETF.GetUpperPriceLimit(symbol, feature.PreClose.Value, minimumPriceVariation);
             }
 
@@ -486,7 +506,12 @@ namespace QuantConnect.Algorithm.CSharp
                 return feature.Open.Value;
             }
 
-            return Securities[symbol].Price;
+            if (feature?.Close > 0)
+            {
+                return feature.Close.Value;
+            }
+
+            return Securities.ContainsKey(symbol) ? Securities[symbol].Price : 0m;
         }
 
         private int GetOrderQuantity(Symbol symbol, decimal budget, decimal estimatedEntryPrice)
@@ -897,14 +922,24 @@ namespace QuantConnect.Algorithm.CSharp
             public string SelectedSymbols { get; set; }
         }
 
-        private static bool HasRequiredLocalData(Symbol underlyingSymbol)
+        private static bool HasRequiredLocalData(Symbol underlyingSymbol, bool requirePriceData = true)
         {
             var customSymbol = QuantConnect.Symbol.CreateBase(typeof(AShareEtfT0FeatureData), underlyingSymbol, underlyingSymbol.ID.Market);
             var featurePath = AShareEtfT0FeatureData.ResolveSourcePath(customSymbol);
-            var pricePath = Path.Combine(Globals.DataFolder, "equity", underlyingSymbol.ID.Market.ToLowerInvariant(), "daily", $"{underlyingSymbol.Value}.zip");
-            return File.Exists(featurePath)
-                && File.Exists(pricePath)
+            var hasFeatureData = File.Exists(featurePath)
                 && File.ReadLines(featurePath).Skip(1).Take(25).Count() >= 25;
+            if (!hasFeatureData)
+            {
+                return false;
+            }
+
+            if (!requirePriceData)
+            {
+                return true;
+            }
+
+            var pricePath = Path.Combine(Globals.DataFolder, "equity", underlyingSymbol.ID.Market.ToLowerInvariant(), "daily", $"{underlyingSymbol.Value}.zip");
+            return File.Exists(pricePath);
         }
 
         private static bool IsMoneyMarketTicker(string ticker)
