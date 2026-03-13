@@ -15,11 +15,16 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using QuantConnect.Data;
+using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
 using QuantConnect.Logging;
 using QuantConnect.Packets;
+using QuantConnect.Util;
+using Timer = System.Timers.Timer;
 
 namespace QuantConnect.Lean.Engine.DataFeeds.Queues
 {
@@ -28,39 +33,63 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
     /// </summary>
     public class TushareDataQueue : IDataQueueHandler
     {
+        private const int DefaultRefreshIntervalSeconds = 5;
         private TushareDataConverter _converter;
         private string _dataPath;
+        private string _livePriceSnapshotPath;
+        private readonly IDataAggregator _aggregator;
         private readonly HashSet<Symbol> _subscribedSymbols = new HashSet<Symbol>();
+        private readonly Dictionary<Symbol, string> _lastEmissionSignatureBySymbol = new Dictionary<Symbol, string>();
+        private readonly Timer _pollTimer;
         private readonly object _lock = new object();
+        private long _emissionSequence;
+        private int _refreshIntervalSeconds = DefaultRefreshIntervalSeconds;
+        private int _pollCycle;
+        private int _publishInProgress;
+        private bool _disposed;
+
+        public TushareDataQueue()
+            : this(Composer.Instance.GetExportedValueByTypeName<IDataAggregator>(nameof(AggregationManager)))
+        {
+        }
+
+        internal TushareDataQueue(IDataAggregator aggregator)
+        {
+            _aggregator = aggregator;
+            _pollTimer = new Timer
+            {
+                AutoReset = false,
+                Enabled = false,
+                Interval = TimeSpan.FromSeconds(DefaultRefreshIntervalSeconds).TotalMilliseconds
+            };
+            _pollTimer.Elapsed += (_, __) =>
+            {
+                try
+                {
+                    PublishAllLatestBars("timer");
+                }
+                finally
+                {
+                    ScheduleNextPoll();
+                }
+            };
+        }
 
         /// <summary>
         /// Subscribe to the specified configuration
         /// </summary>
         public IEnumerator<BaseData> Subscribe(SubscriptionDataConfig dataConfig, EventHandler newDataAvailableHandler)
         {
+            var enumerator = _aggregator.Add(dataConfig, newDataAvailableHandler);
             lock (_lock)
             {
                 _subscribedSymbols.Add(dataConfig.Symbol);
+                EnsurePolling_NoLock();
             }
 
-            Log.Trace($"TushareDataQueue.Subscribe(): Subscribed to {dataConfig.Symbol}");
-
-            // For live-paper, we simulate real-time data by yielding the latest available data
-            while (true)
-            {
-                var tsCode = ConvertSymbolToTsCode(dataConfig.Symbol);
-                if (!string.IsNullOrEmpty(tsCode))
-                {
-                    var latestBar = _converter.GetLatestData(tsCode);
-                    if (latestBar != null)
-                    {
-                        yield return latestBar;
-                    }
-                }
-
-                // Wait before next update (simulate real-time delay)
-                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(60));
-            }
+            Log.Trace($"TushareDataQueue.Subscribe(): Subscribed to {dataConfig.Symbol} active={GetSubscriptionCount()}");
+            PublishLatestBar(dataConfig.Symbol, "subscribe");
+            return enumerator;
         }
 
         /// <summary>
@@ -68,12 +97,18 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
         /// </summary>
         public void Unsubscribe(SubscriptionDataConfig dataConfig)
         {
+            _aggregator.Remove(dataConfig);
             lock (_lock)
             {
                 _subscribedSymbols.Remove(dataConfig.Symbol);
+                _lastEmissionSignatureBySymbol.Remove(dataConfig.Symbol);
+                if (_subscribedSymbols.Count == 0)
+                {
+                    _pollTimer.Stop();
+                }
             }
 
-            Log.Trace($"TushareDataQueue.Unsubscribe(): Unsubscribed from {dataConfig.Symbol}");
+            Log.Trace($"TushareDataQueue.Unsubscribe(): Unsubscribed from {dataConfig.Symbol} active={GetSubscriptionCount()}");
         }
 
         /// <summary>
@@ -91,8 +126,34 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
                 _dataPath = Globals.DataFolder;
             }
 
-            _converter = new TushareDataConverter(_dataPath);
-            Log.Trace($"TushareDataQueue.SetJob(): Initialized with data path: {_dataPath}");
+            if (job?.Parameters != null && job.Parameters.TryGetValue("live-price-snapshot-file", out var configuredSnapshotPath)
+                && !string.IsNullOrWhiteSpace(configuredSnapshotPath))
+            {
+                _livePriceSnapshotPath = Path.IsPathRooted(configuredSnapshotPath)
+                    ? configuredSnapshotPath
+                    : Path.GetFullPath(Path.Combine(Globals.ResultsDestinationFolder, configuredSnapshotPath));
+            }
+            else
+            {
+                _livePriceSnapshotPath = null;
+            }
+
+            if (job?.Parameters != null && job.Parameters.TryGetValue("live-price-refresh-interval-seconds", out var configuredRefreshInterval)
+                && int.TryParse(configuredRefreshInterval, out var parsedRefreshInterval))
+            {
+                _refreshIntervalSeconds = Math.Max(1, parsedRefreshInterval);
+            }
+            else
+            {
+                _refreshIntervalSeconds = DefaultRefreshIntervalSeconds;
+            }
+
+            _pollTimer.Interval = TimeSpan.FromSeconds(_refreshIntervalSeconds).TotalMilliseconds;
+
+            _converter = new TushareDataConverter(_dataPath, _livePriceSnapshotPath);
+            Log.Trace(
+                $"TushareDataQueue.SetJob(): Initialized with data path: {_dataPath} " +
+                $"live_price_snapshot={_livePriceSnapshotPath ?? "-"} refresh_interval_seconds={_refreshIntervalSeconds}");
         }
 
         /// <summary>
@@ -107,8 +168,129 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
         {
             lock (_lock)
             {
+                _disposed = true;
                 _subscribedSymbols.Clear();
+                _lastEmissionSignatureBySymbol.Clear();
             }
+            _pollTimer.Stop();
+            _pollTimer.DisposeSafely();
+        }
+
+        private int GetSubscriptionCount()
+        {
+            lock (_lock)
+            {
+                return _subscribedSymbols.Count;
+            }
+        }
+
+        private bool UpdateLastEmissionSignature(Symbol symbol, string signature)
+        {
+            lock (_lock)
+            {
+                var changed = !_lastEmissionSignatureBySymbol.TryGetValue(symbol, out var previousSignature)
+                    || !string.Equals(previousSignature, signature, StringComparison.Ordinal);
+                _lastEmissionSignatureBySymbol[symbol] = signature;
+                return changed;
+            }
+        }
+
+        private static string BuildBarSignature(TradeBar tradeBar)
+        {
+            if (tradeBar == null)
+            {
+                return string.Empty;
+            }
+
+            return $"{tradeBar.Open:F4}|{tradeBar.High:F4}|{tradeBar.Low:F4}|{tradeBar.Close:F4}|{tradeBar.Volume:F0}";
+        }
+
+        private void EnsurePolling_NoLock()
+        {
+            if (_disposed || _pollTimer.Enabled || _subscribedSymbols.Count == 0)
+            {
+                return;
+            }
+            _pollTimer.Start();
+        }
+
+        private void ScheduleNextPoll()
+        {
+            lock (_lock)
+            {
+                if (_disposed || _subscribedSymbols.Count == 0)
+                {
+                    return;
+                }
+
+                _pollTimer.Interval = TimeSpan.FromSeconds(_refreshIntervalSeconds).TotalMilliseconds;
+                _pollTimer.Start();
+            }
+        }
+
+        private void PublishAllLatestBars(string reason)
+        {
+            if (Interlocked.Exchange(ref _publishInProgress, 1) == 1)
+            {
+                return;
+            }
+
+            try
+            {
+                List<Symbol> symbols;
+                lock (_lock)
+                {
+                    symbols = _subscribedSymbols.ToList();
+                }
+
+                if (symbols.Count == 0)
+                {
+                    return;
+                }
+
+                var cycle = Interlocked.Increment(ref _pollCycle);
+                Log.Trace($"TushareDataQueue.Refresh(): cycle={cycle} reason={reason} subscribed={symbols.Count}");
+                foreach (var symbol in symbols)
+                {
+                    PublishLatestBar(symbol, reason, cycle);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _publishInProgress, 0);
+            }
+        }
+
+        private void PublishLatestBar(Symbol symbol, string reason, int cycle = 0)
+        {
+            var tsCode = ConvertSymbolToTsCode(symbol);
+            if (string.IsNullOrEmpty(tsCode))
+            {
+                return;
+            }
+
+            var latestBar = _converter.GetLatestData(tsCode);
+            if (latestBar == null)
+            {
+                Log.Trace(
+                    $"TushareDataQueue.Emit(): cycle={cycle} symbol={symbol.Value} ts_code={tsCode} " +
+                    $"source=realtime_snapshot reason={reason} status=missing");
+                return;
+            }
+
+            var changed = UpdateLastEmissionSignature(symbol, BuildBarSignature(latestBar));
+            if (!changed && !string.Equals(reason, "subscribe", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var sequence = Interlocked.Increment(ref _emissionSequence);
+            var clone = new TradeBar(latestBar);
+            Log.Trace(
+                $"TushareDataQueue.Emit(): seq={sequence} cycle={cycle} symbol={symbol.Value} ts_code={tsCode} " +
+                $"source=realtime_snapshot reason={reason} event_time_utc={clone.EndTime:O} close={clone.Close:F4} " +
+                $"volume={clone.Volume:F0} changed={(changed ? 1 : 0)}");
+            _aggregator.Update(clone);
         }
 
         /// <summary>

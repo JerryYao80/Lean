@@ -7,8 +7,10 @@ and provides aggregated quotes for the live feature bridge.
 """
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from math import ceil
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import pandas as pd
 
@@ -17,6 +19,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 import config
+from rate_limiter import get_rate_limiter
 
 
 class TushareRtDailyClient:
@@ -27,17 +30,18 @@ class TushareRtDailyClient:
         token: str | None = None,
         batch_size: int = 25,
         http_url: str | None = None,
+        verbose: bool = True,
+        max_workers: int | None = None,
     ):
         self._token = (token or config.TUSHARE_TOKEN).strip()
         self._batch_size = max(1, int(batch_size))
         self._http_url = (http_url or getattr(config, "TUSHARE_API_URL", "") or "").strip()
-        self._api = None
-        self._api_lock = threading.Lock()
+        self._verbose = bool(verbose)
+        self._max_workers = max(1, int(max_workers or min(8, getattr(config, "MAX_WORKERS", 8))))
+        self._thread_local = threading.local()
+        self._rate_limiter = get_rate_limiter()
 
-    def _get_api(self):
-        if self._api is not None:
-            return self._api
-
+    def _create_api(self):
         import tushare as ts  # type: ignore
 
         api = ts.pro_api(
@@ -48,47 +52,88 @@ class TushareRtDailyClient:
         if self._http_url:
             api._DataApi__http_url = self._http_url
         api._DataApi__timeout = getattr(config, "TUSHARE_TIMEOUT_SECONDS", 15)
-        self._api = api
-        return self._api
+        return api
+
+    def _get_api(self):
+        api = getattr(self._thread_local, "api", None)
+        if api is None:
+            api = self._create_api()
+            self._thread_local.api = api
+        return api
 
     @staticmethod
-    def _is_etf(ts_code: str) -> bool:
-        """Check if ts_code is an ETF based on suffix."""
-        code = str(ts_code).strip().upper()
-        # ETF codes typically end with .SH or .SZ
-        return code.endswith('.SH') or code.endswith('.SZ')
+    def is_etf_code(ts_code: str) -> bool:
+        """Classify whether the symbol should use rt_etf_k instead of rt_k."""
+        text = str(ts_code).strip().upper()
+        if not text or "." not in text:
+            return False
+
+        code, exchange = text.split(".", 1)
+        if exchange == "SH":
+            return code.startswith("5")
+        if exchange == "SZ":
+            return code.startswith(("15", "16", "18"))
+        return False
 
     def _call_rt_etf_k(self, api, ts_code: str):
         """Call rt_etf_k API for ETF daily data."""
-        with self._api_lock:
-            return api.rt_etf_k(ts_code=ts_code)
+        return api.rt_etf_k(ts_code=ts_code)
 
     def _call_rt_k(self, api, ts_code: str):
         """Call rt_k API for stock daily data."""
-        with self._api_lock:
-            return api.rt_k(ts_code=ts_code)
+        return api.rt_k(ts_code=ts_code)
 
-    def _fetch_single_quote(self, api, ts_code: str) -> pd.DataFrame | None:
+    def _fetch_single_quote(self, api, ts_code: str) -> tuple[pd.DataFrame | None, str | None]:
         """Fetch quote for a single symbol, using rt_etf_k for ETF and rt_k for stocks."""
         try:
             # ETF codes must use rt_etf_k
-            if self._is_etf(ts_code):
+            if self.is_etf_code(ts_code):
                 data = self._call_rt_etf_k(api, ts_code)
                 if data is not None and not data.empty:
-                    return data
-                return None
+                    return data, None
+                return None, None
 
             # Stock codes use rt_k
             data = self._call_rt_k(api, ts_code)
             if data is not None and not data.empty:
-                return data
+                return data, None
 
         except Exception as e:
-            print(f"⚠️  Failed to fetch {ts_code}: {e}", file=sys.stderr)
+            return None, str(e)
 
-        return None
+        return None, None
 
-    def fetch_quotes(self, ts_codes: Sequence[str], trade_date: str | None = None) -> pd.DataFrame:
+    @staticmethod
+    def _emit_progress(progress_callback: Callable[[dict], None] | None, **payload) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(payload)
+
+    def _fetch_single_quote_task(self, request_index: int, ts_code: str, trade_date: str | None) -> dict:
+        api_name = "rt_etf_k" if self.is_etf_code(ts_code) else "rt_k"
+        batch_index = (request_index - 1) // self._batch_size + 1
+        try:
+            self._rate_limiter.wait_for_token()
+            api = self._get_api()
+            data, error = self._fetch_single_quote(api, ts_code)
+        except Exception as exc:
+            data, error = None, str(exc)
+        return {
+            "request_index": request_index,
+            "ts_code": ts_code,
+            "trade_date": trade_date,
+            "api_name": api_name,
+            "batch_index": batch_index,
+            "data": data,
+            "error": error,
+        }
+
+    def fetch_quotes(
+        self,
+        ts_codes: Sequence[str],
+        trade_date: str | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> pd.DataFrame:
         """
         Fetch realtime daily quotes for multiple symbols.
 
@@ -100,41 +145,128 @@ class TushareRtDailyClient:
             DataFrame with columns: ts_code, trade_date, open, high, low, close,
                                    pre_close, pct_chg, vol, amount, etc.
         """
-        api = self._get_api()
         frames: list[pd.DataFrame] = []
         symbols = [str(ts_code).strip() for ts_code in ts_codes if str(ts_code).strip()]
 
         if not symbols:
+            self._emit_progress(
+                progress_callback,
+                event="finish",
+                trade_date=trade_date,
+                total=0,
+                received=0,
+                batch_size=self._batch_size,
+                batch_count=0,
+            )
             return pd.DataFrame()
 
-        print(f"\n📊 Fetching daily data for {len(symbols)} symbols...")
+        batch_count = ceil(len(symbols) / self._batch_size)
+        self._emit_progress(
+            progress_callback,
+            event="start",
+            trade_date=trade_date,
+            total=len(symbols),
+            received=0,
+            batch_size=self._batch_size,
+            batch_count=batch_count,
+            max_workers=min(self._max_workers, len(symbols)),
+        )
+        if self._verbose:
+            print(f"\n[rt daily] fetching realtime daily bars for {len(symbols)} symbols")
 
-        for idx, ts_code in enumerate(symbols, 1):
-            print(f"  [{idx}/{len(symbols)}] {ts_code}...", end=" ", flush=True)
+        with ThreadPoolExecutor(max_workers=min(self._max_workers, len(symbols))) as executor:
+            futures = {
+                executor.submit(self._fetch_single_quote_task, idx, ts_code, trade_date): (idx, ts_code)
+                for idx, ts_code in enumerate(symbols, 1)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                result = future.result()
+                data = result["data"]
+                error = result["error"]
+                request_index = int(result["request_index"])
+                ts_code = str(result["ts_code"])
+                api_name = str(result["api_name"])
+                batch_index = int(result["batch_index"])
 
-            data = self._fetch_single_quote(api, ts_code)
-            if data is not None and not data.empty:
-                frames.append(data)
-                # Display key metrics
-                if 'close' in data.columns and 'pct_chg' in data.columns:
-                    close = data['close'].iloc[0] if len(data) > 0 else None
-                    pct_chg = data['pct_chg'].iloc[0] if len(data) > 0 else None
-                    if close is not None and pct_chg is not None:
-                        arrow = "📈" if pct_chg > 0 else "📉" if pct_chg < 0 else "➡️"
-                        print(f"{arrow} ¥{close:.2f} ({pct_chg:+.2f}%)")
-                    else:
-                        print("✅")
+                if data is not None and not data.empty:
+                    frames.append(data)
+                    close = data["close"].iloc[0] if "close" in data.columns and len(data.index) > 0 else None
+                    pct_chg = data["pct_chg"].iloc[0] if "pct_chg" in data.columns and len(data.index) > 0 else None
+                    self._emit_progress(
+                        progress_callback,
+                        event="quote",
+                        trade_date=trade_date,
+                        index=completed,
+                        request_index=request_index,
+                        total=len(symbols),
+                        batch_index=batch_index,
+                        batch_count=batch_count,
+                        ts_code=ts_code,
+                        api_name=api_name,
+                        status="ok",
+                        close=close,
+                        pct_chg=pct_chg,
+                    )
+                    if self._verbose:
+                        close_text = "-" if close is None else f"{float(close):.2f}"
+                        pct_text = "-" if pct_chg is None else f"{float(pct_chg):+.2f}%"
+                        print(
+                            f"  [{completed}/{len(symbols)}] req={request_index} batch={batch_index}/{batch_count} {ts_code} "
+                            f"api={api_name} close={close_text} pct_chg={pct_text}",
+                            flush=True,
+                        )
                 else:
-                    print("✅")
-            else:
-                print("❌ No data")
+                    status = "error" if error else "missing"
+                    self._emit_progress(
+                        progress_callback,
+                        event="quote",
+                        trade_date=trade_date,
+                        index=completed,
+                        request_index=request_index,
+                        total=len(symbols),
+                        batch_index=batch_index,
+                        batch_count=batch_count,
+                        ts_code=ts_code,
+                        api_name=api_name,
+                        status=status,
+                        error=error,
+                    )
+                    if self._verbose:
+                        message = error or "no data"
+                        print(
+                            f"  [{completed}/{len(symbols)}] req={request_index} batch={batch_index}/{batch_count} {ts_code} "
+                            f"api={api_name} status={status} detail={message}",
+                            flush=True,
+                        )
 
         if not frames:
-            print("\n⚠️  No data fetched for any symbol")
+            self._emit_progress(
+                progress_callback,
+                event="finish",
+                trade_date=trade_date,
+                total=len(symbols),
+                received=0,
+                batch_size=self._batch_size,
+                batch_count=batch_count,
+            )
+            if self._verbose:
+                print("\n[rt daily] no realtime bars returned")
             return pd.DataFrame()
 
         combined = pd.concat(frames, ignore_index=True)
-        print(f"\n✅ Successfully fetched {len(combined)} records\n")
+        self._emit_progress(
+            progress_callback,
+            event="finish",
+            trade_date=trade_date,
+            total=len(symbols),
+            received=len(combined.index),
+            batch_size=self._batch_size,
+            batch_count=batch_count,
+        )
+        if self._verbose:
+            print(f"\n[rt daily] completed with {len(combined)} records\n")
 
         # Normalize column names
         combined.columns = [str(col).strip().lower() for col in combined.columns]

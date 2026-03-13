@@ -7,6 +7,7 @@ import csv
 import json
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -70,6 +71,8 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
     return {
         "factor-data-path": resolve_path(parameters.get("factor-data-path"), root / "Data" / "alternative" / "barra-cne5-live-factors", data_base),
         "live-factor-report-file": resolve_path(parameters.get("live-factor-report-file"), root / "Results" / "barra-cne5-live-bridge-report.json", results_base),
+        "live-price-snapshot-file": resolve_path(parameters.get("live-price-snapshot-file"), root / "Results" / "barra-cne5-live-price-snapshot.json", results_base),
+        "daily-quote-archive-path": resolve_path(parameters.get("daily-quote-archive-path"), root / "Data" / "archive" / "barra-cne5-live-daily-quotes", data_base),
         "daily-summary-file": resolve_path(parameters.get("daily-summary-file"), root / "Results" / "barra-cne5-live-daily-summary.csv", results_base),
         "allocation-report-file": resolve_path(parameters.get("allocation-report-file"), root / "Results" / "barra-cne5-live-allocation.csv", results_base),
         "factor-exposure-file": resolve_path(parameters.get("factor-exposure-file"), root / "Results" / "barra-cne5-live-factor-exposure.csv", results_base),
@@ -77,6 +80,13 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "factor-source-mode": str(parameters.get("factor-source-mode") or "random"),
         "random-factor-seed": str(parameters.get("random-factor-seed") or "42"),
         "universe": str(parameters.get("symbols") or parameters.get("universe") or "csi300"),
+        "bridge-ready-timeout-seconds": max(120, safe_int(parameters.get("bridge-ready-timeout-seconds"), 900)),
+        "live-price-poll-interval-seconds": str(
+            parameters.get("live-price-poll-interval-seconds")
+            or parameters.get("live-factor-poll-interval-seconds")
+            or "60"
+        ),
+        "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "60"),
         "rebalance-frequency": str(parameters.get("rebalance-frequency") or "monthly"),
         "top-n": str(parameters.get("top-n") or "30"),
         "target-portfolio-exposure": str(parameters.get("target-portfolio-exposure") or "0.95"),
@@ -120,6 +130,134 @@ def read_latest_csv_row(path: Path) -> dict[str, str] | None:
     }
 
 
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except Exception:
+        return []
+    return [
+        {str(key): ("" if value is None else str(value)) for key, value in row.items()}
+        for row in rows
+    ]
+
+
+def safe_int(value, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_float(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric != numeric:
+        return None
+    return numeric
+
+
+def format_weight_percent(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
+
+
+def build_allocation_preview(path: Path, limit: int = 5) -> str | None:
+    rows = read_csv_rows(path)
+    if not rows:
+        return None
+    trade_dates = [row.get("trade_date", "") for row in rows if row.get("trade_date")]
+    if not trade_dates:
+        return None
+    latest_trade_date = max(trade_dates)
+    latest_rows = [row for row in rows if row.get("trade_date") == latest_trade_date]
+    latest_rows.sort(key=lambda row: safe_float(row.get("weight")) or 0.0, reverse=True)
+    preview = latest_rows[:limit]
+    parts = [
+        f"{row.get('symbol', '-')}={format_weight_percent(row.get('weight'))}"
+        for row in preview
+    ]
+    if not parts:
+        return None
+    return f"[allocation] trade_date={latest_trade_date} top={', '.join(parts)}"
+
+
+def build_exposure_preview(path: Path) -> str | None:
+    row = read_latest_csv_row(path)
+    if not row:
+        return None
+    fields = [
+        ("beta", row.get("beta")),
+        ("momentum", row.get("momentum")),
+        ("size", row.get("size")),
+        ("growth", row.get("growth")),
+        ("liquidity", row.get("liquidity")),
+    ]
+    parts = []
+    for name, value in fields:
+        numeric = safe_float(value)
+        parts.append(f"{name}={numeric:.3f}" if numeric is not None else f"{name}=-")
+    return f"[exposure] trade_date={row.get('trade_date', '-')} {' '.join(parts)}"
+
+
+def build_signal_preview(path: Path, limit: int = 5) -> str | None:
+    rows = read_csv_rows(path)
+    if not rows:
+        return None
+    latest_trade_date = rows[-1].get("trade_date") or "-"
+    latest_rows = [row for row in rows if row.get("trade_date") == latest_trade_date]
+    preview = latest_rows[-limit:]
+    parts = []
+    for row in preview:
+        action = row.get("action", "-")
+        symbol = row.get("symbol", "-")
+        quantity = row.get("quantity", "-")
+        price = safe_float(row.get("price"))
+        score = safe_float(row.get("score"))
+        price_text = "-" if price is None else f"{price:.2f}"
+        score_text = "-" if score is None else f"{score:.4f}"
+        parts.append(f"{action} {symbol} qty={quantity} px={price_text} score={score_text}")
+    if not parts:
+        return None
+    return f"[signals] trade_date={latest_trade_date} {' | '.join(parts)}"
+
+
+def build_market_preview_line(bridge_report: dict | None) -> str | None:
+    if not bridge_report:
+        return None
+    market_preview = bridge_report.get("market_preview")
+    if not isinstance(market_preview, dict):
+        return None
+    live_quote_report = bridge_report.get("live_quote_report")
+    if not isinstance(live_quote_report, dict):
+        live_quote_report = {}
+    rows = list(market_preview.get("rows") or [])
+    if not rows:
+        return None
+    preview_rows = rows[:4]
+    parts = []
+    for row in preview_rows:
+        symbol = row.get("symbol", "-")
+        close = safe_float(row.get("close"))
+        pct_chg = safe_float(row.get("pct_chg"))
+        close_text = "-" if close is None else f"{close:.2f}"
+        pct_text = "-" if pct_chg is None else f"{pct_chg:+.2f}%"
+        parts.append(f"{symbol}@{close_text}({pct_text})")
+    return (
+        f"[market preview] trade_date={market_preview.get('trade_date', '-')} "
+        f"requested={live_quote_report.get('requested_symbol_count', market_preview.get('universe_size', 0))} "
+        f"received={live_quote_report.get('received_quote_count', market_preview.get('received_count', 0))} "
+        f"fetched_at={live_quote_report.get('generated_at', '-')} "
+        f"sample={', '.join(parts)}"
+    )
+
+
 def print_live_plan(config_path: Path, runtime_config: dict) -> None:
     print("=" * 100)
     print("Barra CNE5 Live Paper")
@@ -129,29 +267,41 @@ def print_live_plan(config_path: Path, runtime_config: dict) -> None:
     print("Order model         : synthetic internal execution only; no real Lean orders", flush=True)
     print(f"Factor source       : {runtime_config['factor-source-mode']} (seed={runtime_config['random-factor-seed']})", flush=True)
     print(f"Universe            : {runtime_config['universe']}", flush=True)
+    print(f"Bridge ready timeout: {runtime_config['bridge-ready-timeout-seconds']} seconds", flush=True)
+    print(f"rt_k poll interval  : {runtime_config['live-price-poll-interval-seconds']} seconds", flush=True)
+    print(f"LEAN queue refresh  : {runtime_config['live-price-refresh-interval-seconds']} seconds", flush=True)
     print(f"Rebalance           : {runtime_config['rebalance-frequency']} topN={runtime_config['top-n']} exposure={runtime_config['target-portfolio-exposure']}", flush=True)
     print(f"Tushare data path   : {runtime_config['tushare-data-path']}", flush=True)
     print(f"Factor data path    : {runtime_config['factor-data-path']}", flush=True)
     print(f"Bridge report       : {runtime_config['live-factor-report-file']}", flush=True)
+    print(f"Price snapshot      : {runtime_config['live-price-snapshot-file']}", flush=True)
+    print(f"Quote archive       : {runtime_config['daily-quote-archive-path']}", flush=True)
     print(f"Daily summary       : {runtime_config['daily-summary-file']}", flush=True)
     print(f"Allocation report   : {runtime_config['allocation-report-file']}", flush=True)
     print(f"Exposure report     : {runtime_config['factor-exposure-file']}", flush=True)
     print(f"Trade report        : {runtime_config['trade-report-file']}", flush=True)
+    print("Process flow        : 1) bridge materializes factor snapshot 2) LEAN starts TushareDataQueue 3) queue emits daily-bar flow 4) strategy prints signals and portfolio state", flush=True)
     print("=" * 100)
 
 
 def print_bridge_wait_status(runtime_config: dict) -> None:
     factor_path = Path(runtime_config["factor-data-path"])
     report_path = Path(runtime_config["live-factor-report-file"])
+    snapshot_path = Path(runtime_config["live-price-snapshot-file"])
     bridge_report = load_bridge_report(report_path)
     trade_date = bridge_report.get("trade_date") if bridge_report else "-"
     mode = bridge_report.get("bridge_report", {}).get("mode") if bridge_report else "-"
     written_symbols = bridge_report.get("bridge_report", {}).get("written_symbol_count") if bridge_report else 0
+    live_quotes = bridge_report.get("live_quote_report", {}).get("received_quote_count") if bridge_report else 0
     print(
-        f"[bridge wait] {format_timestamp()} trade_date={trade_date} mode={mode} "
-        f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols}",
+        f"[stage bridge-wait] {format_timestamp()} trade_date={trade_date} mode={mode} "
+        f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols} "
+        f"live_quotes={live_quotes} snapshot_exists={int(snapshot_path.exists())}",
         flush=True,
     )
+    market_preview = build_market_preview_line(bridge_report)
+    if market_preview:
+        print(market_preview, flush=True)
 
 
 def print_runtime_status(runtime_config: dict) -> None:
@@ -162,6 +312,7 @@ def print_runtime_status(runtime_config: dict) -> None:
     bridge_trade_date = bridge_report.get("trade_date") if bridge_report else "-"
     bridge_mode = bridge_report.get("bridge_report", {}).get("mode") if bridge_report else "-"
     written_symbols = bridge_report.get("bridge_report", {}).get("written_symbol_count") if bridge_report else 0
+    received_quotes = bridge_report.get("live_quote_report", {}).get("received_quote_count") if bridge_report else 0
 
     if daily_row:
         print(
@@ -169,6 +320,7 @@ def print_runtime_status(runtime_config: dict) -> None:
             f"equity={daily_row.get('equity', '-')} cash={daily_row.get('cash', '-')} "
             f"holdings={daily_row.get('holdings', '-')} eligible={daily_row.get('eligible_symbols', '-')} "
             f"selected={daily_row.get('selected_symbols', '-')} turnover={daily_row.get('turnover', '-')} "
+            f"live_quotes={received_quotes} "
             f"rebalanced={daily_row.get('rebalanced', '-')}",
             flush=True,
         )
@@ -176,9 +328,106 @@ def print_runtime_status(runtime_config: dict) -> None:
         print(
             f"[live status] {format_timestamp()} no daily summary yet "
             f"bridge_trade_date={bridge_trade_date} mode={bridge_mode} "
-            f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols}",
+            f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols} "
+            f"live_quotes={received_quotes}",
             flush=True,
         )
+
+    market_preview = build_market_preview_line(bridge_report)
+    if market_preview:
+        print(market_preview, flush=True)
+
+    allocation_preview = build_allocation_preview(Path(runtime_config["allocation-report-file"]))
+    if allocation_preview:
+        print(allocation_preview, flush=True)
+
+    exposure_preview = build_exposure_preview(Path(runtime_config["factor-exposure-file"]))
+    if exposure_preview:
+        print(exposure_preview, flush=True)
+
+    signal_preview = build_signal_preview(Path(runtime_config["trade-report-file"]))
+    if signal_preview:
+        print(signal_preview, flush=True)
+
+
+def normalize_lean_output_line(line: str) -> str | None:
+    text = line.strip()
+    if not text:
+        return None
+    if "STATISTICS::" in text:
+        return f"[stats] {text.split('STATISTICS::', 1)[1].strip()}"
+    if "TushareDataQueue." in text or "TushareDataConverter." in text:
+        payload = text.split("TRACE::", 1)[1].strip() if "TRACE::" in text else text
+        return f"[data] {payload}"
+    if "TRACE:: Log:" in text:
+        return f"[algo] {text.split('TRACE:: Log:', 1)[1].strip()}"
+    if "TRACE:: Debug:" in text:
+        message = text.split("TRACE:: Debug:", 1)[1].strip()
+        interesting_tokens = (
+            "AShareBarraCNE5Algorithm initialized",
+            "Execution mode:",
+            "Synthetic execution enabled:",
+            "rebalance",
+            "[signal",
+            "[daily]",
+            "[portfolio]",
+            "Saved Barra outputs",
+            "Runtime Error",
+            "completed in",
+        )
+        return f"[algo] {message}" if any(token in message for token in interesting_tokens) else None
+    if "ERROR::" in text or "Unhandled exception" in text or "RuntimeError" in text:
+        return text
+    return None
+
+
+def normalize_process_output_line(label: str, line: str) -> str | None:
+    text = line.rstrip("\n")
+    if label == "lean":
+        normalized = normalize_lean_output_line(text)
+        return None if normalized is None else f"[lean] {normalized}"
+    text = text.strip()
+    if not text:
+        return None
+    return f"[{label}] {text}"
+
+
+def stream_process_output(process: subprocess.Popen, label: str) -> threading.Thread | None:
+    if process.stdout is None:
+        return None
+
+    def consume_output() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            normalized = normalize_process_output_line(label, line)
+            if normalized:
+                print(normalized, flush=True)
+
+    thread = threading.Thread(target=consume_output, name=f"{label}-output", daemon=True)
+    thread.start()
+    return thread
+
+
+def start_logged_process(command: list[str], cwd: Path, label: str) -> tuple[subprocess.Popen, threading.Thread | None]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    print(f"[process start] name={label} pid={process.pid} cwd={cwd}", flush=True)
+    print(f"[process cmd] {label}: {' '.join(command)}", flush=True)
+    return process, stream_process_output(process, label)
+
+
+def join_output_thread(thread: threading.Thread | None) -> None:
+    if thread is None:
+        return
+    thread.join(timeout=5)
 
 
 def wait_for_process_with_status(
@@ -210,13 +459,18 @@ def wait_for_bridge_ready(
     runtime_config = load_live_paper_runtime_config(config_path)
     factor_data_path = Path(runtime_config["factor-data-path"])
     report_path = Path(runtime_config["live-factor-report-file"])
+    snapshot_path = Path(runtime_config["live-price-snapshot-file"])
     deadline = time.time() + max(1.0, float(timeout_seconds))
     next_status = time.time()
 
     while time.time() < deadline:
         if bridge_process.poll() is not None:
             return False
-        if report_path.exists() and any(factor_data_path.glob("*/*/*.csv")):
+        bridge_report = load_bridge_report(report_path)
+        received_quotes = 0
+        if bridge_report:
+            received_quotes = int(bridge_report.get("live_quote_report", {}).get("received_quote_count") or 0)
+        if report_path.exists() and snapshot_path.exists() and received_quotes > 0 and any(factor_data_path.glob("*/*/*.csv")):
             return True
         now = time.time()
         if now >= next_status:
@@ -224,7 +478,9 @@ def wait_for_bridge_ready(
             next_status = now + max(5.0, float(poll_interval_seconds))
         time.sleep(max(0.1, float(poll_interval_seconds)))
 
-    return report_path.exists() and any(factor_data_path.glob("*/*/*.csv"))
+    bridge_report = load_bridge_report(report_path)
+    received_quotes = int((bridge_report or {}).get("live_quote_report", {}).get("received_quote_count") or 0)
+    return report_path.exists() and snapshot_path.exists() and received_quotes > 0 and any(factor_data_path.glob("*/*/*.csv"))
 
 
 def build_bridge_command(config_path: str | Path | None = None, python_executable: str | None = None) -> list[str]:
@@ -269,7 +525,12 @@ def run_live_paper(
         return 0
 
     if start_bridge and not start_launcher:
-        bridge_process = subprocess.Popen(build_bridge_command(config_path, python_executable), cwd=repo_root())
+        print("[stage 1/1] starting bridge only", flush=True)
+        bridge_process, bridge_thread = start_logged_process(
+            build_bridge_command(config_path, python_executable),
+            repo_root(),
+            "bridge",
+        )
         try:
             return bridge_process.wait()
         except KeyboardInterrupt:
@@ -277,10 +538,12 @@ def run_live_paper(
             return 130
         finally:
             terminate_process(bridge_process)
+            join_output_thread(bridge_thread)
 
     if start_launcher and not start_bridge:
         launcher_command, workdir = build_launcher_command(config_path)
-        launcher_process = subprocess.Popen(launcher_command, cwd=workdir)
+        print("[stage 1/1] starting launcher only", flush=True)
+        launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
         try:
             return wait_for_process_with_status(launcher_process, runtime_config)
         except KeyboardInterrupt:
@@ -288,20 +551,37 @@ def run_live_paper(
             return 130
         finally:
             terminate_process(launcher_process)
+            join_output_thread(launcher_thread)
 
-    bridge_process = subprocess.Popen(build_bridge_command(config_path, python_executable), cwd=repo_root())
+    print("[stage 1/4] starting bridge process", flush=True)
+    bridge_process, bridge_thread = start_logged_process(
+        build_bridge_command(config_path, python_executable),
+        repo_root(),
+        "bridge",
+    )
     launcher_process = None
+    launcher_thread = None
     try:
-        if not wait_for_bridge_ready(config_path, bridge_process):
+        print("[stage 2/4] waiting for bridge to materialize live factor files", flush=True)
+        if not wait_for_bridge_ready(
+            config_path,
+            bridge_process,
+            timeout_seconds=float(runtime_config["bridge-ready-timeout-seconds"]),
+        ):
             if bridge_process.poll() is not None:
                 return bridge_process.returncode
-            print("Timed out waiting for bridge to materialize live factor files.", file=sys.stderr)
+            print(
+                "Timed out waiting for bridge to materialize live factor files. "
+                "Consider increasing `bridge-ready-timeout-seconds` if the realtime universe is large.",
+                file=sys.stderr,
+            )
             return 1
 
         launcher_command, workdir = build_launcher_command(config_path)
-        print("[launcher] starting LEAN live-paper engine", flush=True)
-        launcher_process = subprocess.Popen(launcher_command, cwd=workdir)
+        print("[stage 3/4] bridge ready; starting LEAN live-paper engine", flush=True)
+        launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
         try:
+            print("[stage 4/4] entering live status loop", flush=True)
             return wait_for_process_with_status(launcher_process, runtime_config)
         except KeyboardInterrupt:
             print("[live paper] interrupted by user; stopping launcher and bridge", flush=True)
@@ -309,6 +589,8 @@ def run_live_paper(
     finally:
         terminate_process(launcher_process)
         terminate_process(bridge_process)
+        join_output_thread(launcher_thread)
+        join_output_thread(bridge_thread)
 
 
 def parse_args() -> argparse.Namespace:

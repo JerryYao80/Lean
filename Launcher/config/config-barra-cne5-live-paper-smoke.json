@@ -10,10 +10,14 @@
   "setup-handler": "QuantConnect.Lean.Engine.Setup.BrokerageSetupHandler",
   "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
   "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.LiveTradingDataFeed",
-  "data-queue-handler": ["TushareDataQueue"],
+  "data-queue-handler": [
+    "TushareDataQueue"
+  ],
   "real-time-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
   "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler",
-  "history-provider": ["TushareHistoryProvider"],
+  "history-provider": [
+    "TushareHistoryProvider"
+  ],
   "data-provider": "DefaultDataProvider",
   "results-destination-folder": "../../../Results",
   "log-handler": "ConsoleLogHandler",
@@ -31,7 +35,7 @@
     "live-price-snapshot-file": "barra-cne5-live-price-snapshot.json",
     "daily-quote-archive-path": "archive/barra-cne5-live-daily-quotes",
     "live-price-refresh-interval-seconds": "60",
-    "bridge-ready-timeout-seconds": "900",
+    "bridge-ready-timeout-seconds": "180",
     "universe": "csi300",
     "index-code": "000300.SH",
     "market-symbol": "000300.SH",
@@ -45,7 +49,7 @@
     "initial-cash": "1000000",
     "sync-lean-portfolio": "false",
     "rebalance-frequency": "monthly",
-    "top-n": "30",
+    "top-n": "2",
     "min-score-spread": "0.00",
     "target-portfolio-exposure": "0.95",
     "min-listed-days": "250",
@@ -66,6 +70,7 @@
     "trade-report-file": "barra-cne5-live-trades.csv",
     "daily-summary-file": "barra-cne5-live-daily-summary.csv",
     "allocation-report-file": "barra-cne5-live-allocation.csv",
-    "factor-exposure-file": "barra-cne5-live-factor-exposure.csv"
+    "factor-exposure-file": "barra-cne5-live-factor-exposure.csv",
+    "symbols": "000001.SZ,600000.SH"
   }
 }

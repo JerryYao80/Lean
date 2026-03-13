@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using NodaTime;
@@ -30,9 +31,15 @@ namespace QuantConnect.Data
     public class TushareDataConverter
     {
         private readonly string _dataPath;
+        private readonly string _livePriceSnapshotPath;
         private readonly TushareDataCache _cache;
         private readonly Dictionary<string, List<TradeBar>> _dailyDataBySymbol = new Dictionary<string, List<TradeBar>>();
         private readonly object _dailyDataLock = new object();
+        private readonly Dictionary<string, LatestDailyBarCacheEntry> _latestDailyBarBySymbol = new Dictionary<string, LatestDailyBarCacheEntry>();
+        private readonly object _latestDailyBarLock = new object();
+        private readonly Dictionary<string, TradeBar> _liveSnapshotBarsBySymbol = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _liveSnapshotLock = new object();
+        private DateTime _liveSnapshotLastWriteTimeUtc;
         private static readonly DateTimeZone ChinaTimeZone = DateTimeZoneProviders.Tzdb["Asia/Shanghai"];
 
         /// <summary>
@@ -40,8 +47,14 @@ namespace QuantConnect.Data
         /// </summary>
         /// <param name="dataPath">Path to tushare data directory</param>
         public TushareDataConverter(string dataPath)
+            : this(dataPath, null)
+        {
+        }
+
+        public TushareDataConverter(string dataPath, string livePriceSnapshotPath)
         {
             _dataPath = dataPath;
+            _livePriceSnapshotPath = livePriceSnapshotPath;
             _cache = new TushareDataCache(dataPath);
         }
 
@@ -159,13 +172,128 @@ namespace QuantConnect.Data
         /// </summary>
         public TradeBar GetLatestData(string tsCode)
         {
-            var allBars = GetOrLoadDailyData(tsCode);
-            if (allBars.Count == 0)
+            if (TryGetLatestLiveSnapshotData(tsCode, out var liveBar, out var liveSnapshotAvailable))
+            {
+                return liveBar;
+            }
+            if (liveSnapshotAvailable)
             {
                 return null;
             }
 
-            return new TradeBar(allBars[allBars.Count - 1]);
+            var dailyPath = ResolveDailyDataPath(tsCode);
+            if (dailyPath == null)
+            {
+                Log.Error($"TushareDataConverter.GetLatestData(): Daily data file not found for {tsCode} in fund_daily or daily datasets under {_dataPath}");
+                return null;
+            }
+
+            var lastWriteTimeUtc = File.GetLastWriteTimeUtc(dailyPath);
+            lock (_latestDailyBarLock)
+            {
+                if (_latestDailyBarBySymbol.TryGetValue(tsCode, out var cachedEntry)
+                    && string.Equals(cachedEntry.SourcePath, dailyPath, StringComparison.Ordinal)
+                    && cachedEntry.LastWriteTimeUtc == lastWriteTimeUtc)
+                {
+                    return cachedEntry.Bar == null ? null : new TradeBar(cachedEntry.Bar);
+                }
+            }
+
+            var latestBar = LoadLatestDailyBar(tsCode, dailyPath);
+
+            lock (_latestDailyBarLock)
+            {
+                _latestDailyBarBySymbol[tsCode] = new LatestDailyBarCacheEntry
+                {
+                    SourcePath = dailyPath,
+                    LastWriteTimeUtc = lastWriteTimeUtc,
+                    Bar = latestBar == null ? null : new TradeBar(latestBar)
+                };
+            }
+
+            if (latestBar != null)
+            {
+                Log.Trace($"TushareDataConverter.GetLatestData(): Refreshed {tsCode} trade_date={latestBar.EndTime:yyyyMMdd} close={latestBar.Close:F4} source_write_time_utc={lastWriteTimeUtc:O}");
+            }
+
+            return latestBar == null ? null : new TradeBar(latestBar);
+        }
+
+        private bool TryGetLatestLiveSnapshotData(string tsCode, out TradeBar tradeBar, out bool liveSnapshotAvailable)
+        {
+            tradeBar = null;
+            liveSnapshotAvailable = false;
+            if (string.IsNullOrWhiteSpace(_livePriceSnapshotPath) || !File.Exists(_livePriceSnapshotPath))
+            {
+                return false;
+            }
+
+            liveSnapshotAvailable = true;
+            LoadLiveSnapshotIfNeeded();
+
+            lock (_liveSnapshotLock)
+            {
+                if (_liveSnapshotBarsBySymbol.TryGetValue(tsCode, out var cachedBar))
+                {
+                    tradeBar = new TradeBar(cachedBar);
+                    Log.Trace($"TushareDataConverter.GetLatestData(): Using realtime snapshot for {tsCode} event_time_utc={tradeBar.EndTime:O} close={tradeBar.Close:F4}");
+                    return true;
+                }
+            }
+
+            Log.Trace($"TushareDataConverter.GetLatestData(): Realtime snapshot active but missing {tsCode} in {_livePriceSnapshotPath}");
+            return false;
+        }
+
+        private void LoadLiveSnapshotIfNeeded()
+        {
+            if (string.IsNullOrWhiteSpace(_livePriceSnapshotPath) || !File.Exists(_livePriceSnapshotPath))
+            {
+                return;
+            }
+
+            var lastWriteTimeUtc = File.GetLastWriteTimeUtc(_livePriceSnapshotPath);
+            lock (_liveSnapshotLock)
+            {
+                if (_liveSnapshotLastWriteTimeUtc == lastWriteTimeUtc)
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                var payloadText = File.ReadAllText(_livePriceSnapshotPath);
+                var payload = JsonConvert.DeserializeObject<LivePriceSnapshotPayload>(payloadText) ?? new LivePriceSnapshotPayload();
+                var snapshotBars = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
+                foreach (var row in payload.Quotes ?? new List<LivePriceSnapshotRow>())
+                {
+                    var liveTradeBar = CreateLiveTradeBar(row, payload.GeneratedAt);
+                    if (liveTradeBar == null || string.IsNullOrWhiteSpace(row?.TsCode))
+                    {
+                        continue;
+                    }
+
+                    snapshotBars[row.TsCode] = liveTradeBar;
+                }
+
+                lock (_liveSnapshotLock)
+                {
+                    _liveSnapshotBarsBySymbol.Clear();
+                    foreach (var pair in snapshotBars)
+                    {
+                        _liveSnapshotBarsBySymbol[pair.Key] = pair.Value;
+                    }
+
+                    _liveSnapshotLastWriteTimeUtc = lastWriteTimeUtc;
+                }
+
+                Log.Trace($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Loaded {snapshotBars.Count} realtime bars from {_livePriceSnapshotPath} write_time_utc={lastWriteTimeUtc:O}");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Failed to parse {_livePriceSnapshotPath}: {ex.Message}");
+            }
         }
 
         private List<TradeBar> GetOrLoadDailyData(string tsCode)
@@ -202,11 +330,12 @@ namespace QuantConnect.Data
                 return new List<TradeBar>();
             }
 
+            var escapedPath = EscapePythonString(dailyPath);
             var pythonCode = $@"
 import pandas as pd
 import json
 
-df = pd.read_parquet('{dailyPath}')
+df = pd.read_parquet('{escapedPath}')
 df = df.sort_values('trade_date')
 print(df.to_json(orient='records'))
 ";
@@ -223,27 +352,142 @@ print(df.to_json(orient='records'))
             var result = new List<TradeBar>(data.Count);
             foreach (var row in data)
             {
-                var tradeDate = row["trade_date"].ToString();
-                var time = ConvertTradeDate(tradeDate);
-
-                var tradeBar = new TradeBar
+                var tradeBar = CreateTradeBar(symbol, row);
+                if (tradeBar != null)
                 {
-                    Symbol = symbol,
-                    Time = time.AddDays(-1),
-                    EndTime = time,
-                    Open = Convert.ToDecimal(row["open"]),
-                    High = Convert.ToDecimal(row["high"]),
-                    Low = Convert.ToDecimal(row["low"]),
-                    Close = Convert.ToDecimal(row["close"]),
-                    Volume = ConvertVolume(Convert.ToDecimal(row["vol"])),
-                    Period = TimeSpan.FromDays(1)
-                };
-
-                result.Add(tradeBar);
+                    result.Add(tradeBar);
+                }
             }
 
             Log.Trace($"TushareDataConverter.LoadDailyData(): Cached {result.Count} bars for {tsCode}");
             return result;
+        }
+
+        private TradeBar LoadLatestDailyBar(string tsCode, string dailyPath)
+        {
+            var symbol = ConvertToSymbol(tsCode);
+            var escapedPath = EscapePythonString(dailyPath);
+            var pythonCode = $@"
+import pandas as pd
+import json
+
+df = pd.read_parquet('{escapedPath}')
+if df.empty:
+    print('[]')
+else:
+    df = df.sort_values('trade_date').tail(1)
+    print(df.to_json(orient='records'))
+";
+
+            var output = ExecutePython(pythonCode, $"TushareDataConverter.LoadLatestDailyBar({tsCode})");
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return null;
+            }
+
+            var data = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output)
+                ?? new List<Dictionary<string, object>>();
+            if (data.Count == 0)
+            {
+                return null;
+            }
+
+            return CreateTradeBar(symbol, data[0]);
+        }
+
+        private static TradeBar CreateTradeBar(Symbol symbol, IReadOnlyDictionary<string, object> row)
+        {
+            if (row == null || !row.TryGetValue("trade_date", out var tradeDateValue) || tradeDateValue == null)
+            {
+                return null;
+            }
+
+            var tradeDate = tradeDateValue.ToString();
+            var time = ConvertTradeDate(tradeDate);
+
+            return new TradeBar
+            {
+                Symbol = symbol,
+                Time = time.AddDays(-1),
+                EndTime = time,
+                Open = ConvertToDecimal(row, "open"),
+                High = ConvertToDecimal(row, "high"),
+                Low = ConvertToDecimal(row, "low"),
+                Close = ConvertToDecimal(row, "close"),
+                Volume = ConvertVolume(ConvertToDecimal(row, "vol")),
+                Period = TimeSpan.FromDays(1)
+            };
+        }
+
+        private static TradeBar CreateLiveTradeBar(LivePriceSnapshotRow row, string generatedAt)
+        {
+            if (row == null || string.IsNullOrWhiteSpace(row.TsCode))
+            {
+                return null;
+            }
+
+            var symbol = ConvertToSymbol(row.TsCode);
+            var eventTimeUtc = ParseLiveTimestampUtc(row.FetchTimestamp)
+                ?? ParseLiveTimestampUtc(generatedAt)
+                ?? (!string.IsNullOrWhiteSpace(row.TradeDate) ? ConvertTradeDate(row.TradeDate) : DateTime.UtcNow);
+            var barPeriod = TimeSpan.FromDays(1);
+            var barStartTimeUtc = eventTimeUtc - barPeriod;
+
+            var open = row.Open ?? row.PreClose ?? row.Close ?? row.Price ?? 0m;
+            var close = row.Close ?? row.Price ?? row.Open ?? row.PreClose ?? 0m;
+            var high = row.High ?? Math.Max(open, close);
+            var low = row.Low ?? Math.Min(open, close);
+
+            return new TradeBar
+            {
+                Symbol = symbol,
+                Time = barStartTimeUtc,
+                EndTime = eventTimeUtc,
+                Open = open,
+                High = high,
+                Low = low,
+                Close = close,
+                Volume = ConvertVolume(row.Vol ?? 0m),
+                Period = barPeriod
+            };
+        }
+
+        private static decimal ConvertToDecimal(IReadOnlyDictionary<string, object> row, string fieldName)
+        {
+            if (row == null || !row.TryGetValue(fieldName, out var value) || value == null)
+            {
+                return 0m;
+            }
+
+            return Convert.ToDecimal(value);
+        }
+
+        private static string EscapePythonString(string value)
+        {
+            return value
+                ?.Replace("\\", "\\\\")
+                .Replace("'", "\\'")
+                ?? string.Empty;
+        }
+
+        private static DateTime? ParseLiveTimestampUtc(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedOffset))
+            {
+                return parsedOffset.UtcDateTime;
+            }
+
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedDateTime))
+            {
+                return parsedDateTime;
+            }
+
+            return null;
         }
 
         private string ResolveDailyDataPath(string tsCode)
@@ -301,6 +545,61 @@ print(df.to_json(orient='records'))
             {
                 File.Delete(tempFile);
             }
+        }
+
+        private sealed class LatestDailyBarCacheEntry
+        {
+            public string SourcePath { get; set; }
+            public DateTime LastWriteTimeUtc { get; set; }
+            public TradeBar Bar { get; set; }
+        }
+
+        private sealed class LivePriceSnapshotPayload
+        {
+            [JsonProperty("generated_at")]
+            public string GeneratedAt { get; set; }
+
+            [JsonProperty("quotes")]
+            public List<LivePriceSnapshotRow> Quotes { get; set; } = new List<LivePriceSnapshotRow>();
+        }
+
+        private sealed class LivePriceSnapshotRow
+        {
+            [JsonProperty("ts_code")]
+            public string TsCode { get; set; }
+
+            [JsonProperty("trade_date")]
+            public string TradeDate { get; set; }
+
+            [JsonProperty("open")]
+            public decimal? Open { get; set; }
+
+            [JsonProperty("high")]
+            public decimal? High { get; set; }
+
+            [JsonProperty("low")]
+            public decimal? Low { get; set; }
+
+            [JsonProperty("close")]
+            public decimal? Close { get; set; }
+
+            [JsonProperty("price")]
+            public decimal? Price { get; set; }
+
+            [JsonProperty("pre_close")]
+            public decimal? PreClose { get; set; }
+
+            [JsonProperty("pct_chg")]
+            public decimal? PctChg { get; set; }
+
+            [JsonProperty("vol")]
+            public decimal? Vol { get; set; }
+
+            [JsonProperty("amount")]
+            public decimal? Amount { get; set; }
+
+            [JsonProperty("fetch_timestamp")]
+            public string FetchTimestamp { get; set; }
         }
     }
 }
