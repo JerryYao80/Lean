@@ -32,6 +32,12 @@ namespace QuantConnect.Tests.Configuration
             Assert.That((string)parameters["min-score-spread"], Is.EqualTo("0.50"));
             Assert.That((string)parameters["target-portfolio-exposure"], Is.EqualTo("0.95"));
             Assert.That((string)parameters["minimum-present-factors"], Is.EqualTo("6"));
+            Assert.That((string)parameters["monte-carlo-enabled"], Is.EqualTo("true"));
+            Assert.That((string)parameters["monte-carlo-trials"], Is.EqualTo("500"));
+            Assert.That((string)parameters["monte-carlo-horizon-days"], Is.EqualTo("63"));
+            Assert.That((string)parameters["monte-carlo-block-size"], Is.EqualTo("5"));
+            Assert.That((string)parameters["monte-carlo-seed"], Is.EqualTo("42"));
+            Assert.That((string)parameters["monte-carlo-factor-perturbation-scale"], Is.EqualTo("0.15"));
             Assert.That((string)parameters["trade-report-file"], Does.Contain("barra-cne5-trades.csv"));
             Assert.That((string)parameters["daily-summary-file"], Does.Contain("barra-cne5-daily-summary.csv"));
             Assert.That((string)parameters["allocation-report-file"], Does.Contain("barra-cne5-allocation.csv"));

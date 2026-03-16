@@ -70,6 +70,10 @@ namespace QuantConnect.Algorithm.CSharp
         private int _topN;
         private int _minListedDays;
         private int _maxMissingFactorCount;
+        private int _monteCarloTrials;
+        private int _monteCarloHorizonDays;
+        private int _monteCarloBlockSize;
+        private int _monteCarloSeed;
         private int _syntheticRebalanceCount;
         private DateTime _lastProcessedDate;
         private DateTime _lastSignalEvaluationDate;
@@ -79,7 +83,9 @@ namespace QuantConnect.Algorithm.CSharp
         private DateTime _lastLiveFactorDiskRefreshDate;
         private DateTime _liveSnapshotLastWriteTimeUtc;
         private bool _syncLeanPortfolio;
+        private bool _monteCarloEnabled;
         private decimal _latestScoreSpread;
+        private decimal _monteCarloFactorPerturbationScale;
         private AShareBarraCNE5SignalSettings _signalSettings;
         private Dictionary<Symbol, decimal> _liveSnapshotPricesBySymbol = new();
 
@@ -130,6 +136,12 @@ namespace QuantConnect.Algorithm.CSharp
             _syntheticCash = initialCash;
             _previousEquity = initialCash;
             _syncLeanPortfolio = GetBoolParameter("sync-lean-portfolio", !LiveMode);
+            _monteCarloEnabled = GetBoolParameter("monte-carlo-enabled", false);
+            _monteCarloTrials = GetIntParameter("monte-carlo-trials", 500);
+            _monteCarloHorizonDays = GetIntParameter("monte-carlo-horizon-days", 63);
+            _monteCarloBlockSize = GetIntParameter("monte-carlo-block-size", 5);
+            _monteCarloSeed = GetIntParameter("monte-carlo-seed", 42);
+            _monteCarloFactorPerturbationScale = GetDecimalParameter("monte-carlo-factor-perturbation-scale", 0.15m);
 
             AShareBarraCNE5FactorData.SetBaseDirectory(_factorDataPath);
 
@@ -165,6 +177,12 @@ namespace QuantConnect.Algorithm.CSharp
             Log(
                 $"Synthetic execution enabled: factor path={_factorDataPath} fallback={_fallbackFactorDataPath ?? "-"} rebalance={_rebalanceFrequency} " +
                 $"topN={_topN} exposure={_targetPortfolioExposure:F2} minScoreSpread={_minScoreSpread:F2}");
+            if (_monteCarloEnabled)
+            {
+                Log(
+                    $"Monte Carlo summary enabled: trials={_monteCarloTrials} horizonDays={_monteCarloHorizonDays} " +
+                    $"blockSize={_monteCarloBlockSize} factorScale={_monteCarloFactorPerturbationScale:F2} seed={_monteCarloSeed}");
+            }
             if (LiveMode)
             {
                 Schedule.On(DateRules.EveryDay(_anchorSymbol), TimeRules.Every(TimeSpan.FromMinutes(1)), RunLiveMonitoringCycle);
@@ -1582,6 +1600,83 @@ namespace QuantConnect.Algorithm.CSharp
             SetSummaryStatistic("Synthetic Rebalances", _syntheticRebalanceCount);
             SetSummaryStatistic("Synthetic End Equity", finalEquity.ToString("F2", CultureInfo.InvariantCulture));
             SetSummaryStatistic("Synthetic Net Profit", netProfit.ToString("P2", CultureInfo.InvariantCulture));
+
+            PublishMonteCarloSummaryStatistics();
+        }
+
+        private void PublishMonteCarloSummaryStatistics()
+        {
+            if (!_monteCarloEnabled)
+            {
+                return;
+            }
+
+            var dailyReturns = _dailyRows
+                .Select(row => new StrategyMonteCarloDailyReturn
+                {
+                    TradeDate = ParseTradeDate(row.TradeDate),
+                    NetReturn = (double)row.NetReturn
+                })
+                .Where(row => row.TradeDate != default)
+                .ToList();
+            if (dailyReturns.Count == 0)
+            {
+                Log("Monte Carlo summary skipped: daily summary rows are empty.");
+                return;
+            }
+
+            var factorExposures = _factorExposureRows
+                .Select(row => new StrategyMonteCarloFactorExposure
+                {
+                    TradeDate = ParseTradeDate(row.TradeDate),
+                    Beta = (double)row.Beta,
+                    Momentum = (double)row.Momentum,
+                    Size = (double)row.Size,
+                    EarningsYield = (double)row.EarningsYield,
+                    ResidualVolatility = (double)row.ResidualVolatility,
+                    Growth = (double)row.Growth,
+                    BookToPrice = (double)row.BookToPrice,
+                    Leverage = (double)row.Leverage,
+                    Liquidity = (double)row.Liquidity,
+                    NonLinearSize = (double)row.NonLinearSize
+                })
+                .Where(row => row.TradeDate != default)
+                .ToList();
+
+            var summary = StrategyMonteCarloStatistics.Compute(
+                new StrategyMonteCarloConfig
+                {
+                    Enabled = true,
+                    Trials = _monteCarloTrials,
+                    HorizonDays = _monteCarloHorizonDays,
+                    BlockSize = _monteCarloBlockSize,
+                    Seed = _monteCarloSeed,
+                    FactorPerturbationScale = (double)_monteCarloFactorPerturbationScale
+                },
+                dailyReturns,
+                factorExposures);
+            if (!summary.HasData)
+            {
+                Log("Monte Carlo summary skipped: insufficient inputs to generate simulation paths.");
+                return;
+            }
+
+            foreach (var statistic in summary.ToSummaryStatistics())
+            {
+                SetSummaryStatistic(statistic.Key, statistic.Value);
+            }
+        }
+
+        private static DateTime ParseTradeDate(string value)
+        {
+            return DateTime.TryParseExact(
+                value ?? string.Empty,
+                "yyyyMMdd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsed)
+                ? parsed
+                : default;
         }
 
         private void WriteTradeReport()

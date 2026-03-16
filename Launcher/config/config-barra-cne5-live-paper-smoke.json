@@ -50,6 +50,7 @@
     "end-date": "20261231",
     "initial-cash": "100000",
     "sync-lean-portfolio": "false",
+    "monte-carlo-enabled": "false",
     "rebalance-frequency": "monthly",
     "top-n": "2",
     "min-score-spread": "0.00",

@@ -116,6 +116,58 @@ namespace QuantConnect.Tests.Algorithm
             Assert.AreEqual(0.6m, exposure["momentum"]);
         }
 
+        [Test]
+        public void MonteCarloSummaryProducesFiniteStatistics()
+        {
+            var start = new DateTime(2024, 1, 1);
+            var dailyReturns = Enumerable.Range(0, 24)
+                .Select(index => new StrategyMonteCarloDailyReturn
+                {
+                    TradeDate = start.AddDays(index),
+                    NetReturn = index % 6 == 0 ? -0.018 + index * 0.0001 : 0.006 + index * 0.0002
+                })
+                .ToList();
+            var factorExposures = Enumerable.Range(0, 24)
+                .Select(index => new StrategyMonteCarloFactorExposure
+                {
+                    TradeDate = start.AddDays(index),
+                    Beta = (index % 5 - 2) * 0.10,
+                    Momentum = Math.Sin(index / 3.0),
+                    Size = Math.Cos(index / 4.0),
+                    EarningsYield = 0.20 + index * 0.01,
+                    ResidualVolatility = 0.30 - index * 0.005,
+                    Growth = (index % 4) * 0.08,
+                    BookToPrice = 0.10 + (index % 3) * 0.05,
+                    Leverage = -0.20 + index * 0.01,
+                    Liquidity = 0.05 * (index % 6),
+                    NonLinearSize = -0.15 + index * 0.005
+                })
+                .ToList();
+
+            var summary = StrategyMonteCarloStatistics.Compute(
+                new StrategyMonteCarloConfig
+                {
+                    Enabled = true,
+                    Trials = 40,
+                    HorizonDays = 8,
+                    BlockSize = 3,
+                    Seed = 42,
+                    FactorPerturbationScale = 0.15
+                },
+                dailyReturns,
+                factorExposures);
+
+            Assert.That(summary.HasData, Is.True);
+            Assert.That(summary.Trials, Is.EqualTo(40));
+            Assert.That(summary.HorizonDays, Is.EqualTo(8));
+            Assert.That(summary.BaselineLossProbability, Is.InRange(0d, 1d));
+            Assert.That(summary.CombinedLossProbability, Is.InRange(0d, 1d));
+            Assert.That(double.IsNaN(summary.CombinedMedianReturn), Is.False);
+            Assert.That(double.IsInfinity(summary.CombinedMedianReturn), Is.False);
+            Assert.That(double.IsNaN(summary.CombinedP95Drawdown), Is.False);
+            Assert.That(double.IsInfinity(summary.CombinedP95Drawdown), Is.False);
+        }
+
         private static SubscriptionDataConfig CreateConfig(Symbol underlying)
         {
             var customSymbol = Symbol.CreateBase(typeof(AShareBarraCNE5FactorData), underlying, underlying.ID.Market);
