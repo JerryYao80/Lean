@@ -211,11 +211,6 @@ namespace QuantConnect.Data
                 };
             }
 
-            if (latestBar != null)
-            {
-                Log.Trace($"TushareDataConverter.GetLatestData(): Refreshed {tsCode} trade_date={latestBar.EndTime:yyyyMMdd} close={latestBar.Close:F4} source_write_time_utc={lastWriteTimeUtc:O}");
-            }
-
             return latestBar == null ? null : new TradeBar(latestBar);
         }
 
@@ -236,12 +231,9 @@ namespace QuantConnect.Data
                 if (_liveSnapshotBarsBySymbol.TryGetValue(tsCode, out var cachedBar))
                 {
                     tradeBar = new TradeBar(cachedBar);
-                    Log.Trace($"TushareDataConverter.GetLatestData(): Using realtime snapshot for {tsCode} event_time_utc={tradeBar.EndTime:O} close={tradeBar.Close:F4}");
                     return true;
                 }
             }
-
-            Log.Trace($"TushareDataConverter.GetLatestData(): Realtime snapshot active but missing {tsCode} in {_livePriceSnapshotPath}");
             return false;
         }
 

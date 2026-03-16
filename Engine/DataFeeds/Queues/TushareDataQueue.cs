@@ -249,11 +249,27 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
                 }
 
                 var cycle = Interlocked.Increment(ref _pollCycle);
-                Log.Trace($"TushareDataQueue.Refresh(): cycle={cycle} reason={reason} subscribed={symbols.Count}");
+                var publishedCount = 0;
+                var missingCount = 0;
+                var unchangedCount = 0;
                 foreach (var symbol in symbols)
                 {
-                    PublishLatestBar(symbol, reason, cycle);
+                    switch (PublishLatestBar(symbol, reason, cycle))
+                    {
+                        case PublishStatus.Published:
+                            publishedCount += 1;
+                            break;
+                        case PublishStatus.Missing:
+                            missingCount += 1;
+                            break;
+                        default:
+                            unchangedCount += 1;
+                            break;
+                    }
                 }
+                Log.Trace(
+                    $"TushareDataQueue.Refresh(): cycle={cycle} reason={reason} subscribed={symbols.Count} " +
+                    $"published={publishedCount} missing={missingCount} unchanged={unchangedCount}");
             }
             finally
             {
@@ -261,36 +277,30 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
             }
         }
 
-        private void PublishLatestBar(Symbol symbol, string reason, int cycle = 0)
+        private PublishStatus PublishLatestBar(Symbol symbol, string reason, int cycle = 0)
         {
             var tsCode = ConvertSymbolToTsCode(symbol);
             if (string.IsNullOrEmpty(tsCode))
             {
-                return;
+                return PublishStatus.Unchanged;
             }
 
             var latestBar = _converter.GetLatestData(tsCode);
             if (latestBar == null)
             {
-                Log.Trace(
-                    $"TushareDataQueue.Emit(): cycle={cycle} symbol={symbol.Value} ts_code={tsCode} " +
-                    $"source=realtime_snapshot reason={reason} status=missing");
-                return;
+                return PublishStatus.Missing;
             }
 
             var changed = UpdateLastEmissionSignature(symbol, BuildBarSignature(latestBar));
             if (!changed && !string.Equals(reason, "subscribe", StringComparison.Ordinal))
             {
-                return;
+                return PublishStatus.Unchanged;
             }
 
-            var sequence = Interlocked.Increment(ref _emissionSequence);
             var clone = new TradeBar(latestBar);
-            Log.Trace(
-                $"TushareDataQueue.Emit(): seq={sequence} cycle={cycle} symbol={symbol.Value} ts_code={tsCode} " +
-                $"source=realtime_snapshot reason={reason} event_time_utc={clone.EndTime:O} close={clone.Close:F4} " +
-                $"volume={clone.Volume:F0} changed={(changed ? 1 : 0)}");
+            Interlocked.Increment(ref _emissionSequence);
             _aggregator.Update(clone);
+            return PublishStatus.Published;
         }
 
         /// <summary>
@@ -320,6 +330,13 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
             }
 
             return $"{ticker}.{suffix}";
+        }
+
+        private enum PublishStatus
+        {
+            Unchanged = 0,
+            Missing = 1,
+            Published = 2
         }
     }
 }

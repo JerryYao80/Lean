@@ -34,7 +34,7 @@ PATH_KEYS = {
     "daily-quote-archive-path",
     "external-factor-path",
 }
-DATA_RELATIVE_KEYS = {"factor-data-path", "daily-quote-archive-path"}
+DATA_RELATIVE_KEYS = {"factor-data-path", "daily-quote-archive-path", "external-factor-path"}
 RESULTS_RELATIVE_KEYS = {"live-factor-report-file", "live-price-snapshot-file"}
 
 
@@ -46,6 +46,10 @@ def launcher_workdir() -> Path:
     return repo_root() / "Launcher" / "bin" / "Debug"
 
 
+def default_external_factor_path() -> Path:
+    return repo_root() / "Data" / "alternative" / "barra-cne5-factors"
+
+
 def default_config() -> dict:
     root = repo_root()
     return {
@@ -54,9 +58,9 @@ def default_config() -> dict:
         "live-factor-report-file": str(root / "Results" / "barra-cne5-live-bridge-report.json"),
         "live-price-snapshot-file": str(root / "Results" / "barra-cne5-live-price-snapshot.json"),
         "daily-quote-archive-path": str(root / "Data" / "archive" / "barra-cne5-live-daily-quotes"),
-        "factor-source-mode": "random",
+        "factor-source-mode": "auto",
         "random-factor-seed": 42,
-        "external-factor-path": None,
+        "external-factor-path": str(default_external_factor_path()),
         "universe": "csi300",
         "index-code": "000300.SH",
         "market-symbol": "000300.SH",
@@ -65,7 +69,8 @@ def default_config() -> dict:
         "tushare-http-url": "",
         "tushare-token-env-var": "TUSHARE_TOKEN",
         "live-price-batch-size": 25,
-        "live-price-max-workers": 6,
+        "live-price-max-workers": 1,
+        "live-price-max-requests-per-minute": 40,
         "live-price-poll-interval-seconds": 60,
         "factor-worker-count": "auto",
         "parallel-date-block-size": 1,
@@ -156,7 +161,11 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config = resolve_config_paths(config, repo_root())
     config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 60))
     config["live-price-batch-size"] = max(1, coerce_int(config.get("live-price-batch-size"), 25))
-    config["live-price-max-workers"] = max(1, coerce_int(config.get("live-price-max-workers"), 6))
+    config["live-price-max-workers"] = max(1, coerce_int(config.get("live-price-max-workers"), 1))
+    config["live-price-max-requests-per-minute"] = max(
+        1,
+        coerce_int(config.get("live-price-max-requests-per-minute"), 40),
+    )
     config["live-price-poll-interval-seconds"] = max(
         1,
         coerce_int(config.get("live-price-poll-interval-seconds"), config["live-factor-poll-interval-seconds"]),
@@ -230,6 +239,165 @@ def build_bridge_factor_config(config: dict, trade_date: str) -> dict:
             "progress-interval-files": config.get("progress-interval-files"),
         }
     )
+
+
+def factor_output_columns() -> list[str]:
+    return list(barra_cne5_factor_bridge.OUTPUT_COLUMNS)
+
+
+def resolve_external_factor_seed_path(config: dict) -> Path | None:
+    configured = config.get("external-factor-path")
+    candidate = Path(str(configured)).resolve() if configured else default_external_factor_path().resolve()
+    if not candidate.exists():
+        return None
+
+    output_path = Path(config["factor-data-path"]).resolve()
+    if candidate == output_path:
+        return None
+    return candidate
+
+
+def factor_file_path(root: str | Path, ts_code: str) -> Path:
+    ticker, market = ts_code.split(".")
+    market_directory = "sse" if market == "SH" else "szse"
+    return Path(root) / market_directory / "daily" / f"{ticker}.csv"
+
+
+def load_factor_file(path: Path) -> pd.DataFrame:
+    columns = factor_output_columns()
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+
+    frame = pd.read_csv(path, dtype={"trade_date": str})
+    if frame.empty or "trade_date" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    frame = frame[columns].copy()
+    frame["trade_date"] = frame["trade_date"].astype(str).str.zfill(8)
+    frame = frame.sort_values("trade_date").drop_duplicates(subset=["trade_date"], keep="last")
+    return frame.reset_index(drop=True)
+
+
+def seed_live_factor_history_from_external(config: dict, universe: list[str], trade_date: str) -> dict | None:
+    external_root = resolve_external_factor_seed_path(config)
+    if external_root is None:
+        return None
+
+    output_root = Path(config["factor-data-path"]).resolve()
+    requested = len(universe)
+    if requested <= 0:
+        return {
+            "status": "ok",
+            "mode": "external-seed",
+            "external_factor_path": str(external_root),
+            "output_path": str(output_root),
+            "resolved_symbol_count": 0,
+            "written_symbol_count": 0,
+            "written_symbols": [],
+            "exact_trade_date_symbol_count": 0,
+            "carry_forward_symbol_count": 0,
+            "missing_symbol_count": 0,
+            "missing_symbols": [],
+            "row_count": 0,
+            "snapshots": [{"trade_date": trade_date, "rows": 0, "coverage": 0.0}],
+        }
+
+    print(
+        f"[live bridge][factor seed] source=external path={external_root} "
+        f"trade_date={trade_date} symbols={requested}",
+        flush=True,
+    )
+
+    written_symbols: list[str] = []
+    missing_symbols: list[str] = []
+    exact_trade_date_count = 0
+    carry_forward_count = 0
+    report_every = max(1, int(config.get("progress-interval-symbols", 100) or 100))
+
+    for index, ts_code in enumerate(universe, start=1):
+        source_path = factor_file_path(external_root, ts_code)
+        source_frame = load_factor_file(source_path)
+        if source_frame.empty:
+            missing_symbols.append(ts_code)
+        else:
+            history = source_frame[source_frame["trade_date"] <= trade_date].copy()
+            if history.empty:
+                missing_symbols.append(ts_code)
+            else:
+                if (history["trade_date"] == trade_date).any():
+                    exact_trade_date_count += 1
+                else:
+                    carry_forward_count += 1
+                    carry_row = history.iloc[[-1]].copy()
+                    carry_row.loc[:, "trade_date"] = trade_date
+                    history = pd.concat([history, carry_row], ignore_index=True)
+
+                destination_path = factor_file_path(output_root, ts_code)
+                existing_frame = load_factor_file(destination_path)
+                if existing_frame.empty:
+                    merged = history.copy()
+                else:
+                    merged = pd.concat([existing_frame, history], ignore_index=True)
+                merged["trade_date"] = merged["trade_date"].astype(str).str.zfill(8)
+                merged = merged.sort_values("trade_date").drop_duplicates(subset=["trade_date"], keep="last")
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                merged.to_csv(destination_path, index=False, float_format="%.10f")
+                written_symbols.append(ts_code)
+
+        if index == 1 or index % report_every == 0 or index == requested:
+            print(
+                f"[live bridge][factor seed] {index}/{requested} "
+                f"written={len(written_symbols)} exact={exact_trade_date_count} "
+                f"carry_forward={carry_forward_count} missing={len(missing_symbols)} "
+                f"current={ts_code}",
+                flush=True,
+            )
+
+    coverage = len(written_symbols) / max(requested, 1)
+    report = {
+        "status": "ok" if written_symbols else "no_external_factors",
+        "mode": "external-seed",
+        "external_factor_path": str(external_root),
+        "output_path": str(output_root),
+        "resolved_symbol_count": requested,
+        "written_symbol_count": len(written_symbols),
+        "written_symbols": sorted(written_symbols),
+        "exact_trade_date_symbol_count": exact_trade_date_count,
+        "carry_forward_symbol_count": carry_forward_count,
+        "missing_symbol_count": len(missing_symbols),
+        "missing_symbols": missing_symbols,
+        "row_count": len(written_symbols),
+        "snapshots": [{
+            "trade_date": trade_date,
+            "rows": len(written_symbols),
+            "coverage": round(coverage, 4),
+        }],
+    }
+    print(
+        f"[live bridge][factor seed] completed mode=external-seed "
+        f"written_symbols={len(written_symbols)}/{requested} "
+        f"carry_forward={carry_forward_count} missing={len(missing_symbols)}",
+        flush=True,
+    )
+    return report
+
+
+def materialize_live_factor_snapshot(config: dict, universe: list[str], trade_date: str) -> dict:
+    requested_mode = str(config.get("factor-source-mode") or "auto").strip().lower()
+    if requested_mode in {"auto", "import"}:
+        seed_report = seed_live_factor_history_from_external(config, universe, trade_date)
+        if seed_report and seed_report.get("written_symbol_count", 0) > 0:
+            return seed_report
+        print(
+            f"[live bridge][factor] external seed unavailable; fallback mode={requested_mode}",
+            flush=True,
+        )
+
+    bridge_config = build_bridge_factor_config(config, trade_date)
+    return barra_cne5_factor_bridge.run_factor_bridge(bridge_config)
 
 
 def write_live_bridge_report(
@@ -371,6 +539,158 @@ def normalize_live_quotes(quotes: pd.DataFrame | None, trade_date: str, fetch_ti
     return normalized.loc[:, columns]
 
 
+def load_existing_live_price_snapshot(path: str | Path) -> tuple[dict, pd.DataFrame]:
+    snapshot_path = Path(path)
+    columns = [
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "price",
+        "pre_close",
+        "pct_chg",
+        "vol",
+        "amount",
+        "fetch_timestamp",
+        "source_api",
+    ]
+    empty = pd.DataFrame(columns=columns)
+    if not snapshot_path.exists():
+        return {}, empty
+
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, empty
+    if not isinstance(payload, dict):
+        return {}, empty
+
+    rows = payload.get("quotes")
+    if not isinstance(rows, list) or not rows:
+        return payload, empty
+
+    frame = pd.DataFrame(rows)
+    frame.columns = [str(column).strip().lower() for column in frame.columns]
+    if "ts_code" not in frame.columns:
+        return payload, empty
+
+    frame["ts_code"] = frame["ts_code"].astype(str).str.strip().str.upper()
+    frame = frame[frame["ts_code"] != ""].copy()
+    if frame.empty:
+        return payload, empty
+
+    for field in ["trade_date", "open", "high", "low", "close", "price", "pre_close", "pct_chg", "vol", "amount", "fetch_timestamp", "source_api"]:
+        if field not in frame.columns:
+            frame[field] = None
+
+    frame["trade_date"] = frame["trade_date"].map(
+        lambda value: normalize_trade_date_value(value, str(payload.get("trade_date") or ""))
+    )
+    for field in ["open", "high", "low", "close", "price", "pre_close", "pct_chg", "vol", "amount"]:
+        frame[field] = pd.to_numeric(frame[field], errors="coerce")
+    frame["source_api"] = frame["source_api"].astype(str).where(frame["source_api"].notna(), None)
+    frame["fetch_timestamp"] = frame["fetch_timestamp"].astype(str).where(frame["fetch_timestamp"].notna(), None)
+    frame = frame.drop_duplicates(subset=["ts_code"], keep="last").sort_values("ts_code").reset_index(drop=True)
+    return payload, frame.loc[:, columns]
+
+
+def build_quote_refresh_plan(universe: list[str], refresh_limit: int, previous_snapshot_payload: dict | None, trade_date: str) -> dict:
+    total_symbols = len(universe)
+    if total_symbols <= 0:
+        return {
+            "refresh_symbols": [],
+            "refresh_count": 0,
+            "refresh_start_offset": 0,
+            "refresh_end_offset": 0,
+            "next_refresh_offset": 0,
+            "estimated_full_refresh_minutes": 0,
+        }
+
+    effective_refresh_limit = max(1, min(total_symbols, int(refresh_limit or total_symbols)))
+    start_offset = 0
+    if isinstance(previous_snapshot_payload, dict) and str(previous_snapshot_payload.get("trade_date") or "") == trade_date:
+        try:
+            start_offset = int(previous_snapshot_payload.get("next_refresh_offset") or 0)
+        except (TypeError, ValueError):
+            start_offset = 0
+    start_offset %= total_symbols
+
+    refresh_symbols = [
+        universe[(start_offset + offset) % total_symbols]
+        for offset in range(effective_refresh_limit)
+    ]
+    next_refresh_offset = (start_offset + effective_refresh_limit) % total_symbols
+    estimated_full_refresh_minutes = int((total_symbols + effective_refresh_limit - 1) // effective_refresh_limit)
+    return {
+        "refresh_symbols": refresh_symbols,
+        "refresh_count": len(refresh_symbols),
+        "refresh_start_offset": start_offset,
+        "refresh_end_offset": next_refresh_offset,
+        "next_refresh_offset": next_refresh_offset,
+        "estimated_full_refresh_minutes": estimated_full_refresh_minutes,
+    }
+
+
+def merge_live_quotes(
+    universe: list[str],
+    trade_date: str,
+    previous_quotes: pd.DataFrame | None,
+    fresh_quotes: pd.DataFrame | None,
+) -> pd.DataFrame:
+    columns = [
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "price",
+        "pre_close",
+        "pct_chg",
+        "vol",
+        "amount",
+        "fetch_timestamp",
+        "source_api",
+    ]
+    allowed = {str(ts_code).strip().upper() for ts_code in universe if str(ts_code).strip()}
+    frames: list[pd.DataFrame] = []
+
+    if previous_quotes is not None and not previous_quotes.empty:
+        retained = previous_quotes.copy()
+        for column in columns:
+            if column not in retained.columns:
+                retained[column] = None
+        retained["ts_code"] = retained["ts_code"].astype(str).str.strip().str.upper()
+        retained = retained[
+            retained["ts_code"].isin(allowed)
+            & (retained["trade_date"].astype(str).str.zfill(8) == trade_date)
+        ].copy()
+        if not retained.empty:
+            frames.append(retained.loc[:, columns])
+
+    if fresh_quotes is not None and not fresh_quotes.empty:
+        updated = fresh_quotes.copy()
+        for column in columns:
+            if column not in updated.columns:
+                updated[column] = None
+        updated["ts_code"] = updated["ts_code"].astype(str).str.strip().str.upper()
+        updated = updated[updated["ts_code"].isin(allowed)].copy()
+        if not updated.empty:
+            updated.loc[:, "trade_date"] = trade_date
+            frames.append(updated.loc[:, columns])
+
+    if not frames:
+        return pd.DataFrame(columns=columns)
+
+    merged = pd.concat(frames, ignore_index=True)
+    merged["trade_date"] = merged["trade_date"].astype(str).str.zfill(8)
+    merged = merged.drop_duplicates(subset=["ts_code"], keep="last")
+    merged = merged.sort_values("ts_code").reset_index(drop=True)
+    return merged.loc[:, columns]
+
+
 def archive_live_quotes(config: dict, quotes: pd.DataFrame, trade_date: str) -> str | None:
     if quotes.empty:
         return None
@@ -395,7 +715,13 @@ def archive_live_quotes(config: dict, quotes: pd.DataFrame, trade_date: str) -> 
     return str(archive_file)
 
 
-def write_live_price_snapshot(config: dict, trade_date: str, quotes: pd.DataFrame, fetch_timestamp: datetime) -> dict:
+def write_live_price_snapshot(
+    config: dict,
+    trade_date: str,
+    quotes: pd.DataFrame,
+    fetch_timestamp: datetime,
+    metadata: dict | None = None,
+) -> dict:
     snapshot_path = Path(config["live-price-snapshot-file"])
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -409,6 +735,8 @@ def write_live_price_snapshot(config: dict, trade_date: str, quotes: pd.DataFram
             for row in quotes.to_dict(orient="records")
         ],
     }
+    if metadata:
+        payload.update(metadata)
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
 
@@ -453,69 +781,150 @@ def print_live_market_preview(preview: dict) -> None:
     if not rows:
         print("[live bridge][market] no realtime quotes received in this cycle", flush=True)
         return
-    for index, row in enumerate(rows, start=1):
+
+    asset_types = {}
+    source_apis = {}
+    for row in rows:
+        asset_type = str(row.get("asset_type") or "unknown")
+        source_api = str(row.get("source_api") or "unknown")
+        asset_types[asset_type] = asset_types.get(asset_type, 0) + 1
+        source_apis[source_api] = source_apis.get(source_api, 0) + 1
+    asset_summary = ", ".join(f"{key}={value}" for key, value in sorted(asset_types.items()))
+    source_summary = ", ".join(f"{key}={value}" for key, value in sorted(source_apis.items()))
+    print(
+        f"[live bridge][market] asset_types={asset_summary or '-'} source_apis={source_summary or '-'}",
+        flush=True,
+    )
+
+
+def print_live_quote_flow(trade_date: str, fresh_quotes: pd.DataFrame, snapshot_quotes: pd.DataFrame, refresh_plan: dict) -> None:
+    if snapshot_quotes.empty:
         print(
-            f"[live bridge][daily {index}/{len(rows)}] {row.get('symbol')} "
-            f"type={row.get('asset_type')} status={row.get('status')} "
-            f"close={format_price(row.get('close'))} pct_chg={format_percent(row.get('pct_chg'))} "
-            f"source={row.get('source_api', '-')}"
-            f" turnover={format_percent(row.get('turnover_rate'))} total_mv={format_market_value(row.get('total_mv'))} "
-            f"vol={format_volume(row.get('vol'))}",
+            f"[live bridge][quote flow] trade_date={trade_date} status=empty refreshed=0 snapshot_total=0",
             flush=True,
         )
-
-
-def print_live_quote_flow(trade_date: str, quotes: pd.DataFrame) -> None:
-    if quotes.empty:
-        print(f"[live bridge][quote flow] trade_date={trade_date} status=empty", flush=True)
         return
 
-    total = len(quotes.index)
-    print(f"[live bridge][quote flow] trade_date={trade_date} rows={total}", flush=True)
-    for index, row in enumerate(quotes.to_dict(orient="records"), start=1):
-        print(
-            f"[live bridge][quote {index}/{total}] {row.get('ts_code')} "
-            f"api={row.get('source_api', '-')} close={format_price(row.get('close') or row.get('price'))} "
-            f"pct_chg={format_percent(row.get('pct_chg'))} vol={format_volume(row.get('vol'))} "
-            f"fetch={row.get('fetch_timestamp', '-')}",
-            flush=True,
-        )
+    total = len(snapshot_quotes.index)
+    fresh_count = int(len(fresh_quotes.index)) if fresh_quotes is not None else 0
+    carried_forward = max(0, total - fresh_count)
+    source_counts = snapshot_quotes["source_api"].value_counts(dropna=False).to_dict() if "source_api" in snapshot_quotes.columns else {}
+    source_summary = ", ".join(f"{key}={value}" for key, value in sorted(source_counts.items()))
+    latest_fetch = "-"
+    if "fetch_timestamp" in snapshot_quotes.columns:
+        timestamps = [str(value) for value in snapshot_quotes["fetch_timestamp"].dropna().tolist()]
+        if timestamps:
+            latest_fetch = max(timestamps)
+    print(
+        f"[live bridge][quote flow] trade_date={trade_date} refreshed={fresh_count} "
+        f"carried_forward={carried_forward} snapshot_total={total} "
+        f"refresh_cursor={refresh_plan.get('refresh_start_offset', 0)}->{refresh_plan.get('refresh_end_offset', 0)} "
+        f"full_refresh_est={refresh_plan.get('estimated_full_refresh_minutes', 0)}m "
+        f"apis={source_summary or '-'} latest_fetch={latest_fetch}",
+        flush=True,
+    )
+
+
+def render_progress_bar(completed: int, total: int, width: int = 28) -> str:
+    if total <= 0:
+        return "[" + ("-" * width) + "]"
+    clamped_completed = max(0, min(completed, total))
+    filled = int(round(width * clamped_completed / total))
+    return "[" + ("#" * filled) + ("-" * max(0, width - filled)) + "]"
 
 
 def build_quote_progress_logger() -> callable:
+    state = {
+        "ok": 0,
+        "error": 0,
+        "missing": 0,
+        "last_reported_completed": 0,
+        "total": 0,
+    }
+
     def emit(event: dict) -> None:
         event_type = event.get("event")
         if event_type == "start":
+            state["ok"] = 0
+            state["error"] = 0
+            state["missing"] = 0
+            state["last_reported_completed"] = 0
+            state["total"] = int(event.get("total", 0) or 0)
             print(
                 f"[live bridge][download] stage=start total={event.get('total', 0)} "
+                f"minute_limit={event.get('max_requests_per_minute', 0)} "
+                f"minute_windows={event.get('minute_window_count', 0)} "
+                f"window_size={event.get('minute_window_size', 0)} "
                 f"batch_size={event.get('batch_size', 0)} batches={event.get('batch_count', 0)} "
                 f"workers={event.get('max_workers', 0)} "
                 f"trade_date={event.get('trade_date')}",
                 flush=True,
             )
             return
-        if event_type == "finish":
+        if event_type == "minute_window_start":
             print(
-                f"[live bridge][download] stage=finish total={event.get('total', 0)} "
-                f"received={event.get('received', 0)} trade_date={event.get('trade_date')}",
+                f"[live bridge][download][minute {event.get('minute_window_index', 0)}/{event.get('minute_window_count', 0)}] "
+                f"stage=start requests={event.get('request_start', 0)}-{event.get('request_end', 0)} "
+                f"window_symbols={event.get('minute_window_size', 0)} "
+                f"trade_date={event.get('trade_date')}",
+                flush=True,
+            )
+            return
+        if event_type == "minute_window_wait":
+            print(
+                f"[live bridge][download][minute {event.get('minute_window_index', 0)}/{event.get('minute_window_count', 0)}] "
+                f"stage=wait next_minute={event.get('next_minute_window_index', 0)}/{event.get('minute_window_count', 0)} "
+                f"sleep_seconds={int(round(float(event.get('wait_seconds', 0.0) or 0.0)))}",
+                flush=True,
+            )
+            return
+        if event_type == "finish":
+            total = int(event.get("total", 0) or 0)
+            completed = total
+            print(
+                f"[live bridge][download] stage=finish {render_progress_bar(completed, total)} "
+                f"{completed}/{total} "
+                f"received={event.get('received', 0)} "
+                f"ok={state['ok']} missing={state['missing']} error={state['error']} "
+                f"minute_windows={event.get('minute_window_count', 0)} "
+                f"trade_date={event.get('trade_date')}",
                 flush=True,
             )
             return
         if event_type != "quote":
             return
 
-        close_text = format_price(event.get("close"))
-        pct_text = format_percent(event.get("pct_chg"))
+        status = str(event.get("status") or "").strip().lower()
+        if status == "ok":
+            state["ok"] += 1
+        elif status == "missing":
+            state["missing"] += 1
+        else:
+            state["error"] += 1
+
+        completed = int(event.get("index", 0) or 0)
+        total = int(event.get("total", 0) or 0)
+        step = max(1, total // 20) if total > 0 else 1
+        should_print = (
+            completed == 1
+            or completed >= total
+            or completed - int(state["last_reported_completed"]) >= step
+            or status != "ok"
+        )
+        if not should_print:
+            return
+
+        state["last_reported_completed"] = completed
+        percent = (completed * 100.0 / total) if total > 0 else 0.0
         detail = event.get("error")
         if detail:
             detail = str(detail).replace("\n", " ").strip()
-        suffix = f" detail={detail}" if detail else ""
+        suffix = f" last_error={detail}" if detail and status == "error" else ""
         print(
-            f"[live bridge][download {event.get('index', 0)}/{event.get('total', 0)}] "
-            f"req={event.get('request_index', '-')}"
-            f" batch={event.get('batch_index', 0)}/{event.get('batch_count', 0)} "
-            f"{event.get('ts_code')} api={event.get('api_name')} status={event.get('status')} "
-            f"close={close_text} pct_chg={pct_text}{suffix}",
+            f"[live bridge][download] {render_progress_bar(completed, total)} "
+            f"{completed}/{total} ({percent:5.1f}%) "
+            f"minute={event.get('minute_window_index', 0)}/{event.get('minute_window_count', 0)} "
+            f"ok={state['ok']} missing={state['missing']} error={state['error']}{suffix}",
             flush=True,
         )
 
@@ -538,6 +947,12 @@ def summarize_bridge_report(bridge_report: dict) -> str:
     ]
     if bridge_report.get("resolved_symbol_count") is not None:
         summary_parts.append(f"resolved_symbols={bridge_report.get('resolved_symbol_count')}")
+    if bridge_report.get("exact_trade_date_symbol_count") is not None:
+        summary_parts.append(f"exact={bridge_report.get('exact_trade_date_symbol_count')}")
+    if bridge_report.get("carry_forward_symbol_count") is not None:
+        summary_parts.append(f"carry_forward={bridge_report.get('carry_forward_symbol_count')}")
+    if bridge_report.get("missing_symbol_count") is not None:
+        summary_parts.append(f"missing={bridge_report.get('missing_symbol_count')}")
     if latest_snapshot:
         summary_parts.append(f"rows={latest_snapshot.get('rows', 0)}")
         if latest_snapshot.get("coverage") is not None:
@@ -562,7 +977,8 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
             batch_size=config.get("live-price-batch-size", 25),
             http_url=config.get("tushare-http-url"),
             verbose=False,
-            max_workers=config.get("live-price-max-workers", 6),
+            max_workers=config.get("live-price-max-workers", 1),
+            max_requests_per_minute=config.get("live-price-max-requests-per-minute", 40),
         )
 
     print("=" * 80)
@@ -573,16 +989,21 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
     print("Order mode         : synthetic internal execution only; no real Lean orders", flush=True)
     print(f"Factor source mode: {config.get('factor-source-mode')}", flush=True)
     print(f"Factor output path : {config.get('factor-data-path')}", flush=True)
+    print(f"External factors   : {config.get('external-factor-path') or '(not set)'}", flush=True)
     print(f"Bridge report path : {config.get('live-factor-report-file')}", flush=True)
     print(f"Price snapshot path: {config.get('live-price-snapshot-file')}", flush=True)
     print(f"Quote archive path : {config.get('daily-quote-archive-path')}", flush=True)
     print(f"Universe           : {config.get('symbols') or config.get('universe')}", flush=True)
+    print("Realtime APIs      : stock=rt_k, etf=rt_etf_k", flush=True)
+    print(f"Minute API cap     : {int(config.get('live-price-max-requests-per-minute', 40))} requests/minute", flush=True)
     print(f"rt_k poll interval : {int(poll_interval)} seconds", flush=True)
+    print("Refresh model      : rotating subset refresh each minute with snapshot carry-forward", flush=True)
     print("=" * 80)
 
     try:
         while True:
             cycle += 1
+            cycle_started_at = time.monotonic()
             now = datetime.now(timezone)
             print("-" * 80)
             print(f"[live bridge][cycle {cycle}] {now.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
@@ -591,23 +1012,51 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
 
             loader = BarraCNE5DataLoader(config["tushare-data-path"])
             universe = barra_cne5_factor_bridge.build_universe(loader, config, trade_date)
+            previous_snapshot_payload, previous_snapshot_quotes = load_existing_live_price_snapshot(
+                config["live-price-snapshot-file"]
+            )
+            refresh_plan = build_quote_refresh_plan(
+                universe,
+                int(config.get("live-price-max-requests-per-minute", 40)),
+                previous_snapshot_payload,
+                trade_date,
+            )
+            refresh_symbols = list(refresh_plan["refresh_symbols"])
             print(
                 f"[live bridge][market] stage=download trade_date={trade_date} "
-                f"requested_symbols={len(universe)} batch_size={config.get('live-price-batch-size', 25)}",
+                f"requested_symbols={len(universe)} refresh_symbols={len(refresh_symbols)} "
+                f"carry_forward={max(0, len(universe) - len(refresh_symbols))} "
+                f"full_refresh_est={refresh_plan.get('estimated_full_refresh_minutes', 0)}m "
+                f"batch_size={config.get('live-price-batch-size', 25)}",
                 flush=True,
             )
             raw_quotes = fetch_live_quotes(
                 quote_client,
-                universe,
+                refresh_symbols,
                 trade_date,
                 progress_callback=build_quote_progress_logger(),
             )
             normalized_quotes = normalize_live_quotes(raw_quotes, trade_date, now)
+            merged_quotes = merge_live_quotes(universe, trade_date, previous_snapshot_quotes, normalized_quotes)
 
             archived_file = archive_live_quotes(config, normalized_quotes, trade_date)
-            snapshot_payload = write_live_price_snapshot(config, trade_date, normalized_quotes, now)
-            market_preview = build_live_market_preview(trade_date, len(universe), normalized_quotes)
-            print_live_quote_flow(trade_date, normalized_quotes)
+            snapshot_payload = write_live_price_snapshot(
+                config,
+                trade_date,
+                merged_quotes,
+                now,
+                metadata={
+                    "refreshed_quote_count": int(len(normalized_quotes.index)),
+                    "carried_forward_quote_count": max(0, int(len(merged_quotes.index)) - int(len(normalized_quotes.index))),
+                    "next_refresh_offset": int(refresh_plan.get("next_refresh_offset", 0)),
+                    "refresh_start_offset": int(refresh_plan.get("refresh_start_offset", 0)),
+                    "refresh_end_offset": int(refresh_plan.get("refresh_end_offset", 0)),
+                    "refresh_window_size": int(refresh_plan.get("refresh_count", 0)),
+                    "estimated_full_refresh_minutes": int(refresh_plan.get("estimated_full_refresh_minutes", 0)),
+                },
+            )
+            market_preview = build_live_market_preview(trade_date, len(universe), merged_quotes)
+            print_live_quote_flow(trade_date, normalized_quotes, merged_quotes, refresh_plan)
             print_live_market_preview(market_preview)
 
             if trade_date != last_trade_date or last_bridge_report is None:
@@ -616,8 +1065,7 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                     f"factor_source_mode={config.get('factor-source-mode')}",
                     flush=True,
                 )
-                bridge_config = build_bridge_factor_config(config, trade_date)
-                last_bridge_report = barra_cne5_factor_bridge.run_factor_bridge(bridge_config)
+                last_bridge_report = materialize_live_factor_snapshot(config, universe, trade_date)
                 print(f"[live bridge][factor] {summarize_bridge_report(last_bridge_report)}", flush=True)
                 last_trade_date = trade_date
             else:
@@ -628,12 +1076,20 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                 )
 
             live_quote_report = {
-                "status": "ok" if not normalized_quotes.empty else "no_quotes",
+                "status": "ok" if not merged_quotes.empty else "no_quotes",
                 "requested_symbol_count": len(universe),
-                "received_quote_count": int(len(normalized_quotes.index)),
-                "missing_quote_count": max(0, len(universe) - int(len(normalized_quotes.index))),
-                "source_api_counts": normalized_quotes["source_api"].value_counts(dropna=False).to_dict()
-                if "source_api" in normalized_quotes.columns and not normalized_quotes.empty
+                "received_quote_count": int(len(merged_quotes.index)),
+                "refreshed_quote_count": int(len(normalized_quotes.index)),
+                "carried_forward_quote_count": max(0, int(len(merged_quotes.index)) - int(len(normalized_quotes.index))),
+                "missing_quote_count": max(0, len(universe) - int(len(merged_quotes.index))),
+                "refresh_window_size": int(refresh_plan.get("refresh_count", 0)),
+                "refresh_start_offset": int(refresh_plan.get("refresh_start_offset", 0)),
+                "refresh_end_offset": int(refresh_plan.get("refresh_end_offset", 0)),
+                "next_refresh_offset": int(refresh_plan.get("next_refresh_offset", 0)),
+                "estimated_full_refresh_minutes": int(refresh_plan.get("estimated_full_refresh_minutes", 0)),
+                "max_requests_per_minute": int(config.get("live-price-max-requests-per-minute", 40)),
+                "source_api_counts": merged_quotes["source_api"].value_counts(dropna=False).to_dict()
+                if "source_api" in merged_quotes.columns and not merged_quotes.empty
                 else {},
                 "snapshot_quote_count": int(snapshot_payload.get("quote_count", 0)),
                 "live_price_snapshot_file": config.get("live-price-snapshot-file"),
@@ -650,8 +1106,15 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
 
             if once:
                 return 0
-            print(f"[live bridge][sleep] polling again in {int(max(1.0, poll_interval))} seconds", flush=True)
-            time.sleep(max(1.0, poll_interval))
+            elapsed_seconds = time.monotonic() - cycle_started_at
+            wait_seconds = max(0.0, poll_interval - elapsed_seconds)
+            print(
+                f"[live bridge][sleep] polling again in {int(round(wait_seconds))} seconds "
+                f"(cycle_elapsed={int(round(elapsed_seconds))}s)",
+                flush=True,
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
     except KeyboardInterrupt:
         print("[live bridge] interrupted by user; bridge stopped cleanly", flush=True)
         return 130
@@ -677,6 +1140,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tushare-http-url")
     parser.add_argument("--live-price-batch-size", type=int)
     parser.add_argument("--live-price-max-workers", type=int)
+    parser.add_argument("--live-price-max-requests-per-minute", type=int)
     parser.add_argument("--live-price-poll-interval-seconds", type=int)
     parser.add_argument("--live-factor-poll-interval-seconds", type=int)
     return parser.parse_args()
@@ -701,6 +1165,7 @@ def main() -> int:
         "tushare-http-url": args.tushare_http_url,
         "live-price-batch-size": args.live_price_batch_size,
         "live-price-max-workers": args.live_price_max_workers,
+        "live-price-max-requests-per-minute": args.live_price_max_requests_per_minute,
         "live-price-poll-interval-seconds": args.live_price_poll_interval_seconds,
         "live-factor-poll-interval-seconds": args.live_factor_poll_interval_seconds,
     }

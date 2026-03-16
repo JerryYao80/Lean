@@ -23,8 +23,9 @@
   "parameters": {
     "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
     "factor-data-path": "alternative/barra-cne5-live-factors",
-    "factor-source-mode": "random",
+    "factor-source-mode": "auto",
     "random-factor-seed": "42",
+    "external-factor-path": "alternative/barra-cne5-factors",
     "live-factor-poll-interval-seconds": "60",
     "live-price-poll-interval-seconds": "60",
     "live-factor-report-file": "barra-cne5-live-bridge-report.json",
@@ -38,11 +39,12 @@
     "tushare-token": "",
     "tushare-http-url": "",
     "tushare-token-env-var": "TUSHARE_TOKEN",
+    "live-price-max-requests-per-minute": "40",
     "live-price-batch-size": "25",
-    "live-price-max-workers": "6",
+    "live-price-max-workers": "1",
     "start-date": "20250102",
     "end-date": "20261231",
-    "initial-cash": "1000000",
+    "initial-cash": "100000",
     "sync-lean-portfolio": "false",
     "rebalance-frequency": "monthly",
     "top-n": "30",
@@ -66,6 +68,7 @@
     "trade-report-file": "barra-cne5-live-trades.csv",
     "daily-summary-file": "barra-cne5-live-daily-summary.csv",
     "allocation-report-file": "barra-cne5-live-allocation.csv",
-    "factor-exposure-file": "barra-cne5-live-factor-exposure.csv"
+    "factor-exposure-file": "barra-cne5-live-factor-exposure.csv",
+    "portfolio-state-file": "barra-cne5-live-state.json"
   }
 }

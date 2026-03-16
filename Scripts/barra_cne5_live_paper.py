@@ -70,23 +70,27 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
     root = repo_root()
     return {
         "factor-data-path": resolve_path(parameters.get("factor-data-path"), root / "Data" / "alternative" / "barra-cne5-live-factors", data_base),
+        "external-factor-path": resolve_path(parameters.get("external-factor-path"), root / "Data" / "alternative" / "barra-cne5-factors", data_base),
         "live-factor-report-file": resolve_path(parameters.get("live-factor-report-file"), root / "Results" / "barra-cne5-live-bridge-report.json", results_base),
         "live-price-snapshot-file": resolve_path(parameters.get("live-price-snapshot-file"), root / "Results" / "barra-cne5-live-price-snapshot.json", results_base),
+        "portfolio-state-file": resolve_path(parameters.get("portfolio-state-file"), root / "Results" / "barra-cne5-live-state.json", results_base),
         "daily-quote-archive-path": resolve_path(parameters.get("daily-quote-archive-path"), root / "Data" / "archive" / "barra-cne5-live-daily-quotes", data_base),
         "daily-summary-file": resolve_path(parameters.get("daily-summary-file"), root / "Results" / "barra-cne5-live-daily-summary.csv", results_base),
         "allocation-report-file": resolve_path(parameters.get("allocation-report-file"), root / "Results" / "barra-cne5-live-allocation.csv", results_base),
         "factor-exposure-file": resolve_path(parameters.get("factor-exposure-file"), root / "Results" / "barra-cne5-live-factor-exposure.csv", results_base),
         "trade-report-file": resolve_path(parameters.get("trade-report-file"), root / "Results" / "barra-cne5-live-trades.csv", results_base),
-        "factor-source-mode": str(parameters.get("factor-source-mode") or "random"),
+        "factor-source-mode": str(parameters.get("factor-source-mode") or "auto"),
         "random-factor-seed": str(parameters.get("random-factor-seed") or "42"),
         "universe": str(parameters.get("symbols") or parameters.get("universe") or "csi300"),
         "bridge-ready-timeout-seconds": max(120, safe_int(parameters.get("bridge-ready-timeout-seconds"), 900)),
+        "live-price-max-requests-per-minute": str(parameters.get("live-price-max-requests-per-minute") or "40"),
         "live-price-poll-interval-seconds": str(
             parameters.get("live-price-poll-interval-seconds")
             or parameters.get("live-factor-poll-interval-seconds")
             or "60"
         ),
         "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "60"),
+        "initial-cash": str(parameters.get("initial-cash") or "100000"),
         "rebalance-frequency": str(parameters.get("rebalance-frequency") or "monthly"),
         "top-n": str(parameters.get("top-n") or "30"),
         "target-portfolio-exposure": str(parameters.get("target-portfolio-exposure") or "0.95"),
@@ -114,8 +118,10 @@ def load_bridge_report(report_path: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def read_latest_csv_row(path: Path) -> dict[str, str] | None:
+def read_latest_csv_row(path: Path, modified_after: float | None = None) -> dict[str, str] | None:
     if not path.exists():
+        return None
+    if modified_after is not None and path.stat().st_mtime + 1e-6 < float(modified_after):
         return None
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -130,8 +136,10 @@ def read_latest_csv_row(path: Path) -> dict[str, str] | None:
     }
 
 
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
+def read_csv_rows(path: Path, modified_after: float | None = None) -> list[dict[str, str]]:
     if not path.exists():
+        return []
+    if modified_after is not None and path.stat().st_mtime + 1e-6 < float(modified_after):
         return []
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -168,8 +176,162 @@ def format_weight_percent(value) -> str:
     return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
 
 
-def build_allocation_preview(path: Path, limit: int = 5) -> str | None:
-    rows = read_csv_rows(path)
+def format_decimal(value, digits: int = 4) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{numeric:.{digits}f}"
+
+
+def format_price(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{numeric:.2f}"
+
+
+def format_currency(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"¥{numeric:,.2f}"
+
+
+def format_fraction_percent(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{numeric * 100.0:+.2f}%"
+
+
+def format_direct_percent(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{numeric:+.2f}%"
+
+
+def format_integer(value) -> str:
+    numeric = safe_float(value)
+    return "-" if numeric is None else f"{int(round(numeric)):,d}"
+
+
+def render_ascii_table(columns: list[tuple[str, str]], rows: list[list[str]]) -> str:
+    headers = [header for header, _ in columns]
+    normalized_rows = [[str(cell) for cell in row] for row in rows]
+    widths = [len(header) for header in headers]
+    for row in normalized_rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+
+    def format_row(values: list[str]) -> str:
+        aligned = []
+        for index, value in enumerate(values):
+            _, align = columns[index]
+            width = widths[index]
+            aligned.append(value.rjust(width) if align == "right" else value.ljust(width))
+        return "| " + " | ".join(aligned) + " |"
+
+    border = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+    lines = [border, format_row(headers), border]
+    lines.extend(format_row(row) for row in normalized_rows)
+    lines.append(border)
+    return "\n".join(lines)
+
+
+def load_snapshot_payload(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def build_snapshot_quote_lookup(path: Path) -> tuple[dict, dict[str, dict]]:
+    payload = load_snapshot_payload(path)
+    quotes = payload.get("quotes")
+    if not isinstance(quotes, list):
+        return payload, {}
+
+    lookup: dict[str, dict] = {}
+    for quote in quotes:
+        if not isinstance(quote, dict):
+            continue
+        ts_code = str(quote.get("ts_code") or "").strip()
+        if not ts_code:
+            continue
+        lookup[ts_code] = quote
+    return payload, lookup
+
+
+def resolve_quote_pct_chg(quote: dict | None) -> float | None:
+    if not isinstance(quote, dict):
+        return None
+    pct_chg = safe_float(quote.get("pct_chg"))
+    if pct_chg is not None:
+        return pct_chg
+
+    close = safe_float(quote.get("close"))
+    if close is None:
+        close = safe_float(quote.get("price"))
+    pre_close = safe_float(quote.get("pre_close"))
+    if close is None or pre_close in (None, 0.0):
+        return None
+    return (close / pre_close - 1.0) * 100.0
+
+
+def latest_snapshot_fetch_time(snapshot_payload: dict) -> str:
+    quotes = snapshot_payload.get("quotes")
+    if not isinstance(quotes, list):
+        return "-"
+    candidates = []
+    for quote in quotes:
+        if isinstance(quote, dict) and quote.get("fetch_timestamp"):
+            candidates.append(str(quote["fetch_timestamp"]))
+    return max(candidates) if candidates else "-"
+
+
+def build_account_summary(
+    runtime_config: dict,
+    daily_row: dict[str, str] | None,
+    snapshot_payload: dict,
+    bridge_report: dict | None = None,
+    live_quote_count: int | None = None,
+) -> str | None:
+    if not daily_row:
+        return None
+
+    initial_cash = safe_float(runtime_config.get("initial-cash"))
+    equity = safe_float(daily_row.get("equity"))
+    cash = safe_float(daily_row.get("cash"))
+    invested = safe_float(daily_row.get("invested"))
+    turnover = safe_float(daily_row.get("turnover"))
+    live_quote_report = bridge_report.get("live_quote_report") if isinstance(bridge_report, dict) else {}
+    if not isinstance(live_quote_report, dict):
+        live_quote_report = {}
+    pnl_amount = (equity - initial_cash) if equity is not None and initial_cash is not None else None
+    pnl_ratio = ((equity / initial_cash) - 1.0) if equity is not None and initial_cash not in (None, 0.0) else None
+
+    rows = [
+        ["Initial Cash", format_currency(initial_cash)],
+        ["Current Equity", format_currency(equity)],
+        ["PnL", format_currency(pnl_amount)],
+        ["PnL%", format_fraction_percent(pnl_ratio)],
+        ["Invested", format_currency(invested)],
+        ["Cash", format_currency(cash)],
+        ["Holdings", daily_row.get("holdings", "-")],
+        ["Eligible", daily_row.get("eligible_symbols", "-")],
+        ["Selected", daily_row.get("selected_symbols", "-")],
+        ["Turnover", format_fraction_percent(turnover)],
+        ["Live Quotes", str(live_quote_count if live_quote_count is not None else snapshot_payload.get("quote_count", "-"))],
+        ["Refreshed", str(live_quote_report.get("refreshed_quote_count", "-"))],
+        ["Carry Forward", str(live_quote_report.get("carried_forward_quote_count", "-"))],
+        ["Full Refresh", f"{live_quote_report.get('estimated_full_refresh_minutes', '-')} min"],
+        ["Quote Time", latest_snapshot_fetch_time(snapshot_payload)],
+    ]
+    table = render_ascii_table([("Metric", "left"), ("Value", "right")], rows)
+    return f"[account summary] trade_date={daily_row.get('trade_date', '-')}\n{table}"
+
+
+def build_allocation_preview(
+    path: Path,
+    snapshot_quotes: dict[str, dict] | None = None,
+    limit: int | None = None,
+    modified_after: float | None = None,
+) -> str | None:
+    rows = read_csv_rows(path, modified_after=modified_after)
     if not rows:
         return None
     trade_dates = [row.get("trade_date", "") for row in rows if row.get("trade_date")]
@@ -177,55 +339,125 @@ def build_allocation_preview(path: Path, limit: int = 5) -> str | None:
         return None
     latest_trade_date = max(trade_dates)
     latest_rows = [row for row in rows if row.get("trade_date") == latest_trade_date]
-    latest_rows.sort(key=lambda row: safe_float(row.get("weight")) or 0.0, reverse=True)
-    preview = latest_rows[:limit]
-    parts = [
-        f"{row.get('symbol', '-')}={format_weight_percent(row.get('weight'))}"
+    latest_rows.sort(
+        key=lambda row: (safe_float(row.get("quantity")) or 0.0) * (safe_float(row.get("price")) or 0.0),
+        reverse=True,
+    )
+    preview = latest_rows if limit is None else latest_rows[:limit]
+    table_rows = [
+        [
+            row.get("symbol", "-"),
+            format_integer(row.get("quantity")),
+            format_price(row.get("price")),
+            format_direct_percent(resolve_quote_pct_chg((snapshot_quotes or {}).get(row.get("symbol", "")))),
+            format_currency((safe_float(row.get("quantity")) or 0.0) * (safe_float(row.get("price")) or 0.0)),
+            format_weight_percent(row.get("weight")),
+            format_decimal(row.get("score")),
+        ]
         for row in preview
     ]
-    if not parts:
+    if not table_rows:
         return None
-    return f"[allocation] trade_date={latest_trade_date} top={', '.join(parts)}"
+    table = render_ascii_table(
+        [
+            ("Symbol", "left"),
+            ("Qty", "right"),
+            ("Price", "right"),
+            ("PctChg", "right"),
+            ("Value", "right"),
+            ("Weight", "right"),
+            ("Score", "right"),
+        ],
+        table_rows,
+    )
+    return f"[portfolio allocation] trade_date={latest_trade_date} holdings={len(table_rows)}\n{table}"
 
 
-def build_exposure_preview(path: Path) -> str | None:
-    row = read_latest_csv_row(path)
+def build_exposure_preview(path: Path, modified_after: float | None = None) -> str | None:
+    row = read_latest_csv_row(path, modified_after=modified_after)
     if not row:
         return None
-    fields = [
+    factors = [
         ("beta", row.get("beta")),
         ("momentum", row.get("momentum")),
         ("size", row.get("size")),
+        ("earnyld", row.get("earnyld")),
+        ("resvol", row.get("resvol")),
         ("growth", row.get("growth")),
+        ("btop", row.get("btop")),
+        ("leverage", row.get("leverage")),
         ("liquidity", row.get("liquidity")),
+        ("nlsize", row.get("nlsize")),
     ]
-    parts = []
-    for name, value in fields:
-        numeric = safe_float(value)
-        parts.append(f"{name}={numeric:.3f}" if numeric is not None else f"{name}=-")
-    return f"[exposure] trade_date={row.get('trade_date', '-')} {' '.join(parts)}"
+    table = render_ascii_table(
+        [("Factor", "left"), ("Exposure", "right")],
+        [[name, format_decimal(value, digits=3)] for name, value in factors],
+    )
+    return f"[exposure] trade_date={row.get('trade_date', '-')}\n{table}"
 
 
-def build_signal_preview(path: Path, limit: int = 5) -> str | None:
-    rows = read_csv_rows(path)
+def build_signal_preview(
+    path: Path,
+    snapshot_quotes: dict[str, dict] | None = None,
+    limit: int | None = None,
+    modified_after: float | None = None,
+) -> str | None:
+    rows = read_csv_rows(path, modified_after=modified_after)
     if not rows:
         return None
-    latest_trade_date = rows[-1].get("trade_date") or "-"
+    trade_dates = [row.get("trade_date", "") for row in rows if row.get("trade_date")]
+    if not trade_dates:
+        return None
+    latest_trade_date = max(trade_dates)
     latest_rows = [row for row in rows if row.get("trade_date") == latest_trade_date]
-    preview = latest_rows[-limit:]
-    parts = []
+    latest_rows.sort(
+        key=lambda row: (row.get("executed_at", ""), row.get("symbol", ""), row.get("action", "")),
+    )
+    preview = latest_rows if limit is None else latest_rows[-limit:]
+    table_rows = []
     for row in preview:
         action = row.get("action", "-")
         symbol = row.get("symbol", "-")
-        quantity = row.get("quantity", "-")
-        price = safe_float(row.get("price"))
-        score = safe_float(row.get("score"))
-        price_text = "-" if price is None else f"{price:.2f}"
-        score_text = "-" if score is None else f"{score:.4f}"
-        parts.append(f"{action} {symbol} qty={quantity} px={price_text} score={score_text}")
-    if not parts:
+        quantity = format_integer(row.get("quantity"))
+        before_quantity = format_integer(row.get("quantity_before"))
+        after_quantity = format_integer(row.get("quantity_after"))
+        price_text = format_price(row.get("price"))
+        pct_chg_text = format_direct_percent(resolve_quote_pct_chg((snapshot_quotes or {}).get(symbol)))
+        score_text = format_decimal(row.get("score"))
+        trade_value = safe_float(row.get("trade_value"))
+        fee = safe_float(row.get("fee"))
+        table_rows.append([
+            row.get("executed_at", "-"),
+            action,
+            symbol,
+            quantity,
+            before_quantity,
+            after_quantity,
+            price_text,
+            pct_chg_text,
+            "-" if trade_value is None else f"{trade_value:.2f}",
+            "-" if fee is None else f"{fee:.2f}",
+            score_text,
+        ])
+    if not table_rows:
         return None
-    return f"[signals] trade_date={latest_trade_date} {' | '.join(parts)}"
+    table = render_ascii_table(
+        [
+            ("Time", "left"),
+            ("Action", "left"),
+            ("Symbol", "left"),
+            ("Qty", "right"),
+            ("Before", "right"),
+            ("After", "right"),
+            ("Price", "right"),
+            ("PctChg", "right"),
+            ("Value", "right"),
+            ("Fee", "right"),
+            ("Score", "right"),
+        ],
+        table_rows,
+    )
+    return f"[trade signals] trade_date={latest_trade_date} rows={len(table_rows)}\n{table}"
 
 
 def build_market_preview_line(bridge_report: dict | None) -> str | None:
@@ -241,20 +473,30 @@ def build_market_preview_line(bridge_report: dict | None) -> str | None:
     if not rows:
         return None
     preview_rows = rows[:4]
-    parts = []
-    for row in preview_rows:
-        symbol = row.get("symbol", "-")
-        close = safe_float(row.get("close"))
-        pct_chg = safe_float(row.get("pct_chg"))
-        close_text = "-" if close is None else f"{close:.2f}"
-        pct_text = "-" if pct_chg is None else f"{pct_chg:+.2f}%"
-        parts.append(f"{symbol}@{close_text}({pct_text})")
+    table = render_ascii_table(
+        [
+            ("Symbol", "left"),
+            ("Close", "right"),
+            ("PctChg", "right"),
+            ("Source", "left"),
+        ],
+        [
+            [
+                row.get("symbol", "-"),
+                format_price(row.get("close")),
+                "-" if safe_float(row.get("pct_chg")) is None else f"{safe_float(row.get('pct_chg')):+.2f}%",
+                row.get("source_api", "-"),
+            ]
+            for row in preview_rows
+        ],
+    )
     return (
         f"[market preview] trade_date={market_preview.get('trade_date', '-')} "
         f"requested={live_quote_report.get('requested_symbol_count', market_preview.get('universe_size', 0))} "
         f"received={live_quote_report.get('received_quote_count', market_preview.get('received_count', 0))} "
         f"fetched_at={live_quote_report.get('generated_at', '-')} "
-        f"sample={', '.join(parts)}"
+        f"minute_cap={live_quote_report.get('max_requests_per_minute', '-')}\n"
+        f"{table}"
     )
 
 
@@ -268,19 +510,23 @@ def print_live_plan(config_path: Path, runtime_config: dict) -> None:
     print(f"Factor source       : {runtime_config['factor-source-mode']} (seed={runtime_config['random-factor-seed']})", flush=True)
     print(f"Universe            : {runtime_config['universe']}", flush=True)
     print(f"Bridge ready timeout: {runtime_config['bridge-ready-timeout-seconds']} seconds", flush=True)
+    print(f"Minute API cap      : {runtime_config['live-price-max-requests-per-minute']} requests/minute", flush=True)
     print(f"rt_k poll interval  : {runtime_config['live-price-poll-interval-seconds']} seconds", flush=True)
     print(f"LEAN queue refresh  : {runtime_config['live-price-refresh-interval-seconds']} seconds", flush=True)
+    print(f"Initial cash        : {runtime_config['initial-cash']}", flush=True)
     print(f"Rebalance           : {runtime_config['rebalance-frequency']} topN={runtime_config['top-n']} exposure={runtime_config['target-portfolio-exposure']}", flush=True)
     print(f"Tushare data path   : {runtime_config['tushare-data-path']}", flush=True)
     print(f"Factor data path    : {runtime_config['factor-data-path']}", flush=True)
+    print(f"Historical factors  : {runtime_config['external-factor-path']}", flush=True)
     print(f"Bridge report       : {runtime_config['live-factor-report-file']}", flush=True)
     print(f"Price snapshot      : {runtime_config['live-price-snapshot-file']}", flush=True)
+    print(f"Portfolio state     : {runtime_config['portfolio-state-file']}", flush=True)
     print(f"Quote archive       : {runtime_config['daily-quote-archive-path']}", flush=True)
     print(f"Daily summary       : {runtime_config['daily-summary-file']}", flush=True)
     print(f"Allocation report   : {runtime_config['allocation-report-file']}", flush=True)
     print(f"Exposure report     : {runtime_config['factor-exposure-file']}", flush=True)
     print(f"Trade report        : {runtime_config['trade-report-file']}", flush=True)
-    print("Process flow        : 1) bridge materializes factor snapshot 2) LEAN starts TushareDataQueue 3) queue emits daily-bar flow 4) strategy prints signals and portfolio state", flush=True)
+    print("Process flow        : 1) bridge seeds factors 2) bridge rotates rt_k/rt_etf_k refresh each minute and carries forward the remaining snapshot 3) LEAN consumes the snapshot 4) strategy restores portfolio state, computes signals, and updates cash/holdings", flush=True)
     print("=" * 100)
 
 
@@ -292,35 +538,43 @@ def print_bridge_wait_status(runtime_config: dict) -> None:
     trade_date = bridge_report.get("trade_date") if bridge_report else "-"
     mode = bridge_report.get("bridge_report", {}).get("mode") if bridge_report else "-"
     written_symbols = bridge_report.get("bridge_report", {}).get("written_symbol_count") if bridge_report else 0
+    resolved_symbols = bridge_report.get("bridge_report", {}).get("resolved_symbol_count") if bridge_report else 0
+    requested_quotes = bridge_report.get("live_quote_report", {}).get("requested_symbol_count") if bridge_report else 0
     live_quotes = bridge_report.get("live_quote_report", {}).get("received_quote_count") if bridge_report else 0
     print(
         f"[stage bridge-wait] {format_timestamp()} trade_date={trade_date} mode={mode} "
-        f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols} "
-        f"live_quotes={live_quotes} snapshot_exists={int(snapshot_path.exists())}",
+        f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols}/{resolved_symbols} "
+        f"live_quotes={live_quotes}/{requested_quotes} snapshot_exists={int(snapshot_path.exists())}",
         flush=True,
     )
-    market_preview = build_market_preview_line(bridge_report)
-    if market_preview:
-        print(market_preview, flush=True)
 
 
-def print_runtime_status(runtime_config: dict) -> None:
+def print_runtime_status(runtime_config: dict, output_fresh_since: float | None = None) -> None:
     factor_path = Path(runtime_config["factor-data-path"])
     bridge_report = load_bridge_report(Path(runtime_config["live-factor-report-file"]))
-    daily_row = read_latest_csv_row(Path(runtime_config["daily-summary-file"]))
+    daily_row = read_latest_csv_row(Path(runtime_config["daily-summary-file"]), modified_after=output_fresh_since)
+    snapshot_payload, snapshot_quotes = build_snapshot_quote_lookup(Path(runtime_config["live-price-snapshot-file"]))
 
     bridge_trade_date = bridge_report.get("trade_date") if bridge_report else "-"
     bridge_mode = bridge_report.get("bridge_report", {}).get("mode") if bridge_report else "-"
     written_symbols = bridge_report.get("bridge_report", {}).get("written_symbol_count") if bridge_report else 0
-    received_quotes = bridge_report.get("live_quote_report", {}).get("received_quote_count") if bridge_report else 0
+    live_quote_report = bridge_report.get("live_quote_report", {}) if bridge_report else {}
+    received_quotes = live_quote_report.get("received_quote_count") if isinstance(live_quote_report, dict) else 0
+    refreshed_quotes = live_quote_report.get("refreshed_quote_count") if isinstance(live_quote_report, dict) else 0
+    carried_forward_quotes = live_quote_report.get("carried_forward_quote_count") if isinstance(live_quote_report, dict) else 0
+    full_refresh_minutes = live_quote_report.get("estimated_full_refresh_minutes") if isinstance(live_quote_report, dict) else "-"
+    initial_cash = safe_float(runtime_config.get("initial-cash"))
 
     if daily_row:
+        equity = safe_float(daily_row.get("equity"))
+        pnl_ratio = ((equity / initial_cash) - 1.0) if equity is not None and initial_cash not in (None, 0.0) else None
         print(
             f"[live status] {format_timestamp()} trade_date={daily_row.get('trade_date', '-')} "
-            f"equity={daily_row.get('equity', '-')} cash={daily_row.get('cash', '-')} "
+            f"equity={format_currency(equity)} pnl={format_fraction_percent(pnl_ratio)} cash={format_currency(daily_row.get('cash'))} "
             f"holdings={daily_row.get('holdings', '-')} eligible={daily_row.get('eligible_symbols', '-')} "
-            f"selected={daily_row.get('selected_symbols', '-')} turnover={daily_row.get('turnover', '-')} "
-            f"live_quotes={received_quotes} "
+            f"selected={daily_row.get('selected_symbols', '-')} turnover={format_fraction_percent(daily_row.get('turnover'))} "
+            f"live_quotes={received_quotes} refreshed={refreshed_quotes} carry_forward={carried_forward_quotes} "
+            f"full_refresh≈{full_refresh_minutes}m "
             f"rebalanced={daily_row.get('rebalanced', '-')}",
             flush=True,
         )
@@ -329,25 +583,43 @@ def print_runtime_status(runtime_config: dict) -> None:
             f"[live status] {format_timestamp()} no daily summary yet "
             f"bridge_trade_date={bridge_trade_date} mode={bridge_mode} "
             f"factor_files={count_factor_files(factor_path)} written_symbols={written_symbols} "
-            f"live_quotes={received_quotes}",
+                f"live_quotes={received_quotes}",
             flush=True,
         )
 
-    market_preview = build_market_preview_line(bridge_report)
-    if market_preview:
-        print(market_preview, flush=True)
+    account_summary = build_account_summary(
+        runtime_config,
+        daily_row,
+        snapshot_payload,
+        bridge_report=bridge_report,
+        live_quote_count=received_quotes,
+    )
+    if account_summary:
+        print(account_summary, flush=True)
 
-    allocation_preview = build_allocation_preview(Path(runtime_config["allocation-report-file"]))
+    signal_preview = build_signal_preview(
+        Path(runtime_config["trade-report-file"]),
+        snapshot_quotes=snapshot_quotes,
+        modified_after=output_fresh_since,
+    )
+    if signal_preview:
+        print(signal_preview, flush=True)
+
+    allocation_preview = build_allocation_preview(
+        Path(runtime_config["allocation-report-file"]),
+        snapshot_quotes=snapshot_quotes,
+        limit=None,
+        modified_after=output_fresh_since,
+    )
     if allocation_preview:
         print(allocation_preview, flush=True)
 
-    exposure_preview = build_exposure_preview(Path(runtime_config["factor-exposure-file"]))
+    exposure_preview = build_exposure_preview(
+        Path(runtime_config["factor-exposure-file"]),
+        modified_after=output_fresh_since,
+    )
     if exposure_preview:
         print(exposure_preview, flush=True)
-
-    signal_preview = build_signal_preview(Path(runtime_config["trade-report-file"]))
-    if signal_preview:
-        print(signal_preview, flush=True)
 
 
 def normalize_lean_output_line(line: str) -> str | None:
@@ -356,6 +628,16 @@ def normalize_lean_output_line(line: str) -> str | None:
         return None
     if "STATISTICS::" in text:
         return f"[stats] {text.split('STATISTICS::', 1)[1].strip()}"
+    if "TushareDataConverter.GetLatestData(): Using realtime snapshot" in text:
+        return None
+    if "TushareDataConverter.GetLatestData(): Realtime snapshot active but missing" in text:
+        return None
+    if "TushareDataConverter.GetLatestData(): Refreshed " in text:
+        return None
+    if "TushareDataQueue.Emit():" in text:
+        return None
+    if "TushareDataQueue.Subscribe():" in text:
+        return None
     if "TushareDataQueue." in text or "TushareDataConverter." in text:
         payload = text.split("TRACE::", 1)[1].strip() if "TRACE::" in text else text
         return f"[data] {payload}"
@@ -367,6 +649,8 @@ def normalize_lean_output_line(line: str) -> str | None:
             "AShareBarraCNE5Algorithm initialized",
             "Execution mode:",
             "Synthetic execution enabled:",
+            "[bootstrap]",
+            "[factor sync]",
             "rebalance",
             "[signal",
             "[daily]",
@@ -433,19 +717,25 @@ def join_output_thread(thread: threading.Thread | None) -> None:
 def wait_for_process_with_status(
     process: subprocess.Popen,
     runtime_config: dict,
-    status_interval_seconds: float = 15.0,
+    status_interval_seconds: float | None = None,
+    output_fresh_since: float | None = None,
 ) -> int:
-    next_status = time.time() + max(1.0, float(status_interval_seconds))
+    interval_seconds = max(
+        5.0,
+        float(status_interval_seconds or runtime_config.get("live-price-poll-interval-seconds") or 60),
+    )
+    print_runtime_status(runtime_config, output_fresh_since=output_fresh_since)
+    next_status = time.time() + interval_seconds
     while True:
         returncode = process.poll()
         if returncode is not None:
-            print_runtime_status(runtime_config)
+            print_runtime_status(runtime_config, output_fresh_since=output_fresh_since)
             return returncode
 
         now = time.time()
         if now >= next_status:
-            print_runtime_status(runtime_config)
-            next_status = now + max(1.0, float(status_interval_seconds))
+            print_runtime_status(runtime_config, output_fresh_since=output_fresh_since)
+            next_status = now + interval_seconds
 
         time.sleep(1.0)
 
@@ -453,6 +743,7 @@ def wait_for_process_with_status(
 def wait_for_bridge_ready(
     config_path: str | Path | None,
     bridge_process: subprocess.Popen,
+    bridge_started_at: float,
     timeout_seconds: float = 120.0,
     poll_interval_seconds: float = 1.0,
 ) -> bool:
@@ -460,17 +751,42 @@ def wait_for_bridge_ready(
     factor_data_path = Path(runtime_config["factor-data-path"])
     report_path = Path(runtime_config["live-factor-report-file"])
     snapshot_path = Path(runtime_config["live-price-snapshot-file"])
+    min_quote_coverage = 0.10
+    min_factor_coverage = 0.90
     deadline = time.time() + max(1.0, float(timeout_seconds))
     next_status = time.time()
+
+    def is_ready(report: dict | None) -> bool:
+        if not report_path.exists() or not snapshot_path.exists() or report is None:
+            return False
+        if report_path.stat().st_mtime + 1e-6 < bridge_started_at:
+            return False
+        if snapshot_path.stat().st_mtime + 1e-6 < bridge_started_at:
+            return False
+
+        live_quote_report = report.get("live_quote_report")
+        bridge_payload = report.get("bridge_report")
+        if not isinstance(live_quote_report, dict) or not isinstance(bridge_payload, dict):
+            return False
+
+        requested_quotes = int(live_quote_report.get("requested_symbol_count") or 0)
+        received_quotes = int(live_quote_report.get("received_quote_count") or 0)
+        resolved_symbols = int(bridge_payload.get("resolved_symbol_count") or 0)
+        written_symbols = int(bridge_payload.get("written_symbol_count") or 0)
+
+        quote_coverage = (received_quotes / requested_quotes) if requested_quotes > 0 else 0.0
+        factor_coverage = (written_symbols / resolved_symbols) if resolved_symbols > 0 else 0.0
+        if quote_coverage < min_quote_coverage:
+            return False
+        if factor_coverage < min_factor_coverage:
+            return False
+        return count_factor_files(factor_data_path) >= max(1, written_symbols)
 
     while time.time() < deadline:
         if bridge_process.poll() is not None:
             return False
         bridge_report = load_bridge_report(report_path)
-        received_quotes = 0
-        if bridge_report:
-            received_quotes = int(bridge_report.get("live_quote_report", {}).get("received_quote_count") or 0)
-        if report_path.exists() and snapshot_path.exists() and received_quotes > 0 and any(factor_data_path.glob("*/*/*.csv")):
+        if is_ready(bridge_report):
             return True
         now = time.time()
         if now >= next_status:
@@ -479,8 +795,7 @@ def wait_for_bridge_ready(
         time.sleep(max(0.1, float(poll_interval_seconds)))
 
     bridge_report = load_bridge_report(report_path)
-    received_quotes = int((bridge_report or {}).get("live_quote_report", {}).get("received_quote_count") or 0)
-    return report_path.exists() and snapshot_path.exists() and received_quotes > 0 and any(factor_data_path.glob("*/*/*.csv"))
+    return is_ready(bridge_report)
 
 
 def build_bridge_command(config_path: str | Path | None = None, python_executable: str | None = None) -> list[str]:
@@ -543,9 +858,14 @@ def run_live_paper(
     if start_launcher and not start_bridge:
         launcher_command, workdir = build_launcher_command(config_path)
         print("[stage 1/1] starting launcher only", flush=True)
+        launcher_started_at = time.time()
         launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
         try:
-            return wait_for_process_with_status(launcher_process, runtime_config)
+            return wait_for_process_with_status(
+                launcher_process,
+                runtime_config,
+                output_fresh_since=launcher_started_at,
+            )
         except KeyboardInterrupt:
             print("[live paper] interrupted by user; stopping launcher", flush=True)
             return 130
@@ -554,6 +874,7 @@ def run_live_paper(
             join_output_thread(launcher_thread)
 
     print("[stage 1/4] starting bridge process", flush=True)
+    bridge_started_at = time.time()
     bridge_process, bridge_thread = start_logged_process(
         build_bridge_command(config_path, python_executable),
         repo_root(),
@@ -566,6 +887,7 @@ def run_live_paper(
         if not wait_for_bridge_ready(
             config_path,
             bridge_process,
+            bridge_started_at=bridge_started_at,
             timeout_seconds=float(runtime_config["bridge-ready-timeout-seconds"]),
         ):
             if bridge_process.poll() is not None:
@@ -579,10 +901,15 @@ def run_live_paper(
 
         launcher_command, workdir = build_launcher_command(config_path)
         print("[stage 3/4] bridge ready; starting LEAN live-paper engine", flush=True)
+        launcher_started_at = time.time()
         launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
         try:
             print("[stage 4/4] entering live status loop", flush=True)
-            return wait_for_process_with_status(launcher_process, runtime_config)
+            return wait_for_process_with_status(
+                launcher_process,
+                runtime_config,
+                output_fresh_since=launcher_started_at,
+            )
         except KeyboardInterrupt:
             print("[live paper] interrupted by user; stopping launcher and bridge", flush=True)
             return 130

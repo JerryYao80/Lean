@@ -52,11 +52,13 @@ namespace QuantConnect.Algorithm.CSharp
 
         private Symbol _anchorSymbol;
         private string _factorDataPath;
+        private string _fallbackFactorDataPath;
         private string _livePriceSnapshotPath;
         private string _tradeReportPath;
         private string _dailySummaryPath;
         private string _allocationReportPath;
         private string _factorExposureReportPath;
+        private string _portfolioStatePath;
         private string _rebalanceFrequency;
         private decimal _initialSyntheticCash;
         private decimal _syntheticCash;
@@ -88,11 +90,13 @@ namespace QuantConnect.Algorithm.CSharp
             var initialCash = GetDecimalParameter("initial-cash", 1000000m);
 
             _factorDataPath = ResolveFactorDataPath(GetParameter("factor-data-path"));
+            _fallbackFactorDataPath = ResolveOptionalFactorDataPath(GetParameter("external-factor-path"));
             _livePriceSnapshotPath = ResolveOutputPath(GetParameter("live-price-snapshot-file"), "barra-cne5-live-price-snapshot.json");
             _tradeReportPath = ResolveOutputPath(GetParameter("trade-report-file"), "barra-cne5-trades.csv");
             _dailySummaryPath = ResolveOutputPath(GetParameter("daily-summary-file"), "barra-cne5-daily-summary.csv");
             _allocationReportPath = ResolveOutputPath(GetParameter("allocation-report-file"), "barra-cne5-allocation.csv");
             _factorExposureReportPath = ResolveOutputPath(GetParameter("factor-exposure-file"), "barra-cne5-factor-exposure.csv");
+            _portfolioStatePath = ResolveOutputPath(GetParameter("portfolio-state-file"), "barra-cne5-live-state.json");
             _rebalanceFrequency = (GetParameter("rebalance-frequency") ?? "monthly").Trim().ToLowerInvariant();
             _topN = GetIntParameter("top-n", 30);
             _minScoreSpread = GetDecimalParameter("min-score-spread", 0.5m);
@@ -158,7 +162,9 @@ namespace QuantConnect.Algorithm.CSharp
             Log(_syncLeanPortfolio
                 ? "Execution mode: synthetic portfolio with Lean portfolio sync for backtest statistics."
                 : "Execution mode: synthetic-only portfolio; no Lean orders or Lean portfolio sync.");
-            Log($"Synthetic execution enabled: factor path={_factorDataPath} rebalance={_rebalanceFrequency} topN={_topN} exposure={_targetPortfolioExposure:F2}");
+            Log(
+                $"Synthetic execution enabled: factor path={_factorDataPath} fallback={_fallbackFactorDataPath ?? "-"} rebalance={_rebalanceFrequency} " +
+                $"topN={_topN} exposure={_targetPortfolioExposure:F2} minScoreSpread={_minScoreSpread:F2}");
             if (LiveMode)
             {
                 Schedule.On(DateRules.EveryDay(_anchorSymbol), TimeRules.Every(TimeSpan.FromMinutes(1)), RunLiveMonitoringCycle);
@@ -167,6 +173,10 @@ namespace QuantConnect.Algorithm.CSharp
             SetRuntimeStatistic("Exec Mode", _syncLeanPortfolio ? "synthetic+sync" : "synthetic");
             SetRuntimeStatistic("Syn Equity", _syntheticCash.ToString("F0", CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Holdings", "0");
+            if (LiveMode)
+            {
+                BootstrapLiveSessionState();
+            }
         }
 
         public override void OnData(Slice slice)
@@ -244,6 +254,24 @@ namespace QuantConnect.Algorithm.CSharp
             ProcessSession(sessionDate);
         }
 
+        private void BootstrapLiveSessionState()
+        {
+            RestoreSyntheticPortfolioState();
+            var bootstrapDate = ResolveBootstrapSessionDate();
+            if (bootstrapDate == default)
+            {
+                Log("[bootstrap] skipped: unable to resolve live trade date from snapshot or runtime clock.");
+                return;
+            }
+
+            var snapshotPrices = LoadLiveSnapshotPrices();
+            var loadedCount = EnsureLiveFactorSnapshots(bootstrapDate, forceRefresh: true);
+            Log(
+                $"[bootstrap] trade_date={bootstrapDate:yyyyMMdd} snapshot_prices={snapshotPrices.Count} " +
+                $"loaded_factors={loadedCount}");
+            ProcessSession(bootstrapDate);
+        }
+
         private void ProcessSession(DateTime sessionDate)
         {
             var firstUpdateOfSession = _lastProcessedDate != sessionDate;
@@ -262,6 +290,7 @@ namespace QuantConnect.Algorithm.CSharp
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
 
             var rebalance = false;
+            var liveAligned = false;
             var scoreSpread = _latestScoreSpread;
             var turnover = 0m;
             if (_lastSignalEvaluationDate != sessionDate)
@@ -301,6 +330,23 @@ namespace QuantConnect.Algorithm.CSharp
                 }
             }
 
+            if (LiveMode && !rebalance && _latestTargetWeightsByUnderlying.Count > 0)
+            {
+                var retainedTargets = BuildTargetsFromLatestWeights();
+                if (retainedTargets.Count > 0)
+                {
+                    var tradeCountBeforeAlignment = _tradeRows.Count;
+                    turnover = ApplyTargetPortfolio(sessionDate, retainedTargets, prices);
+                    liveAligned = _tradeRows.Count > tradeCountBeforeAlignment;
+                    if (liveAligned)
+                    {
+                        Log(
+                            $"{sessionDate:yyyy-MM-dd} live-align -> selected={retainedTargets.Count} " +
+                            $"turnover={turnover:P2} scoreSpread={scoreSpread:F4}");
+                    }
+                }
+            }
+
             scoreSpread = _latestScoreSpread;
             var selectedCount = _latestTargetWeightsByUnderlying.Count > 0
                 ? _latestTargetWeightsByUnderlying.Count
@@ -325,7 +371,7 @@ namespace QuantConnect.Algorithm.CSharp
                 SelectedSymbols = selectedCount,
                 Turnover = turnover,
                 ScoreSpread = scoreSpread,
-                Rebalanced = rebalance
+                Rebalanced = rebalance || liveAligned
             });
 
             UpsertFactorExposure(new FactorExposureRow
@@ -350,15 +396,15 @@ namespace QuantConnect.Algorithm.CSharp
             SetRuntimeStatistic("Signals", selectedCount.ToString(CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Score Spr", scoreSpread.ToString("F2", CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Turnover", turnover.ToString("P1", CultureInfo.InvariantCulture));
-            if (ShouldPersistRuntimeOutputs(rebalance, firstUpdateOfSession))
+            if (ShouldPersistRuntimeOutputs(rebalance || liveAligned, firstUpdateOfSession))
             {
                 PersistOutputs();
                 _lastRuntimePersistUtc = UtcTime;
             }
 
-            if (ShouldEmitRuntimeStatusLog(rebalance, firstUpdateOfSession))
+            if (ShouldEmitRuntimeStatusLog(rebalance || liveAligned, firstUpdateOfSession))
             {
-                LogDailySnapshot(sessionDate, equity, invested, eligibleFactors.Count, selectedCount, scoreSpread, turnover, rebalance);
+                LogDailySnapshot(sessionDate, equity, invested, eligibleFactors.Count, selectedCount, scoreSpread, turnover, rebalance || liveAligned);
                 LogPortfolioSnapshot(sessionDate, prices, weightMap, equity);
                 _lastPortfolioLogUtc = UtcTime;
             }
@@ -380,37 +426,143 @@ namespace QuantConnect.Algorithm.CSharp
             return Time.Date;
         }
 
-        private void EnsureLiveFactorSnapshots(DateTime sessionDate)
+        private DateTime ResolveBootstrapSessionDate()
+        {
+            if (!string.IsNullOrWhiteSpace(_livePriceSnapshotPath) && File.Exists(_livePriceSnapshotPath))
+            {
+                try
+                {
+                    var payloadText = File.ReadAllText(_livePriceSnapshotPath);
+                    var payload = JsonConvert.DeserializeObject<LivePriceSnapshotPayload>(payloadText) ?? new LivePriceSnapshotPayload();
+                    if (TryParseTradeDate(payload.TradeDate, out var parsedTradeDate))
+                    {
+                        return parsedTradeDate;
+                    }
+
+                    foreach (var quote in payload.Quotes ?? new List<LivePriceSnapshotQuote>())
+                    {
+                        if (TryParseTradeDate(quote.TradeDate, out parsedTradeDate))
+                        {
+                            return parsedTradeDate;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"[bootstrap] failed to parse live snapshot {_livePriceSnapshotPath}: {ex.Message}");
+                }
+            }
+
+            if (Time != default)
+            {
+                return Time.Date;
+            }
+
+            return DateTime.UtcNow.Date;
+        }
+
+        private int EnsureLiveFactorSnapshots(DateTime sessionDate, bool forceRefresh = false)
         {
             if (!LiveMode)
             {
-                return;
+                return 0;
             }
 
             var freshFactorCount = _latestFactorsByUnderlying.Values.Count(factor => IsFreshFactorSnapshot(factor, sessionDate));
-            if (_lastLiveFactorDiskRefreshDate == sessionDate && freshFactorCount > 0)
+            if (!forceRefresh && _lastLiveFactorDiskRefreshDate == sessionDate && freshFactorCount > 0)
             {
-                return;
+                return freshFactorCount;
             }
 
             var loadedCount = 0;
+            var primaryCount = 0;
+            var fallbackCount = 0;
+            var carryForwardCount = 0;
             foreach (var underlying in _factorToUnderlying.Values.Distinct())
             {
-                if (TryLoadFactorSnapshotFromDisk(underlying, sessionDate, out var factor))
+                if (TryLoadFactorSnapshotFromDisk(underlying, sessionDate, out var factor, out var usedFallback, out var carryForwarded))
                 {
                     _latestFactorsByUnderlying[underlying] = factor;
                     loadedCount += 1;
+                    if (usedFallback)
+                    {
+                        fallbackCount += 1;
+                    }
+                    else
+                    {
+                        primaryCount += 1;
+                    }
+                    if (carryForwarded)
+                    {
+                        carryForwardCount += 1;
+                    }
                 }
             }
 
             _lastLiveFactorDiskRefreshDate = loadedCount > 0 ? sessionDate : default;
-            Log($"[factor sync] trade_date={sessionDate:yyyyMMdd} loaded={loadedCount} source=disk");
+            Log(
+                $"[factor sync] trade_date={sessionDate:yyyyMMdd} loaded={loadedCount} " +
+                $"primary={primaryCount} fallback={fallbackCount} carry_forward={carryForwardCount} " +
+                $"fresh_before={freshFactorCount} source=disk forced={(forceRefresh ? 1 : 0)}");
+            return loadedCount;
         }
 
-        private bool TryLoadFactorSnapshotFromDisk(Symbol underlying, DateTime sessionDate, out AShareBarraCNE5FactorData factor)
+        private bool TryLoadFactorSnapshotFromDisk(
+            Symbol underlying,
+            DateTime sessionDate,
+            out AShareBarraCNE5FactorData factor,
+            out bool usedFallback,
+            out bool carryForwarded)
+        {
+            usedFallback = false;
+            carryForwarded = false;
+
+            if (TryLoadFactorSnapshotFromPath(underlying, sessionDate, _factorDataPath, out factor, out var matchedTradeDate))
+            {
+                carryForwarded = matchedTradeDate.Date != sessionDate.Date;
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(_fallbackFactorDataPath))
+            {
+                factor = null;
+                return false;
+            }
+
+            var primaryFullPath = Path.GetFullPath(_factorDataPath);
+            var fallbackFullPath = Path.GetFullPath(_fallbackFactorDataPath);
+            if (string.Equals(primaryFullPath, fallbackFullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                factor = null;
+                return false;
+            }
+
+            if (TryLoadFactorSnapshotFromPath(underlying, sessionDate, _fallbackFactorDataPath, out factor, out matchedTradeDate))
+            {
+                usedFallback = true;
+                carryForwarded = matchedTradeDate.Date != sessionDate.Date;
+                return true;
+            }
+
+            factor = null;
+            return false;
+        }
+
+        private bool TryLoadFactorSnapshotFromPath(
+            Symbol underlying,
+            DateTime sessionDate,
+            string factorRootPath,
+            out AShareBarraCNE5FactorData factor,
+            out DateTime matchedTradeDate)
         {
             factor = null;
-            var factorPath = AShareBarraCNE5FactorData.ResolveSourcePath(underlying, _factorDataPath);
+            matchedTradeDate = default;
+            if (string.IsNullOrWhiteSpace(factorRootPath))
+            {
+                return false;
+            }
+
+            var factorPath = AShareBarraCNE5FactorData.ResolveSourcePath(underlying, factorRootPath);
             if (!File.Exists(factorPath))
             {
                 return false;
@@ -425,11 +577,20 @@ namespace QuantConnect.Algorithm.CSharp
                     continue;
                 }
 
-                if (line.StartsWith(targetTradeDate + ",", StringComparison.Ordinal))
+                var separatorIndex = line.IndexOf(',');
+                if (separatorIndex <= 0)
                 {
-                    matchedLine = line;
-                    break;
+                    continue;
                 }
+
+                var lineTradeDate = line.Substring(0, separatorIndex);
+                if (string.CompareOrdinal(lineTradeDate, targetTradeDate) > 0)
+                {
+                    continue;
+                }
+
+                matchedLine = line;
+                break;
             }
 
             if (string.IsNullOrWhiteSpace(matchedLine))
@@ -438,12 +599,7 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             var csv = matchedLine.Split(',');
-            if (csv.Length < 16)
-            {
-                return false;
-            }
-
-            if (!DateTime.TryParseExact(csv[0], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var tradeDate))
+            if (csv.Length < 16 || !TryParseTradeDate(csv[0], out matchedTradeDate))
             {
                 return false;
             }
@@ -451,8 +607,8 @@ namespace QuantConnect.Algorithm.CSharp
             factor = new AShareBarraCNE5FactorData
             {
                 Symbol = underlying,
-                Time = tradeDate.Date,
-                EndTime = tradeDate.Date,
+                Time = sessionDate.Date,
+                EndTime = sessionDate.Date,
                 Value = ParseNullableDecimal(csv[2]) ?? 0m,
                 Beta = ParseNullableDecimal(csv[1]),
                 Momentum = ParseNullableDecimal(csv[2]),
@@ -524,6 +680,20 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 _latestTargetWeightsByUnderlying[target.Symbol] = target.Weight;
             }
+        }
+
+        private List<AShareBarraCNE5Target> BuildTargetsFromLatestWeights()
+        {
+            return _latestTargetWeightsByUnderlying
+                .OrderByDescending(pair => pair.Value)
+                .ThenBy(pair => pair.Key.Value, StringComparer.Ordinal)
+                .Select(pair => new AShareBarraCNE5Target
+                {
+                    Symbol = pair.Key,
+                    Weight = pair.Value,
+                    Score = _latestScoresByUnderlying.TryGetValue(pair.Key, out var score) ? score : 0m
+                })
+                .ToList();
         }
 
         private decimal ApplyTargetPortfolio(DateTime sessionDate, IReadOnlyList<AShareBarraCNE5Target> targets, IReadOnlyDictionary<Symbol, decimal> prices)
@@ -601,6 +771,14 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 deltaQuantity = ClampBuyQuantityToCash(order.Symbol, deltaQuantity, order.Price);
             }
+            else if (order.CurrentQuantity <= 0)
+            {
+                deltaQuantity = 0;
+            }
+            else if (Math.Abs(deltaQuantity) > order.CurrentQuantity)
+            {
+                deltaQuantity = -order.CurrentQuantity;
+            }
 
             if (deltaQuantity == 0)
             {
@@ -632,12 +810,14 @@ namespace QuantConnect.Algorithm.CSharp
                 };
             }
 
-            position.Quantity += deltaQuantity;
+            var quantityBefore = position.Quantity;
+            position.Quantity = Math.Max(0, position.Quantity + deltaQuantity);
             position.LastPrice = order.Price;
             if (deltaQuantity > 0 && position.Quantity > 0 && !_positions.ContainsKey(order.Symbol))
             {
                 position.HoldingDays = 0;
             }
+            var quantityAfter = position.Quantity;
 
             if (position.Quantity == 0)
             {
@@ -651,9 +831,12 @@ namespace QuantConnect.Algorithm.CSharp
             _tradeRows.Add(new TradeRow
             {
                 TradeDate = sessionDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                ExecutedAt = ResolveTradeTimestamp(order.Symbol).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
                 Symbol = ToTsCode(order.Symbol),
                 Action = isSell ? "SELL" : "BUY",
                 Quantity = absoluteQuantity,
+                QuantityBefore = quantityBefore,
+                QuantityAfter = quantityAfter,
                 Price = order.Price,
                 TradeValue = tradeValue,
                 Fee = fee,
@@ -1020,6 +1203,26 @@ namespace QuantConnect.Algorithm.CSharp
             return ordered[^1] - median;
         }
 
+        private DateTime ResolveTradeTimestamp(Symbol symbol)
+        {
+            if (Securities.TryGetValue(symbol, out var security) && security.LocalTime != default)
+            {
+                return security.LocalTime;
+            }
+
+            if (_anchorSymbol != null && Securities.TryGetValue(_anchorSymbol, out var anchorSecurity) && anchorSecurity.LocalTime != default)
+            {
+                return anchorSecurity.LocalTime;
+            }
+
+            if (Time != default)
+            {
+                return Time;
+            }
+
+            return DateTime.UtcNow;
+        }
+
         private void SyncLeanPortfolioState(IReadOnlyDictionary<Symbol, decimal> prices)
         {
             foreach (var symbol in _factorToUnderlying.Values.Distinct())
@@ -1111,6 +1314,27 @@ namespace QuantConnect.Algorithm.CSharp
                 : null;
         }
 
+        private static bool TryParseTradeDate(string value, out DateTime tradeDate)
+        {
+            tradeDate = default;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            return DateTime.TryParseExact(value.Trim(), "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out tradeDate);
+        }
+
+        private string ResolveOptionalFactorDataPath(string parameterValue)
+        {
+            if (string.IsNullOrWhiteSpace(parameterValue))
+            {
+                return null;
+            }
+
+            return ResolveFactorDataPath(parameterValue);
+        }
+
         private string ResolveFactorDataPath(string parameterValue)
         {
             if (string.IsNullOrWhiteSpace(parameterValue))
@@ -1175,12 +1399,177 @@ namespace QuantConnect.Algorithm.CSharp
                 : defaultValue;
         }
 
+        private void ResetSyntheticState()
+        {
+            _positions.Clear();
+            _tradeRows.Clear();
+            _dailyRows.Clear();
+            _allocationRows.Clear();
+            _factorExposureRows.Clear();
+            _latestScoresByUnderlying.Clear();
+            _latestTargetWeightsByUnderlying.Clear();
+            _syntheticCash = _initialSyntheticCash;
+            _previousEquity = _initialSyntheticCash;
+            _syntheticRebalanceCount = 0;
+            _lastProcessedDate = default;
+            _lastSignalEvaluationDate = default;
+            _lastRebalanceDate = default;
+        }
+
+        private void RestoreSyntheticPortfolioState()
+        {
+            if (!LiveMode || string.IsNullOrWhiteSpace(_portfolioStatePath) || !File.Exists(_portfolioStatePath))
+            {
+                return;
+            }
+
+            SyntheticPortfolioState state;
+            try
+            {
+                state = JsonConvert.DeserializeObject<SyntheticPortfolioState>(File.ReadAllText(_portfolioStatePath));
+            }
+            catch (Exception ex)
+            {
+                Log($"[state] failed to restore {_portfolioStatePath}: {ex.Message}");
+                ResetSyntheticState();
+                return;
+            }
+
+            if (state == null)
+            {
+                return;
+            }
+
+            if (Math.Abs(state.InitialCash - _initialSyntheticCash) > 0.01m)
+            {
+                Log(
+                    $"[state] ignored {_portfolioStatePath}: initial_cash mismatch " +
+                    $"state={state.InitialCash:F2} current={_initialSyntheticCash:F2}");
+                ResetSyntheticState();
+                return;
+            }
+
+            ResetSyntheticState();
+            var allowedSymbols = new HashSet<Symbol>(_factorToUnderlying.Values);
+            _syntheticCash = Math.Max(0m, state.Cash);
+            _previousEquity = state.PreviousEquity > 0m ? state.PreviousEquity : _syntheticCash;
+            _syntheticRebalanceCount = Math.Max(0, state.SyntheticRebalanceCount);
+
+            if (TryParseTradeDate(state.LastProcessedDate, out var lastProcessedDate))
+            {
+                _lastProcessedDate = lastProcessedDate;
+            }
+            if (TryParseTradeDate(state.LastSignalEvaluationDate, out var lastSignalEvaluationDate))
+            {
+                _lastSignalEvaluationDate = lastSignalEvaluationDate;
+            }
+            if (TryParseTradeDate(state.LastRebalanceDate, out var lastRebalanceDate))
+            {
+                _lastRebalanceDate = lastRebalanceDate;
+            }
+
+            foreach (var entry in state.Positions ?? new List<SyntheticStatePosition>())
+            {
+                if (!TryParseTsCode(entry.Symbol, out var symbol) || !allowedSymbols.Contains(symbol) || entry.Quantity <= 0)
+                {
+                    continue;
+                }
+
+                _positions[symbol] = new SyntheticPosition
+                {
+                    Symbol = symbol,
+                    Quantity = Math.Max(0, entry.Quantity),
+                    LastPrice = Math.Max(0m, entry.LastPrice),
+                    HoldingDays = Math.Max(0, entry.HoldingDays)
+                };
+            }
+
+            foreach (var entry in state.LatestScores ?? new List<SyntheticStateDecimalValue>())
+            {
+                if (TryParseTsCode(entry.Symbol, out var symbol) && allowedSymbols.Contains(symbol))
+                {
+                    _latestScoresByUnderlying[symbol] = entry.Value;
+                }
+            }
+
+            foreach (var entry in state.LatestTargetWeights ?? new List<SyntheticStateDecimalValue>())
+            {
+                if (TryParseTsCode(entry.Symbol, out var symbol) && allowedSymbols.Contains(symbol))
+                {
+                    _latestTargetWeightsByUnderlying[symbol] = Math.Max(0m, entry.Value);
+                }
+            }
+
+            _tradeRows.AddRange(state.Trades ?? new List<TradeRow>());
+            _dailyRows.AddRange(state.DailyRows ?? new List<DailySummaryRow>());
+            _allocationRows.AddRange(state.AllocationRows ?? new List<AllocationRow>());
+            _factorExposureRows.AddRange(state.FactorExposureRows ?? new List<FactorExposureRow>());
+
+            Log(
+                $"[state] restored path={_portfolioStatePath} cash={_syntheticCash:F2} " +
+                $"holdings={_positions.Count} trades={_tradeRows.Count} " +
+                $"last_rebalance={(_lastRebalanceDate == default ? "-" : _lastRebalanceDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture))}");
+        }
+
+        private void WritePortfolioState()
+        {
+            if (string.IsNullOrWhiteSpace(_portfolioStatePath))
+            {
+                return;
+            }
+
+            var payload = new SyntheticPortfolioState
+            {
+                SchemaVersion = 1,
+                SavedAtUtc = (UtcTime == default ? DateTime.UtcNow : UtcTime),
+                InitialCash = _initialSyntheticCash,
+                Cash = _syntheticCash,
+                PreviousEquity = _previousEquity,
+                SyntheticRebalanceCount = _syntheticRebalanceCount,
+                LastProcessedDate = _lastProcessedDate == default ? null : _lastProcessedDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                LastSignalEvaluationDate = _lastSignalEvaluationDate == default ? null : _lastSignalEvaluationDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                LastRebalanceDate = _lastRebalanceDate == default ? null : _lastRebalanceDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                Positions = _positions
+                    .OrderBy(pair => pair.Key.Value, StringComparer.Ordinal)
+                    .Select(pair => new SyntheticStatePosition
+                    {
+                        Symbol = ToTsCode(pair.Key),
+                        Quantity = Math.Max(0, pair.Value.Quantity),
+                        LastPrice = Math.Max(0m, pair.Value.LastPrice),
+                        HoldingDays = Math.Max(0, pair.Value.HoldingDays)
+                    })
+                    .ToList(),
+                LatestScores = _latestScoresByUnderlying
+                    .OrderBy(pair => pair.Key.Value, StringComparer.Ordinal)
+                    .Select(pair => new SyntheticStateDecimalValue { Symbol = ToTsCode(pair.Key), Value = pair.Value })
+                    .ToList(),
+                LatestTargetWeights = _latestTargetWeightsByUnderlying
+                    .OrderBy(pair => pair.Key.Value, StringComparer.Ordinal)
+                    .Select(pair => new SyntheticStateDecimalValue { Symbol = ToTsCode(pair.Key), Value = pair.Value })
+                    .ToList(),
+                Trades = _tradeRows.ToList(),
+                DailyRows = _dailyRows.ToList(),
+                AllocationRows = _allocationRows.ToList(),
+                FactorExposureRows = _factorExposureRows.ToList()
+            };
+
+            try
+            {
+                WriteFile(_portfolioStatePath, JsonConvert.SerializeObject(payload, Formatting.Indented));
+            }
+            catch (Exception ex)
+            {
+                Log($"[state] failed to persist {_portfolioStatePath}: {ex.Message}");
+            }
+        }
+
         private void PersistOutputs()
         {
             WriteTradeReport();
             WriteDailySummary();
             WriteAllocationReport();
             WriteFactorExposureReport();
+            WritePortfolioState();
         }
 
         private void PublishSyntheticSummaryStatistics()
@@ -1198,14 +1587,17 @@ namespace QuantConnect.Algorithm.CSharp
         private void WriteTradeReport()
         {
             var builder = new StringBuilder();
-            builder.AppendLine("trade_date,symbol,action,quantity,price,trade_value,fee,score");
+            builder.AppendLine("trade_date,executed_at,symbol,action,quantity,quantity_before,quantity_after,price,trade_value,fee,score");
             foreach (var row in _tradeRows)
             {
                 builder.AppendLine(string.Join(",",
                     row.TradeDate,
+                    row.ExecutedAt,
                     row.Symbol,
                     row.Action,
                     row.Quantity.ToString(CultureInfo.InvariantCulture),
+                    row.QuantityBefore.ToString(CultureInfo.InvariantCulture),
+                    row.QuantityAfter.ToString(CultureInfo.InvariantCulture),
                     row.Price.ToString("F6", CultureInfo.InvariantCulture),
                     row.TradeValue.ToString("F6", CultureInfo.InvariantCulture),
                     row.Fee.ToString("F6", CultureInfo.InvariantCulture),
@@ -1314,9 +1706,12 @@ namespace QuantConnect.Algorithm.CSharp
         private sealed class TradeRow
         {
             public string TradeDate { get; set; }
+            public string ExecutedAt { get; set; }
             public string Symbol { get; set; }
             public string Action { get; set; }
             public int Quantity { get; set; }
+            public int QuantityBefore { get; set; }
+            public int QuantityAfter { get; set; }
             public decimal Price { get; set; }
             public decimal TradeValue { get; set; }
             public decimal Fee { get; set; }
@@ -1365,14 +1760,95 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal NonLinearSize { get; set; }
         }
 
+        private sealed class SyntheticPortfolioState
+        {
+            [JsonProperty("schema_version")]
+            public int SchemaVersion { get; set; }
+
+            [JsonProperty("saved_at_utc")]
+            public DateTime SavedAtUtc { get; set; }
+
+            [JsonProperty("initial_cash")]
+            public decimal InitialCash { get; set; }
+
+            [JsonProperty("cash")]
+            public decimal Cash { get; set; }
+
+            [JsonProperty("previous_equity")]
+            public decimal PreviousEquity { get; set; }
+
+            [JsonProperty("synthetic_rebalance_count")]
+            public int SyntheticRebalanceCount { get; set; }
+
+            [JsonProperty("last_processed_date")]
+            public string LastProcessedDate { get; set; }
+
+            [JsonProperty("last_signal_evaluation_date")]
+            public string LastSignalEvaluationDate { get; set; }
+
+            [JsonProperty("last_rebalance_date")]
+            public string LastRebalanceDate { get; set; }
+
+            [JsonProperty("positions")]
+            public List<SyntheticStatePosition> Positions { get; set; } = new();
+
+            [JsonProperty("latest_scores")]
+            public List<SyntheticStateDecimalValue> LatestScores { get; set; } = new();
+
+            [JsonProperty("latest_target_weights")]
+            public List<SyntheticStateDecimalValue> LatestTargetWeights { get; set; } = new();
+
+            [JsonProperty("trades")]
+            public List<TradeRow> Trades { get; set; } = new();
+
+            [JsonProperty("daily_rows")]
+            public List<DailySummaryRow> DailyRows { get; set; } = new();
+
+            [JsonProperty("allocation_rows")]
+            public List<AllocationRow> AllocationRows { get; set; } = new();
+
+            [JsonProperty("factor_exposure_rows")]
+            public List<FactorExposureRow> FactorExposureRows { get; set; } = new();
+        }
+
+        private sealed class SyntheticStatePosition
+        {
+            [JsonProperty("symbol")]
+            public string Symbol { get; set; }
+
+            [JsonProperty("quantity")]
+            public int Quantity { get; set; }
+
+            [JsonProperty("last_price")]
+            public decimal LastPrice { get; set; }
+
+            [JsonProperty("holding_days")]
+            public int HoldingDays { get; set; }
+        }
+
+        private sealed class SyntheticStateDecimalValue
+        {
+            [JsonProperty("symbol")]
+            public string Symbol { get; set; }
+
+            [JsonProperty("value")]
+            public decimal Value { get; set; }
+        }
+
         private sealed class LivePriceSnapshotPayload
         {
+            [JsonProperty("trade_date")]
+            public string TradeDate { get; set; }
+
             [JsonProperty("quotes")]
             public List<LivePriceSnapshotQuote> Quotes { get; set; } = new();
         }
 
         private sealed class LivePriceSnapshotQuote
         {
+            [JsonProperty("trade_date")]
+            public string TradeDate { get; set; }
+
             [JsonProperty("ts_code")]
             public string TsCode { get; set; }
 

@@ -24,6 +24,8 @@ DATA_DIR = "/home/project/tushare-downloader/tushare_data"
 # =====================================================
 # 每分钟最大请求数 (RPM)
 MAX_REQUESTS_PER_MINUTE = 200
+# rt_k / rt_etf_k 实时日线接口单独按较严权限控制
+RT_DAILY_MAX_REQUESTS_PER_MINUTE = int(os.getenv("RT_DAILY_MAX_REQUESTS_PER_MINUTE", "40"))
 # 令牌桶容量
 TOKEN_BUCKET_CAPACITY = 200
 # 令牌补充速率 (每秒)
@@ -41,7 +43,7 @@ TIMEOUT_RETRY_DELAY = float(os.getenv("TIMEOUT_RETRY_DELAY", "1.0"))  # 超时�
 # =====================================================
 # 并发配置
 # =====================================================
-MAX_WORKERS = 10  # 线程池大小（不宜过大，配合限流）
+MAX_WORKERS = 1  # rt_k/rt_etf_k live-paper 默认串行，优先保证不撞 Tushare 逐分钟限额
 
 # =====================================================
 # 日期范围配置
