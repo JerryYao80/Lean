@@ -23,7 +23,7 @@ for candidate in [CURRENT_DIR, DATA_SOURCE_DIR]:
 import barra_cne5_factor_bridge
 from barra_cne5_data_loader import BarraCNE5DataLoader
 import config as tushare_runtime_config
-from rt_daily_downloader import TushareRtDailyClient
+from rt_daily_downloader import GbmSyntheticRtDailyClient, TushareRtDailyClient
 
 
 PATH_KEYS = {
@@ -68,10 +68,15 @@ def default_config() -> dict:
         "tushare-token": "",
         "tushare-http-url": "",
         "tushare-token-env-var": "TUSHARE_TOKEN",
-        "live-price-batch-size": 25,
+        "live-price-batch-size": 100,
         "live-price-max-workers": 1,
-        "live-price-max-requests-per-minute": 40,
+        "live-price-max-requests-per-minute": 50,
         "live-price-poll-interval-seconds": 60,
+        "live-price-source-mode": "auto",
+        "simulated-live-price-random-seed": 20260317,
+        "simulated-live-price-lookback-days": 60,
+        "simulated-live-price-min-history-days": 20,
+        "simulated-live-price-trading-minutes-per-day": 240,
         "factor-worker-count": "auto",
         "parallel-date-block-size": 1,
         "progress-interval-symbols": 100,
@@ -160,15 +165,31 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
 
     config = resolve_config_paths(config, repo_root())
     config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 60))
-    config["live-price-batch-size"] = max(1, coerce_int(config.get("live-price-batch-size"), 25))
+    config["live-price-batch-size"] = max(1, coerce_int(config.get("live-price-batch-size"), 100))
     config["live-price-max-workers"] = max(1, coerce_int(config.get("live-price-max-workers"), 1))
     config["live-price-max-requests-per-minute"] = max(
         1,
-        coerce_int(config.get("live-price-max-requests-per-minute"), 40),
+        coerce_int(config.get("live-price-max-requests-per-minute"), 50),
     )
     config["live-price-poll-interval-seconds"] = max(
         1,
         coerce_int(config.get("live-price-poll-interval-seconds"), config["live-factor-poll-interval-seconds"]),
+    )
+    config["simulated-live-price-random-seed"] = coerce_int(
+        config.get("simulated-live-price-random-seed"),
+        20260317,
+    )
+    config["simulated-live-price-lookback-days"] = max(
+        10,
+        coerce_int(config.get("simulated-live-price-lookback-days"), 60),
+    )
+    config["simulated-live-price-min-history-days"] = max(
+        5,
+        coerce_int(config.get("simulated-live-price-min-history-days"), 20),
+    )
+    config["simulated-live-price-trading-minutes-per-day"] = max(
+        1,
+        coerce_int(config.get("simulated-live-price-trading-minutes-per-day"), 240),
     )
     return config
 
@@ -217,6 +238,65 @@ def resolve_live_trade_date(config: dict, now: datetime | None = None) -> str:
         return historical_dates[-1]
 
     return trading_dates[0]
+
+
+def resolve_market_data_context(config: dict, now: datetime | None = None) -> dict:
+    timezone = ZoneInfo(str(config.get("timezone") or "Asia/Shanghai"))
+    current_time = now.astimezone(timezone) if now else datetime.now(timezone)
+    today = current_time.strftime("%Y%m%d")
+    requested_mode = str(config.get("live-price-source-mode") or "auto").strip().lower()
+    if requested_mode not in {"auto", "realtime", "simulate"}:
+        requested_mode = "auto"
+
+    loader = BarraCNE5DataLoader(config["tushare-data-path"])
+    trading_dates = loader.get_trading_dates(
+        start_date=today,
+        end_date=today,
+        reference_symbol=config.get("market-symbol", "000300.SH"),
+    )
+    is_trading_day = today in set(trading_dates)
+    minute_of_day = current_time.hour * 60 + current_time.minute + current_time.second / 60.0
+
+    if not is_trading_day:
+        session_state = "calendar-closed"
+        market_open = False
+    elif 9 * 60 + 30 <= minute_of_day < 11 * 60 + 30:
+        session_state = "regular-session-morning"
+        market_open = True
+    elif 13 * 60 <= minute_of_day < 15 * 60:
+        session_state = "regular-session-afternoon"
+        market_open = True
+    elif minute_of_day < 9 * 60 + 30:
+        session_state = "pre-open"
+        market_open = False
+    elif minute_of_day < 13 * 60:
+        session_state = "midday-break"
+        market_open = False
+    else:
+        session_state = "after-hours"
+        market_open = False
+
+    if requested_mode == "simulate":
+        selected_mode = "gbm-simulated"
+        reason = "configured simulate mode"
+    elif requested_mode == "realtime":
+        selected_mode = "tushare-realtime"
+        reason = "configured realtime mode"
+    elif market_open:
+        selected_mode = "tushare-realtime"
+        reason = "A-share regular session open"
+    else:
+        selected_mode = "gbm-simulated"
+        reason = f"A-share market closed ({session_state})"
+
+    return {
+        "requested_mode": requested_mode,
+        "selected_mode": selected_mode,
+        "session_state": session_state,
+        "market_open": market_open,
+        "reason": reason,
+        "evaluated_at": current_time.isoformat(),
+    }
 
 
 def build_bridge_factor_config(config: dict, trade_date: str) -> dict:
@@ -530,9 +610,21 @@ def normalize_live_quotes(quotes: pd.DataFrame | None, trade_date: str, fetch_ti
         normalized[field] = pd.to_numeric(normalized[field], errors="coerce")
 
     normalized["close"] = normalized["close"].where(normalized["close"].notna(), normalized["price"])
-    normalized["fetch_timestamp"] = fetch_timestamp.astimezone(ZoneInfo(str(fetch_timestamp.tzinfo or "Asia/Shanghai"))).isoformat()
-    normalized["source_api"] = normalized["ts_code"].map(
+    generated_fetch_timestamp = fetch_timestamp.astimezone(ZoneInfo(str(fetch_timestamp.tzinfo or "Asia/Shanghai"))).isoformat()
+    if "fetch_timestamp" not in normalized.columns:
+        normalized["fetch_timestamp"] = generated_fetch_timestamp
+    normalized["fetch_timestamp"] = normalized["fetch_timestamp"].where(
+        normalized["fetch_timestamp"].notna() & (normalized["fetch_timestamp"].astype(str).str.strip() != ""),
+        generated_fetch_timestamp,
+    )
+    inferred_source_api = normalized["ts_code"].map(
         lambda ts_code: "rt_etf_k" if TushareRtDailyClient.is_etf_code(ts_code) else "rt_k"
+    )
+    if "source_api" not in normalized.columns:
+        normalized["source_api"] = inferred_source_api
+    normalized["source_api"] = normalized["source_api"].where(
+        normalized["source_api"].notna() & (normalized["source_api"].astype(str).str.strip() != ""),
+        inferred_source_api,
     )
 
     normalized = normalized.drop_duplicates(subset=["ts_code"], keep="last").sort_values("ts_code").reset_index(drop=True)
@@ -607,29 +699,13 @@ def build_quote_refresh_plan(universe: list[str], refresh_limit: int, previous_s
             "next_refresh_offset": 0,
             "estimated_full_refresh_minutes": 0,
         }
-
-    effective_refresh_limit = max(1, min(total_symbols, int(refresh_limit or total_symbols)))
-    start_offset = 0
-    if isinstance(previous_snapshot_payload, dict) and str(previous_snapshot_payload.get("trade_date") or "") == trade_date:
-        try:
-            start_offset = int(previous_snapshot_payload.get("next_refresh_offset") or 0)
-        except (TypeError, ValueError):
-            start_offset = 0
-    start_offset %= total_symbols
-
-    refresh_symbols = [
-        universe[(start_offset + offset) % total_symbols]
-        for offset in range(effective_refresh_limit)
-    ]
-    next_refresh_offset = (start_offset + effective_refresh_limit) % total_symbols
-    estimated_full_refresh_minutes = int((total_symbols + effective_refresh_limit - 1) // effective_refresh_limit)
     return {
-        "refresh_symbols": refresh_symbols,
-        "refresh_count": len(refresh_symbols),
-        "refresh_start_offset": start_offset,
-        "refresh_end_offset": next_refresh_offset,
-        "next_refresh_offset": next_refresh_offset,
-        "estimated_full_refresh_minutes": estimated_full_refresh_minutes,
+        "refresh_symbols": list(universe),
+        "refresh_count": total_symbols,
+        "refresh_start_offset": 0,
+        "refresh_end_offset": total_symbols,
+        "next_refresh_offset": 0,
+        "estimated_full_refresh_minutes": 1,
     }
 
 
@@ -741,14 +817,21 @@ def write_live_price_snapshot(
     return payload
 
 
-def build_live_market_preview(trade_date: str, requested_count: int, quotes: pd.DataFrame, sample_size: int = 6) -> dict:
+def build_live_market_preview(
+    trade_date: str,
+    requested_count: int,
+    quotes: pd.DataFrame,
+    sample_size: int = 6,
+    market_data_context: dict | None = None,
+) -> dict:
     rows: list[dict[str, object]] = []
     if not quotes.empty:
         preview_rows = quotes.head(sample_size).to_dict(orient="records")
         for row in preview_rows:
+            source_api = str(row.get("source_api") or "")
             rows.append({
                 "symbol": row.get("ts_code"),
-                "asset_type": "etf" if row.get("source_api") == "rt_etf_k" else "equity",
+                "asset_type": "etf" if "etf" in source_api else "equity",
                 "trade_date": row.get("trade_date") or trade_date,
                 "close": row.get("close") or row.get("price"),
                 "pct_chg": row.get("pct_chg"),
@@ -766,6 +849,9 @@ def build_live_market_preview(trade_date: str, requested_count: int, quotes: pd.
         "universe_size": requested_count,
         "received_count": int(len(quotes.index)),
         "sample_size": len(rows),
+        "source_mode": (market_data_context or {}).get("selected_mode"),
+        "session_state": (market_data_context or {}).get("session_state"),
+        "reason": (market_data_context or {}).get("reason"),
         "rows": rows,
     }
 
@@ -774,10 +860,14 @@ def print_live_market_preview(preview: dict) -> None:
     rows = list(preview.get("rows") or [])
     print(
         f"[live bridge][market] trade_date={preview.get('trade_date')} "
-        f"source=tushare rt_k/rt_etf_k requested={preview.get('universe_size', 0)} "
+        f"source={preview.get('source_mode') or '-'} "
+        f"session={preview.get('session_state') or '-'} "
+        f"requested={preview.get('universe_size', 0)} "
         f"received={preview.get('received_count', 0)} preview_rows={len(rows)}",
         flush=True,
     )
+    if preview.get("reason"):
+        print(f"[live bridge][market] reason={preview.get('reason')}", flush=True)
     if not rows:
         print("[live bridge][market] no realtime quotes received in this cycle", flush=True)
         return
@@ -839,6 +929,7 @@ def build_quote_progress_logger() -> callable:
         "error": 0,
         "missing": 0,
         "last_reported_completed": 0,
+        "last_error_key": None,
         "total": 0,
     }
 
@@ -849,6 +940,7 @@ def build_quote_progress_logger() -> callable:
             state["error"] = 0
             state["missing"] = 0
             state["last_reported_completed"] = 0
+            state["last_error_key"] = None
             state["total"] = int(event.get("total", 0) or 0)
             print(
                 f"[live bridge][download] stage=start total={event.get('total', 0)} "
@@ -905,20 +997,23 @@ def build_quote_progress_logger() -> callable:
         completed = int(event.get("index", 0) or 0)
         total = int(event.get("total", 0) or 0)
         step = max(1, total // 20) if total > 0 else 1
+        detail = event.get("error")
+        if detail:
+            detail = str(detail).replace("\n", " ").strip()
+        error_key = f"{status}:{detail or ''}"
         should_print = (
             completed == 1
             or completed >= total
             or completed - int(state["last_reported_completed"]) >= step
-            or status != "ok"
+            or (status != "ok" and error_key != state.get("last_error_key"))
         )
         if not should_print:
             return
 
         state["last_reported_completed"] = completed
+        if status != "ok":
+            state["last_error_key"] = error_key
         percent = (completed * 100.0 / total) if total > 0 else 0.0
-        detail = event.get("error")
-        if detail:
-            detail = str(detail).replace("\n", " ").strip()
         suffix = f" last_error={detail}" if detail and status == "error" else ""
         print(
             f"[live bridge][download] {render_progress_bar(completed, total)} "
@@ -960,7 +1055,7 @@ def summarize_bridge_report(bridge_report: dict) -> str:
     return " ".join(summary_parts)
 
 
-def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
+def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulated_quote_client=None) -> int:
     poll_interval = float(
         config.get("live-price-poll-interval-seconds")
         or config.get("live-factor-poll-interval-seconds", 300)
@@ -970,22 +1065,39 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
     cycle = 0
     timezone = ZoneInfo(str(config.get("timezone") or "Asia/Shanghai"))
 
-    if quote_client is None:
-        token = resolve_tushare_token(config)
-        quote_client = TushareRtDailyClient(
-            token=token,
-            batch_size=config.get("live-price-batch-size", 25),
-            http_url=config.get("tushare-http-url"),
+    realtime_quote_client = quote_client
+    if simulated_quote_client is None:
+        simulated_quote_client = GbmSyntheticRtDailyClient(
+            tushare_data_path=config["tushare-data-path"],
+            batch_size=config.get("live-price-batch-size", 100),
+            poll_interval_seconds=config.get("live-price-poll-interval-seconds", 60),
+            lookback_days=config.get("simulated-live-price-lookback-days", 60),
+            min_history_days=config.get("simulated-live-price-min-history-days", 20),
+            trading_minutes_per_day=config.get("simulated-live-price-trading-minutes-per-day", 240),
+            random_seed=config.get("simulated-live-price-random-seed", 20260317),
+            timezone=str(config.get("timezone") or "Asia/Shanghai"),
             verbose=False,
-            max_workers=config.get("live-price-max-workers", 1),
-            max_requests_per_minute=config.get("live-price-max-requests-per-minute", 40),
         )
+
+    def resolve_realtime_quote_client():
+        nonlocal realtime_quote_client
+        if realtime_quote_client is None:
+            token = resolve_tushare_token(config)
+            realtime_quote_client = TushareRtDailyClient(
+                token=token,
+                batch_size=config.get("live-price-batch-size", 100),
+                http_url=config.get("tushare-http-url"),
+                verbose=False,
+                max_workers=config.get("live-price-max-workers", 1),
+                max_requests_per_minute=config.get("live-price-max-requests-per-minute", 50),
+            )
+        return realtime_quote_client
 
     print("=" * 80)
     print("Barra CNE5 Live Bridge", flush=True)
     print("=" * 80)
     print("Bridge purpose     : materialize live Barra factors and realtime daily quote snapshot", flush=True)
-    print("Market data mode   : direct Tushare rt_k/rt_etf_k realtime daily bars", flush=True)
+    print("Market data mode   : auto switch between Tushare realtime and off-hours GBM simulation", flush=True)
     print("Order mode         : synthetic internal execution only; no real Lean orders", flush=True)
     print(f"Factor source mode: {config.get('factor-source-mode')}", flush=True)
     print(f"Factor output path : {config.get('factor-data-path')}", flush=True)
@@ -994,10 +1106,17 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
     print(f"Price snapshot path: {config.get('live-price-snapshot-file')}", flush=True)
     print(f"Quote archive path : {config.get('daily-quote-archive-path')}", flush=True)
     print(f"Universe           : {config.get('symbols') or config.get('universe')}", flush=True)
-    print("Realtime APIs      : stock=rt_k, etf=rt_etf_k", flush=True)
-    print(f"Minute API cap     : {int(config.get('live-price-max-requests-per-minute', 40))} requests/minute", flush=True)
+    print("Realtime APIs      : stock=rt_k, etf=rt_etf_k; off-hours fallback=GBM synthetic daily bars", flush=True)
+    print(f"Minute API cap     : {int(config.get('live-price-max-requests-per-minute', 50))} requests/minute", flush=True)
+    print(f"Symbols per request: {int(config.get('live-price-batch-size', 100))}", flush=True)
     print(f"rt_k poll interval : {int(poll_interval)} seconds", flush=True)
-    print("Refresh model      : rotating subset refresh each minute with snapshot carry-forward", flush=True)
+    print(f"Price source mode  : {config.get('live-price-source-mode')}", flush=True)
+    print(
+        f"Sim seed/lookback  : {config.get('simulated-live-price-random-seed')}/"
+        f"{config.get('simulated-live-price-lookback-days')}d",
+        flush=True,
+    )
+    print("Refresh model      : full-universe refresh each minute with carry-forward only for transient misses", flush=True)
     print("=" * 80)
 
     try:
@@ -1009,6 +1128,25 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
             print(f"[live bridge][cycle {cycle}] {now.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
             trade_date = resolve_live_trade_date(config, now=now)
             print(f"[live bridge][calendar] resolved live trade_date={trade_date}", flush=True)
+            market_data_context = (
+                {
+                    "requested_mode": "override",
+                    "selected_mode": "tushare-realtime",
+                    "session_state": "explicit-override",
+                    "market_open": True,
+                    "reason": "run_live_bridge received explicit quote_client override",
+                    "evaluated_at": now.isoformat(),
+                }
+                if quote_client is not None
+                else resolve_market_data_context(config, now=now)
+            )
+            print(
+                f"[live bridge][market source] selected={market_data_context.get('selected_mode')} "
+                f"requested={market_data_context.get('requested_mode')} "
+                f"session={market_data_context.get('session_state')} "
+                f"reason={market_data_context.get('reason')}",
+                flush=True,
+            )
 
             loader = BarraCNE5DataLoader(config["tushare-data-path"])
             universe = barra_cne5_factor_bridge.build_universe(loader, config, trade_date)
@@ -1017,7 +1155,7 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
             )
             refresh_plan = build_quote_refresh_plan(
                 universe,
-                int(config.get("live-price-max-requests-per-minute", 40)),
+                int(config.get("live-price-max-requests-per-minute", 50)),
                 previous_snapshot_payload,
                 trade_date,
             )
@@ -1027,17 +1165,25 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                 f"requested_symbols={len(universe)} refresh_symbols={len(refresh_symbols)} "
                 f"carry_forward={max(0, len(universe) - len(refresh_symbols))} "
                 f"full_refresh_est={refresh_plan.get('estimated_full_refresh_minutes', 0)}m "
-                f"batch_size={config.get('live-price-batch-size', 25)}",
+                f"symbols_per_request={config.get('live-price-batch-size', 100)}",
                 flush=True,
             )
+            active_quote_client = (
+                quote_client
+                if quote_client is not None
+                else simulated_quote_client
+                if market_data_context.get("selected_mode") == "gbm-simulated"
+                else resolve_realtime_quote_client()
+            )
             raw_quotes = fetch_live_quotes(
-                quote_client,
+                active_quote_client,
                 refresh_symbols,
                 trade_date,
                 progress_callback=build_quote_progress_logger(),
             )
             normalized_quotes = normalize_live_quotes(raw_quotes, trade_date, now)
             merged_quotes = merge_live_quotes(universe, trade_date, previous_snapshot_quotes, normalized_quotes)
+            quote_client_metadata = getattr(active_quote_client, "last_fetch_metadata", {}) or {}
 
             archived_file = archive_live_quotes(config, normalized_quotes, trade_date)
             snapshot_payload = write_live_price_snapshot(
@@ -1053,9 +1199,17 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                     "refresh_end_offset": int(refresh_plan.get("refresh_end_offset", 0)),
                     "refresh_window_size": int(refresh_plan.get("refresh_count", 0)),
                     "estimated_full_refresh_minutes": int(refresh_plan.get("estimated_full_refresh_minutes", 0)),
+                    "market_data_mode": market_data_context.get("selected_mode"),
+                    "market_session_state": market_data_context.get("session_state"),
+                    "market_data_reason": market_data_context.get("reason"),
                 },
             )
-            market_preview = build_live_market_preview(trade_date, len(universe), merged_quotes)
+            market_preview = build_live_market_preview(
+                trade_date,
+                len(universe),
+                merged_quotes,
+                market_data_context=market_data_context,
+            )
             print_live_quote_flow(trade_date, normalized_quotes, merged_quotes, refresh_plan)
             print_live_market_preview(market_preview)
 
@@ -1087,7 +1241,7 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                 "refresh_end_offset": int(refresh_plan.get("refresh_end_offset", 0)),
                 "next_refresh_offset": int(refresh_plan.get("next_refresh_offset", 0)),
                 "estimated_full_refresh_minutes": int(refresh_plan.get("estimated_full_refresh_minutes", 0)),
-                "max_requests_per_minute": int(config.get("live-price-max-requests-per-minute", 40)),
+                "max_requests_per_minute": int(config.get("live-price-max-requests-per-minute", 50)),
                 "source_api_counts": merged_quotes["source_api"].value_counts(dropna=False).to_dict()
                 if "source_api" in merged_quotes.columns and not merged_quotes.empty
                 else {},
@@ -1095,6 +1249,12 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None) -> int:
                 "live_price_snapshot_file": config.get("live-price-snapshot-file"),
                 "daily_quote_archive_file": archived_file,
                 "generated_at": now.isoformat(),
+                "source_mode": market_data_context.get("selected_mode"),
+                "requested_source_mode": market_data_context.get("requested_mode"),
+                "session_state": market_data_context.get("session_state"),
+                "market_open": bool(market_data_context.get("market_open")),
+                "source_reason": market_data_context.get("reason"),
+                "client_metadata": quote_client_metadata,
             }
             write_live_bridge_report(
                 config,
@@ -1142,6 +1302,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--live-price-max-workers", type=int)
     parser.add_argument("--live-price-max-requests-per-minute", type=int)
     parser.add_argument("--live-price-poll-interval-seconds", type=int)
+    parser.add_argument("--live-price-source-mode")
+    parser.add_argument("--simulated-live-price-random-seed", type=int)
+    parser.add_argument("--simulated-live-price-lookback-days", type=int)
+    parser.add_argument("--simulated-live-price-min-history-days", type=int)
+    parser.add_argument("--simulated-live-price-trading-minutes-per-day", type=int)
     parser.add_argument("--live-factor-poll-interval-seconds", type=int)
     return parser.parse_args()
 
@@ -1167,6 +1332,11 @@ def main() -> int:
         "live-price-max-workers": args.live_price_max_workers,
         "live-price-max-requests-per-minute": args.live_price_max_requests_per_minute,
         "live-price-poll-interval-seconds": args.live_price_poll_interval_seconds,
+        "live-price-source-mode": args.live_price_source_mode,
+        "simulated-live-price-random-seed": args.simulated_live_price_random_seed,
+        "simulated-live-price-lookback-days": args.simulated_live_price_lookback_days,
+        "simulated-live-price-min-history-days": args.simulated_live_price_min_history_days,
+        "simulated-live-price-trading-minutes-per-day": args.simulated_live_price_trading_minutes_per_day,
         "live-factor-poll-interval-seconds": args.live_factor_poll_interval_seconds,
     }
     config = load_live_bridge_config(args.config, overrides)

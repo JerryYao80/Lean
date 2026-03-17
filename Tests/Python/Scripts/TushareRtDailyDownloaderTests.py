@@ -2,7 +2,11 @@ import importlib.util
 import sys
 import unittest.mock as mock
 import unittest
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import tempfile
 
 import pandas as pd
 
@@ -43,20 +47,20 @@ class TushareRtDailyDownloaderTests(unittest.TestCase):
         )
         events = []
 
-        def fake_fetch_single_quote_task(request_index, ts_code, trade_date):
+        def fake_fetch_quote_batch_task(request_index, symbols, api_name, trade_date):
             return {
                 "request_index": request_index,
-                "ts_code": ts_code,
+                "symbols": list(symbols),
                 "trade_date": trade_date,
-                "api_name": "rt_etf_k" if client.is_etf_code(ts_code) else "rt_k",
-                "batch_index": request_index,
+                "api_name": api_name,
                 "data": pd.DataFrame([
                     {"ts_code": ts_code, "trade_date": trade_date, "close": 10.0 + request_index, "pct_chg": 1.0}
+                    for ts_code in symbols
                 ]),
                 "error": None,
             }
 
-        with mock.patch.object(client, "_fetch_single_quote_task", side_effect=fake_fetch_single_quote_task):
+        with mock.patch.object(client, "_fetch_quote_batch_task", side_effect=fake_fetch_quote_batch_task):
             with mock.patch.object(module.time, "sleep", return_value=None):
                 frame = client.fetch_quotes(
                     ["000001.SZ", "000002.SZ", "510300.SH"],
@@ -72,6 +76,47 @@ class TushareRtDailyDownloaderTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events].count("minute_window_start"), 2)
         self.assertEqual([event["event"] for event in events].count("minute_window_wait"), 1)
         self.assertEqual(events[-1]["event"], "finish")
+
+    def test_gbm_synthetic_client_generates_incremental_quotes(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_root = root / "tushare"
+            daily_path = data_root / "daily" / "ts_code=000001.SZ" / "data.parquet"
+            daily_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([
+                {"trade_date": "20260105", "open": 9.80, "high": 10.10, "low": 9.70, "close": 10.00, "vol": 1000000, "amount": 10000000},
+                {"trade_date": "20260106", "open": 10.00, "high": 10.30, "low": 9.95, "close": 10.20, "vol": 1100000, "amount": 11220000},
+                {"trade_date": "20260107", "open": 10.20, "high": 10.40, "low": 10.10, "close": 10.35, "vol": 1200000, "amount": 12420000},
+                {"trade_date": "20260108", "open": 10.35, "high": 10.55, "low": 10.30, "close": 10.50, "vol": 1300000, "amount": 13650000},
+                {"trade_date": "20260109", "open": 10.50, "high": 10.80, "low": 10.45, "close": 10.70, "vol": 1250000, "amount": 13375000},
+            ]).to_parquet(daily_path, index=False)
+
+            client = module.GbmSyntheticRtDailyClient(
+                tushare_data_path=data_root,
+                batch_size=50,
+                poll_interval_seconds=60,
+                lookback_days=5,
+                min_history_days=2,
+                random_seed=7,
+                verbose=False,
+            )
+
+            with mock.patch.object(module, "datetime") as mocked_datetime:
+                mocked_datetime.now.side_effect = [
+                    datetime(2026, 3, 12, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+                    datetime(2026, 3, 12, 20, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+                ]
+                mocked_datetime.side_effect = datetime
+                first = client.fetch_quotes(["000001.SZ"], trade_date="20260312")
+                second = client.fetch_quotes(["000001.SZ"], trade_date="20260312")
+
+            self.assertEqual(first.iloc[0]["source_api"], "sim_rt_k")
+            self.assertEqual(second.iloc[0]["source_api"], "sim_rt_k")
+            self.assertGreater(float(second.iloc[0]["vol"]), float(first.iloc[0]["vol"]))
+            self.assertNotEqual(float(second.iloc[0]["close"]), float(first.iloc[0]["close"]))
+            self.assertGreaterEqual(float(second.iloc[0]["high"]), float(second.iloc[0]["close"]))
+            self.assertLessEqual(float(second.iloc[0]["low"]), float(second.iloc[0]["close"]))
 
 
 if __name__ == "__main__":

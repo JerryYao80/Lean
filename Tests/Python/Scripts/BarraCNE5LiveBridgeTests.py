@@ -40,21 +40,15 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
 
         self.assertEqual(token, live_bridge.tushare_runtime_config.TUSHARE_TOKEN)
 
-    def test_build_quote_refresh_plan_rotates_snapshot_cursor(self):
+    def test_build_quote_refresh_plan_refreshes_full_universe_each_cycle(self):
         live_bridge = load_module("barra_cne5_live_bridge_refresh_plan", "Scripts/barra_cne5_live_bridge.py")
 
         universe = ["000001.SZ", "000002.SZ", "000063.SZ", "600000.SH", "600519.SH"]
-        first = live_bridge.build_quote_refresh_plan(universe, 2, {}, "20260316")
-        second = live_bridge.build_quote_refresh_plan(
-            universe,
-            2,
-            {"trade_date": "20260316", "next_refresh_offset": first["next_refresh_offset"]},
-            "20260316",
-        )
+        refresh = live_bridge.build_quote_refresh_plan(universe, 2, {}, "20260316")
 
-        self.assertEqual(first["refresh_symbols"], ["000001.SZ", "000002.SZ"])
-        self.assertEqual(second["refresh_symbols"], ["000063.SZ", "600000.SH"])
-        self.assertEqual(first["estimated_full_refresh_minutes"], 3)
+        self.assertEqual(refresh["refresh_symbols"], universe)
+        self.assertEqual(refresh["refresh_count"], len(universe))
+        self.assertEqual(refresh["estimated_full_refresh_minutes"], 1)
 
     def test_merge_live_quotes_carries_forward_previous_snapshot_rows(self):
         live_bridge = load_module("barra_cne5_live_bridge_merge_quotes", "Scripts/barra_cne5_live_bridge.py")
@@ -72,6 +66,59 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
 
         self.assertEqual(merged["ts_code"].tolist(), ["000001.SZ", "000002.SZ"])
         self.assertEqual(merged["close"].tolist(), [10.0, 21.0])
+
+    def test_resolve_market_data_context_switches_to_simulation_after_hours(self):
+        live_bridge = load_module("barra_cne5_live_bridge_mode", "Scripts/barra_cne5_live_bridge.py")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            tushare_root = root / "tushare"
+            self.write_parquet(tushare_root / "trade_cal" / "data.parquet", [
+                {"cal_date": "20260312", "is_open": 1},
+            ])
+            config = live_bridge.load_live_bridge_config(overrides={
+                "tushare-data-path": str(tushare_root),
+                "market-symbol": "000300.SH",
+                "live-price-source-mode": "auto",
+            })
+
+            context = live_bridge.resolve_market_data_context(
+                config,
+                now=datetime(2026, 3, 12, 20, 15, tzinfo=ZoneInfo("Asia/Shanghai")),
+            )
+
+            self.assertEqual(context["selected_mode"], "gbm-simulated")
+            self.assertEqual(context["session_state"], "after-hours")
+            self.assertIn("market closed", context["reason"])
+
+    def test_normalize_live_quotes_preserves_simulated_source_api(self):
+        live_bridge = load_module("barra_cne5_live_bridge_norm", "Scripts/barra_cne5_live_bridge.py")
+
+        frame = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20260312",
+                "open": 10.0,
+                "high": 10.3,
+                "low": 9.9,
+                "close": 10.2,
+                "price": 10.2,
+                "pre_close": 10.0,
+                "pct_chg": 2.0,
+                "vol": 12345,
+                "amount": 125000,
+                "fetch_timestamp": "2026-03-12T20:15:00+08:00",
+                "source_api": "sim_rt_k",
+            },
+        ])
+
+        normalized = live_bridge.normalize_live_quotes(
+            frame,
+            "20260312",
+            datetime(2026, 3, 12, 20, 15, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+        self.assertEqual(normalized.iloc[0]["source_api"], "sim_rt_k")
 
     def test_live_bridge_once_generates_current_snapshot_for_csi300_universe(self):
         live_bridge = load_module("barra_cne5_live_bridge", "Scripts/barra_cne5_live_bridge.py")
