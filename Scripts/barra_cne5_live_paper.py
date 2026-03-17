@@ -94,6 +94,10 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "60"),
         "simulated-live-price-random-seed": str(parameters.get("simulated-live-price-random-seed") or "20260317"),
         "simulated-live-price-lookback-days": str(parameters.get("simulated-live-price-lookback-days") or "60"),
+        "simulated-live-price-volatility-scale": str(parameters.get("simulated-live-price-volatility-scale") or "8.0"),
+        "simulated-live-price-min-daily-volatility": str(parameters.get("simulated-live-price-min-daily-volatility") or "0.80"),
+        "simulated-live-price-jump-probability": str(parameters.get("simulated-live-price-jump-probability") or "0.22"),
+        "simulated-live-price-jump-scale": str(parameters.get("simulated-live-price-jump-scale") or "0.10"),
         "live-signal-interval-minutes": str(parameters.get("live-signal-interval-minutes") or "3"),
         "bridge-ready-min-quote-coverage": str(parameters.get("bridge-ready-min-quote-coverage") or "1.0"),
         "bridge-ready-min-factor-coverage": str(parameters.get("bridge-ready-min-factor-coverage") or "0.95"),
@@ -710,7 +714,11 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
     print(
         f"Price source mode   : {runtime_config['live-price-source-mode']} "
         f"(sim seed={runtime_config['simulated-live-price-random-seed']} "
-        f"lookback={runtime_config['simulated-live-price-lookback-days']}d)",
+        f"lookback={runtime_config['simulated-live-price-lookback-days']}d "
+        f"vol_scale={runtime_config['simulated-live-price-volatility-scale']} "
+        f"vol_floor={runtime_config['simulated-live-price-min-daily-volatility']} "
+        f"jump_p={runtime_config['simulated-live-price-jump-probability']} "
+        f"jump_sigma={runtime_config['simulated-live-price-jump-scale']})",
         flush=True,
     )
     print(f"Universe            : {runtime_config['universe']}", flush=True)

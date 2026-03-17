@@ -99,24 +99,35 @@ class TushareRtDailyDownloaderTests(unittest.TestCase):
                 lookback_days=5,
                 min_history_days=2,
                 random_seed=7,
+                volatility_scale=8.0,
+                min_daily_volatility=0.80,
+                jump_probability=0.22,
+                jump_scale=0.10,
                 verbose=False,
             )
 
             with mock.patch.object(module, "datetime") as mocked_datetime:
                 mocked_datetime.now.side_effect = [
-                    datetime(2026, 3, 12, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
-                    datetime(2026, 3, 12, 20, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+                    datetime(2026, 3, 12, 20, minute, tzinfo=ZoneInfo("Asia/Shanghai"))
+                    for minute in range(10)
                 ]
                 mocked_datetime.side_effect = datetime
-                first = client.fetch_quotes(["000001.SZ"], trade_date="20260312")
-                second = client.fetch_quotes(["000001.SZ"], trade_date="20260312")
+                frames = [
+                    client.fetch_quotes(["000001.SZ"], trade_date="20260312")
+                    for _ in range(10)
+                ]
 
+            first = frames[0]
+            second = frames[1]
+            max_abs_pct = max(abs(float(frame.iloc[0]["pct_chg"])) for frame in frames)
             self.assertEqual(first.iloc[0]["source_api"], "sim_rt_k")
             self.assertEqual(second.iloc[0]["source_api"], "sim_rt_k")
             self.assertGreater(float(second.iloc[0]["vol"]), float(first.iloc[0]["vol"]))
             self.assertNotEqual(float(second.iloc[0]["close"]), float(first.iloc[0]["close"]))
             self.assertGreaterEqual(float(second.iloc[0]["high"]), float(second.iloc[0]["close"]))
             self.assertLessEqual(float(second.iloc[0]["low"]), float(second.iloc[0]["close"]))
+            self.assertGreater(max_abs_pct, 5.0)
+            self.assertEqual(client.last_fetch_metadata["volatility_scale"], 8.0)
 
 
 if __name__ == "__main__":

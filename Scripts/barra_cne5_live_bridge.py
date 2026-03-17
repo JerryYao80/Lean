@@ -77,6 +77,10 @@ def default_config() -> dict:
         "simulated-live-price-lookback-days": 60,
         "simulated-live-price-min-history-days": 20,
         "simulated-live-price-trading-minutes-per-day": 240,
+        "simulated-live-price-volatility-scale": 8.0,
+        "simulated-live-price-min-daily-volatility": 0.80,
+        "simulated-live-price-jump-probability": 0.22,
+        "simulated-live-price-jump-scale": 0.10,
         "factor-worker-count": "auto",
         "parallel-date-block-size": 1,
         "progress-interval-symbols": 100,
@@ -190,6 +194,22 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config["simulated-live-price-trading-minutes-per-day"] = max(
         1,
         coerce_int(config.get("simulated-live-price-trading-minutes-per-day"), 240),
+    )
+    config["simulated-live-price-volatility-scale"] = max(
+        1.0,
+        float(config.get("simulated-live-price-volatility-scale") or 8.0),
+    )
+    config["simulated-live-price-min-daily-volatility"] = max(
+        0.05,
+        float(config.get("simulated-live-price-min-daily-volatility") or 0.80),
+    )
+    config["simulated-live-price-jump-probability"] = max(
+        0.0,
+        min(1.0, float(config.get("simulated-live-price-jump-probability") or 0.22)),
+    )
+    config["simulated-live-price-jump-scale"] = max(
+        0.0,
+        float(config.get("simulated-live-price-jump-scale") or 0.10),
     )
     return config
 
@@ -1075,6 +1095,10 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
             min_history_days=config.get("simulated-live-price-min-history-days", 20),
             trading_minutes_per_day=config.get("simulated-live-price-trading-minutes-per-day", 240),
             random_seed=config.get("simulated-live-price-random-seed", 20260317),
+            volatility_scale=config.get("simulated-live-price-volatility-scale", 8.0),
+            min_daily_volatility=config.get("simulated-live-price-min-daily-volatility", 0.80),
+            jump_probability=config.get("simulated-live-price-jump-probability", 0.22),
+            jump_scale=config.get("simulated-live-price-jump-scale", 0.10),
             timezone=str(config.get("timezone") or "Asia/Shanghai"),
             verbose=False,
         )
@@ -1113,7 +1137,11 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
     print(f"Price source mode  : {config.get('live-price-source-mode')}", flush=True)
     print(
         f"Sim seed/lookback  : {config.get('simulated-live-price-random-seed')}/"
-        f"{config.get('simulated-live-price-lookback-days')}d",
+        f"{config.get('simulated-live-price-lookback-days')}d "
+        f"vol_scale={config.get('simulated-live-price-volatility-scale')} "
+        f"vol_floor={config.get('simulated-live-price-min-daily-volatility')} "
+        f"jump_p={config.get('simulated-live-price-jump-probability')} "
+        f"jump_sigma={config.get('simulated-live-price-jump-scale')}",
         flush=True,
     )
     print("Refresh model      : full-universe refresh each minute with carry-forward only for transient misses", flush=True)
@@ -1307,6 +1335,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--simulated-live-price-lookback-days", type=int)
     parser.add_argument("--simulated-live-price-min-history-days", type=int)
     parser.add_argument("--simulated-live-price-trading-minutes-per-day", type=int)
+    parser.add_argument("--simulated-live-price-volatility-scale", type=float)
+    parser.add_argument("--simulated-live-price-min-daily-volatility", type=float)
+    parser.add_argument("--simulated-live-price-jump-probability", type=float)
+    parser.add_argument("--simulated-live-price-jump-scale", type=float)
     parser.add_argument("--live-factor-poll-interval-seconds", type=int)
     return parser.parse_args()
 
@@ -1337,6 +1369,10 @@ def main() -> int:
         "simulated-live-price-lookback-days": args.simulated_live_price_lookback_days,
         "simulated-live-price-min-history-days": args.simulated_live_price_min_history_days,
         "simulated-live-price-trading-minutes-per-day": args.simulated_live_price_trading_minutes_per_day,
+        "simulated-live-price-volatility-scale": args.simulated_live_price_volatility_scale,
+        "simulated-live-price-min-daily-volatility": args.simulated_live_price_min_daily_volatility,
+        "simulated-live-price-jump-probability": args.simulated_live_price_jump_probability,
+        "simulated-live-price-jump-scale": args.simulated_live_price_jump_scale,
         "live-factor-poll-interval-seconds": args.live_factor_poll_interval_seconds,
     }
     config = load_live_bridge_config(args.config, overrides)

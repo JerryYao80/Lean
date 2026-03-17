@@ -442,6 +442,10 @@ class GbmSyntheticRtDailyClient:
         min_history_days: int = 20,
         trading_minutes_per_day: int = 240,
         random_seed: int = 42,
+        volatility_scale: float = 8.0,
+        min_daily_volatility: float = 0.80,
+        jump_probability: float = 0.22,
+        jump_scale: float = 0.10,
         timezone: str = "Asia/Shanghai",
         verbose: bool = False,
     ):
@@ -451,6 +455,10 @@ class GbmSyntheticRtDailyClient:
         self._lookback_days = max(10, int(lookback_days))
         self._min_history_days = max(5, int(min_history_days))
         self._trading_minutes_per_day = max(1, int(trading_minutes_per_day))
+        self._volatility_scale = max(1.0, float(volatility_scale))
+        self._min_daily_volatility = max(0.05, float(min_daily_volatility))
+        self._jump_probability = max(0.0, min(1.0, float(jump_probability)))
+        self._jump_scale = max(0.0, float(jump_scale))
         self._timezone = ZoneInfo(str(timezone or "Asia/Shanghai"))
         self._verbose = bool(verbose)
         self._random = random.Random(int(random_seed))
@@ -608,13 +616,21 @@ class GbmSyntheticRtDailyClient:
         calibration = self._build_calibration(ts_code, trade_date)
         state = self._get_or_create_state(ts_code, trade_date, calibration)
         step_fraction = self._poll_interval_seconds / 60.0 / float(self._trading_minutes_per_day)
+        scaled_daily_volatility = min(1.50, max(self._min_daily_volatility, calibration.volatility * self._volatility_scale))
+        scaled_drift = max(-0.25, min(0.25, calibration.drift * max(1.0, self._volatility_scale * 0.5)))
         shock = self._random.gauss(0.0, 1.0)
+        jump_return = 0.0
+        if self._jump_probability > 0.0 and self._random.random() < self._jump_probability:
+            jump_return = self._random.gauss(0.0, self._jump_scale)
         exponent = (
-            (calibration.drift - 0.5 * calibration.volatility * calibration.volatility) * step_fraction
-            + calibration.volatility * math.sqrt(step_fraction) * shock
+            (scaled_drift - 0.5 * scaled_daily_volatility * scaled_daily_volatility) * step_fraction
+            + scaled_daily_volatility * math.sqrt(step_fraction) * shock
+            + jump_return
         )
         next_close = max(0.01, state.close_price * math.exp(exponent))
-        intraday_span = abs(self._random.gauss(0.0, 1.0)) * calibration.volatility * math.sqrt(step_fraction)
+        intraday_span = (
+            abs(self._random.gauss(0.0, 1.0)) + abs(shock)
+        ) * scaled_daily_volatility * math.sqrt(step_fraction)
         state.close_price = next_close
         state.high_price = max(state.high_price, state.open_price, next_close * (1.0 + intraday_span * 0.35))
         state.low_price = min(state.low_price, state.open_price, next_close * max(0.01, 1.0 - intraday_span * 0.35))
@@ -622,6 +638,8 @@ class GbmSyntheticRtDailyClient:
         mean_increment_volume = max(1.0, calibration.avg_daily_volume * step_fraction)
         volume_log_mean = math.log(mean_increment_volume) - 0.5 * calibration.volume_log_sigma * calibration.volume_log_sigma
         increment_volume = math.exp(volume_log_mean + calibration.volume_log_sigma * self._random.gauss(0.0, 1.0))
+        if jump_return != 0.0:
+            increment_volume *= 1.0 + min(3.0, abs(jump_return) * 8.0)
         state.cumulative_volume += max(0.0, increment_volume)
 
         turnover_multiplier = max(0.50, min(1.50, 1.0 + self._random.gauss(0.0, 0.05)))
@@ -662,6 +680,10 @@ class GbmSyntheticRtDailyClient:
             "generated_at": timestamp.isoformat(),
             "batch_count": batch_count,
             "minute_window_count": 1 if symbols else 0,
+            "volatility_scale": self._volatility_scale,
+            "min_daily_volatility": self._min_daily_volatility,
+            "jump_probability": self._jump_probability,
+            "jump_scale": self._jump_scale,
         }
 
         if not symbols:
@@ -750,5 +772,9 @@ class GbmSyntheticRtDailyClient:
             "generated_at": timestamp.isoformat(),
             "batch_count": batch_count,
             "minute_window_count": 1,
+            "volatility_scale": self._volatility_scale,
+            "min_daily_volatility": self._min_daily_volatility,
+            "jump_probability": self._jump_probability,
+            "jump_scale": self._jump_scale,
         }
         return frame
