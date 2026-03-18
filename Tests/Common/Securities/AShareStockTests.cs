@@ -43,13 +43,30 @@ namespace QuantConnect.Tests.Common.Securities
         [TestCase("000001", 0.10)]
         [TestCase("600000", 0.10)]
         [TestCase("300750", 0.20)]
+        [TestCase("301001", 0.20)]
         [TestCase("688981", 0.20)]
+        [TestCase("430001", 0.30)]
+        [TestCase("830001", 0.30)]
+        [TestCase("870001", 0.30)]
         public void ReturnsExpectedPriceLimitPercentage(string ticker, decimal expectedPriceLimit)
         {
-            var market = ticker.StartsWith("6", StringComparison.Ordinal) ? Market.SSE : Market.SZSE;
+            var market = ticker.StartsWith("6", StringComparison.Ordinal)
+                ? Market.SSE
+                : ticker.StartsWith("0", StringComparison.Ordinal) || ticker.StartsWith("3", StringComparison.Ordinal)
+                    ? Market.SZSE
+                    : Market.China;
             var symbol = Symbol.Create(ticker, SecurityType.Equity, market);
 
             Assert.AreEqual(expectedPriceLimit, AShareStock.GetPriceLimitPercentage(symbol));
+        }
+
+        [Test]
+        public void ReturnsFivePercentPriceLimitForSpecialTreatmentStocks()
+        {
+            var symbol = Symbol.Create("600000", SecurityType.Equity, Market.SSE);
+
+            Assert.AreEqual(0.05m, AShareStock.GetPriceLimitPercentage(symbol, "*ST浦发"));
+            Assert.IsTrue(AShareStock.IsSpecialTreatment(symbol, "*ST浦发"));
         }
 
         [Test]

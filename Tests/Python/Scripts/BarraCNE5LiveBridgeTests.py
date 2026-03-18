@@ -44,11 +44,11 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
         live_bridge = load_module("barra_cne5_live_bridge_refresh_plan", "Scripts/barra_cne5_live_bridge.py")
 
         universe = ["000001.SZ", "000002.SZ", "000063.SZ", "600000.SH", "600519.SH"]
-        refresh = live_bridge.build_quote_refresh_plan(universe, 2, {}, "20260316")
+        refresh = live_bridge.build_quote_refresh_plan(universe, 2, {}, "20260316", poll_interval_seconds=180)
 
         self.assertEqual(refresh["refresh_symbols"], universe)
         self.assertEqual(refresh["refresh_count"], len(universe))
-        self.assertEqual(refresh["estimated_full_refresh_minutes"], 1)
+        self.assertEqual(refresh["estimated_full_refresh_minutes"], 3)
 
     def test_merge_live_quotes_carries_forward_previous_snapshot_rows(self):
         live_bridge = load_module("barra_cne5_live_bridge_merge_quotes", "Scripts/barra_cne5_live_bridge.py")

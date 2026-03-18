@@ -36,12 +36,12 @@ namespace QuantConnect.Tests.Common.Orders.Fees
 
             var fee = new AShareStockFeeModel().GetOrderFee(new OrderFeeParameters(security, order));
 
-            Assert.AreEqual(5.2m, fee.Value.Amount);
+            Assert.AreEqual(5.1m, fee.Value.Amount);
             Assert.AreEqual(Currencies.CNY, fee.Value.Currency);
         }
 
         [Test]
-        public void CalculatesShanghaiSellFeesIncludingStampDuty()
+        public void CalculatesSellFeesIncludingStampDuty()
         {
             var security = CreateSecurity("600000", Market.SSE);
             security.SetMarketPrice(new Tick { Value = 10m, AskPrice = 10m, BidPrice = 10m });
@@ -49,7 +49,20 @@ namespace QuantConnect.Tests.Common.Orders.Fees
 
             var fee = new AShareStockFeeModel().GetOrderFee(new OrderFeeParameters(security, order));
 
-            Assert.AreEqual(15.2m, fee.Value.Amount);
+            Assert.AreEqual(10.1m, fee.Value.Amount);
+            Assert.AreEqual(Currencies.CNY, fee.Value.Currency);
+        }
+
+        [Test]
+        public void CalculatesShenzhenBuyFeesWithTransferFee()
+        {
+            var security = CreateSecurity("000001", Market.SZSE);
+            security.SetMarketPrice(new Tick { Value = 10m, AskPrice = 10m, BidPrice = 10m });
+            var order = new MarketOrder(security.Symbol, 1000m, new DateTime(2024, 3, 4));
+
+            var fee = new AShareStockFeeModel().GetOrderFee(new OrderFeeParameters(security, order));
+
+            Assert.AreEqual(5.1m, fee.Value.Amount);
             Assert.AreEqual(Currencies.CNY, fee.Value.Currency);
         }
 

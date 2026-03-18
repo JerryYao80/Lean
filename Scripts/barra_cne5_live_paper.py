@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
 import json
 import subprocess
@@ -16,6 +17,8 @@ from pathlib import Path
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+
+import live_paper_console as console
 
 
 def repo_root() -> Path:
@@ -89,9 +92,9 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "live-price-poll-interval-seconds": str(
             parameters.get("live-price-poll-interval-seconds")
             or parameters.get("live-factor-poll-interval-seconds")
-            or "60"
+            or "180"
         ),
-        "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "60"),
+        "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "180"),
         "simulated-live-price-random-seed": str(parameters.get("simulated-live-price-random-seed") or "20260317"),
         "simulated-live-price-lookback-days": str(parameters.get("simulated-live-price-lookback-days") or "60"),
         "simulated-live-price-volatility-scale": str(parameters.get("simulated-live-price-volatility-scale") or "8.0"),
@@ -701,6 +704,11 @@ def build_market_preview_line(bridge_report: dict | None) -> str | None:
 
 
 def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path | None = None) -> None:
+    poll_interval_seconds = max(1, safe_int(runtime_config.get("live-price-poll-interval-seconds"), 180))
+    queue_refresh_seconds = max(1, safe_int(runtime_config.get("live-price-refresh-interval-seconds"), 180))
+    signal_interval_minutes = max(1, safe_int(runtime_config.get("live-signal-interval-minutes"), 3))
+    poll_interval_minutes = max(1, math.ceil(poll_interval_seconds / 60.0))
+    queue_refresh_minutes = max(1, math.ceil(queue_refresh_seconds / 60.0))
     print("=" * 100)
     print("Barra CNE5 Live Paper")
     print("=" * 100)
@@ -742,7 +750,15 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
     print(f"Allocation report   : {runtime_config['allocation-report-file']}", flush=True)
     print(f"Exposure report     : {runtime_config['factor-exposure-file']}", flush=True)
     print(f"Trade report        : {runtime_config['trade-report-file']}", flush=True)
-    print("Process flow        : 1) bridge refreshes the full Barra universe every minute 2) during A-share session it uses Tushare rt_k/rt_etf_k, otherwise it auto-switches to GBM-simulated bars 3) LEAN starts only after the first full snapshot is ready 4) strategy restores persisted cash/holdings 5) strategy aligns portfolio every 3 minutes and writes account/trade/allocation outputs", flush=True)
+    print(
+        "Process flow        : "
+        f"1) bridge refreshes the full Barra universe every {poll_interval_minutes} minutes "
+        "2) during A-share session it uses Tushare rt_k/rt_etf_k, otherwise it auto-switches to GBM-simulated bars "
+        "3) LEAN starts only after the first full snapshot is ready "
+        "4) strategy restores persisted cash/holdings "
+        f"5) LEAN queue refreshes every {queue_refresh_minutes} minutes and strategy aligns portfolio every {signal_interval_minutes} minutes, then writes account/trade/allocation outputs",
+        flush=True,
+    )
     print("=" * 100)
 
 
@@ -784,8 +800,10 @@ def print_runtime_status(
 ) -> None:
     factor_path = Path(runtime_config["factor-data-path"])
     bridge_report = load_bridge_report(Path(runtime_config["live-factor-report-file"]))
-    daily_row = read_latest_csv_row(Path(runtime_config["daily-summary-file"]), modified_after=output_fresh_since)
-    snapshot_payload, snapshot_quotes = build_snapshot_quote_lookup(Path(runtime_config["live-price-snapshot-file"]))
+    daily_row = console.read_latest_csv_row(Path(runtime_config["daily-summary-file"]), modified_after=output_fresh_since)
+    snapshot_payload, snapshot_quotes = console.build_snapshot_quote_lookup(
+        Path(runtime_config["live-price-snapshot-file"]),
+    )
 
     bridge_trade_date = bridge_report.get("trade_date") if bridge_report else "-"
     bridge_mode = bridge_report.get("bridge_report", {}).get("mode") if bridge_report else "-"
@@ -819,21 +837,47 @@ def print_runtime_status(
             flush=True,
         )
 
-    account_summary = build_account_summary(
-        runtime_config,
-        daily_row,
-        snapshot_payload,
+    extra_rows: list[tuple[str, str]] = []
+    if daily_row:
+        if daily_row.get("eligible_symbols") not in (None, ""):
+            extra_rows.append(("Eligible", str(daily_row.get("eligible_symbols"))))
+        if daily_row.get("selected_symbols") not in (None, ""):
+            extra_rows.append(("Selected", str(daily_row.get("selected_symbols"))))
+        turnover = format_fraction_percent(daily_row.get("turnover"))
+        if turnover != "-":
+            extra_rows.append(("Turnover", turnover))
+        kelly = format_decimal(daily_row.get("kelly_scale"), digits=2)
+        if kelly != "-":
+            extra_rows.append(("Kelly", kelly))
+        effective_exposure = format_fraction_percent(daily_row.get("effective_exposure"))
+        if effective_exposure != "-":
+            extra_rows.append(("Eff Exposure", effective_exposure))
+        stop_loss_exits = daily_row.get("stop_loss_exits")
+        if stop_loss_exits not in (None, ""):
+            extra_rows.append(("StopLoss Exits", str(stop_loss_exits)))
+        trailing_stop_exits = daily_row.get("trailing_stop_exits")
+        if trailing_stop_exits not in (None, ""):
+            extra_rows.append(("Trail Exits", str(trailing_stop_exits)))
+        score_spread = format_decimal(daily_row.get("score_spread"))
+        if score_spread != "-":
+            extra_rows.append(("Score Spread", score_spread))
+
+    account_summary = console.build_account_summary_from_sources(
+        initial_cash=runtime_config.get("initial-cash"),
+        daily_row=daily_row,
+        snapshot_payload=snapshot_payload,
         bridge_report=bridge_report,
         live_quote_count=received_quotes,
+        extra_rows=extra_rows,
     )
-    if should_print_section(display_state, "account_summary", account_summary):
+    if console.should_print_section(display_state, "account_summary", account_summary):
         print(account_summary, flush=True)
 
     factor_source_line = build_factor_source_line(bridge_report)
-    if should_print_section(display_state, "factor_source", factor_source_line):
+    if console.should_print_section(display_state, "factor_source", factor_source_line):
         print(factor_source_line, flush=True)
 
-    trade_rows = read_csv_rows(Path(runtime_config["trade-report-file"]), modified_after=output_fresh_since)
+    trade_rows = console.read_csv_rows(Path(runtime_config["trade-report-file"]), modified_after=output_fresh_since)
     previous_trade_count = safe_int(display_state.get("_trade_row_count"), 0) if isinstance(display_state, dict) else 0
     total_trade_rows = len(trade_rows)
     if isinstance(display_state, dict):
@@ -842,33 +886,39 @@ def print_runtime_status(
     if trade_rows:
         new_trade_rows = trade_rows[previous_trade_count:] if previous_trade_count < total_trade_rows else []
         if new_trade_rows:
-            signal_preview = build_signal_preview_from_rows(
+            signal_preview = console.build_trade_executions_preview(
                 new_trade_rows,
                 snapshot_quotes=snapshot_quotes,
                 limit=12,
                 total_rows=total_trade_rows,
             )
-            if should_print_section(display_state, "signal_preview", signal_preview):
+            if console.should_print_section(display_state, "signal_preview", signal_preview):
                 print(signal_preview, flush=True)
         else:
-            no_trade_line = build_no_new_trade_line(trade_rows)
-            if should_print_section(display_state, "signal_preview", no_trade_line):
+            no_trade_line = console.build_no_new_trade_line(trade_rows)
+            if console.should_print_section(display_state, "signal_preview", no_trade_line):
                 print(no_trade_line, flush=True)
+    else:
+        no_trade_line = console.build_no_new_trade_line([])
+        if console.should_print_section(display_state, "signal_preview", no_trade_line):
+            print(no_trade_line, flush=True)
 
-    allocation_preview = build_allocation_preview(
+    allocation_preview = console.build_portfolio_allocation_from_csv(
         Path(runtime_config["allocation-report-file"]),
         snapshot_quotes=snapshot_quotes,
         limit=20,
         modified_after=output_fresh_since,
     )
-    if should_print_section(display_state, "allocation_preview", allocation_preview):
+    if allocation_preview is None:
+        allocation_preview = "[portfolio allocation] no holdings yet"
+    if console.should_print_section(display_state, "allocation_preview", allocation_preview):
         print(allocation_preview, flush=True)
 
     exposure_preview = build_exposure_preview(
         Path(runtime_config["factor-exposure-file"]),
         modified_after=output_fresh_since,
     )
-    if should_print_section(display_state, "exposure_preview", exposure_preview):
+    if console.should_print_section(display_state, "exposure_preview", exposure_preview):
         print(exposure_preview, flush=True)
 
 
@@ -972,7 +1022,7 @@ def wait_for_process_with_status(
 ) -> int:
     interval_seconds = max(
         5.0,
-        float(status_interval_seconds or runtime_config.get("live-price-poll-interval-seconds") or 60),
+        float(status_interval_seconds or runtime_config.get("live-price-poll-interval-seconds") or 180),
     )
     display_state: dict[str, str] = {}
     print_runtime_status(runtime_config, output_fresh_since=output_fresh_since, display_state=display_state)

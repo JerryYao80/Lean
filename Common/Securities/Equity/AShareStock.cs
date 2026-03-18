@@ -36,6 +36,16 @@ namespace QuantConnect.Securities.Equity
         public const decimal GrowthBoardPriceLimitPercentage = 0.20m;
 
         /// <summary>
+        /// Price limit percentage for Beijing Stock Exchange A-shares.
+        /// </summary>
+        public const decimal BeijingExchangePriceLimitPercentage = 0.30m;
+
+        /// <summary>
+        /// Price limit percentage for special-treatment A-shares.
+        /// </summary>
+        public const decimal SpecialTreatmentPriceLimitPercentage = 0.05m;
+
+        /// <summary>
         /// Default minimum price variation for A-share stocks.
         /// </summary>
         public const decimal DefaultMinimumPriceVariation = 0.01m;
@@ -64,9 +74,17 @@ namespace QuantConnect.Securities.Equity
         /// <summary>
         /// Gets the symbol-specific daily price limit percentage.
         /// </summary>
-        public static decimal GetPriceLimitPercentage(Symbol symbol)
+        public static decimal GetPriceLimitPercentage(Symbol symbol, string description = null)
         {
-            return AShareStockMetadataRegistry.GetPriceLimitPercentage(symbol?.Value);
+            return AShareStockMetadataRegistry.GetPriceLimitPercentage(symbol?.Value, description);
+        }
+
+        /// <summary>
+        /// Determines whether the specified A-share should be treated as an ST stock.
+        /// </summary>
+        public static bool IsSpecialTreatment(Symbol symbol, string description = null)
+        {
+            return AShareStockMetadataRegistry.IsSpecialTreatment(symbol?.Value, description);
         }
 
         /// <summary>
@@ -85,17 +103,17 @@ namespace QuantConnect.Securities.Equity
         /// <summary>
         /// Gets the upper price limit rounded to the stock tick size.
         /// </summary>
-        public static decimal GetUpperPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation)
+        public static decimal GetUpperPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation, string description = null)
         {
-            return RoundToPriceVariation(previousClose * (1 + GetPriceLimitPercentage(symbol)), GetMinimumPriceVariation(minimumPriceVariation));
+            return RoundToPriceVariation(previousClose * (1 + GetPriceLimitPercentage(symbol, description)), GetMinimumPriceVariation(minimumPriceVariation));
         }
 
         /// <summary>
         /// Gets the lower price limit rounded to the stock tick size.
         /// </summary>
-        public static decimal GetLowerPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation)
+        public static decimal GetLowerPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation, string description = null)
         {
-            return RoundToPriceVariation(previousClose * (1 - GetPriceLimitPercentage(symbol)), GetMinimumPriceVariation(minimumPriceVariation));
+            return RoundToPriceVariation(previousClose * (1 - GetPriceLimitPercentage(symbol, description)), GetMinimumPriceVariation(minimumPriceVariation));
         }
 
         /// <summary>

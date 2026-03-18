@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -71,7 +72,7 @@ def default_config() -> dict:
         "live-price-batch-size": 100,
         "live-price-max-workers": 1,
         "live-price-max-requests-per-minute": 50,
-        "live-price-poll-interval-seconds": 60,
+        "live-price-poll-interval-seconds": 180,
         "live-price-source-mode": "auto",
         "simulated-live-price-random-seed": 20260317,
         "simulated-live-price-lookback-days": 60,
@@ -85,7 +86,7 @@ def default_config() -> dict:
         "parallel-date-block-size": 1,
         "progress-interval-symbols": 100,
         "progress-interval-files": 50,
-        "live-factor-poll-interval-seconds": 60,
+        "live-factor-poll-interval-seconds": 180,
         "timezone": "Asia/Shanghai",
     }
 
@@ -168,7 +169,7 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
             config[key] = value
 
     config = resolve_config_paths(config, repo_root())
-    config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 60))
+    config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 180))
     config["live-price-batch-size"] = max(1, coerce_int(config.get("live-price-batch-size"), 100))
     config["live-price-max-workers"] = max(1, coerce_int(config.get("live-price-max-workers"), 1))
     config["live-price-max-requests-per-minute"] = max(
@@ -708,7 +709,13 @@ def load_existing_live_price_snapshot(path: str | Path) -> tuple[dict, pd.DataFr
     return payload, frame.loc[:, columns]
 
 
-def build_quote_refresh_plan(universe: list[str], refresh_limit: int, previous_snapshot_payload: dict | None, trade_date: str) -> dict:
+def build_quote_refresh_plan(
+    universe: list[str],
+    refresh_limit: int,
+    previous_snapshot_payload: dict | None,
+    trade_date: str,
+    poll_interval_seconds: float | int = 180,
+) -> dict:
     total_symbols = len(universe)
     if total_symbols <= 0:
         return {
@@ -719,13 +726,14 @@ def build_quote_refresh_plan(universe: list[str], refresh_limit: int, previous_s
             "next_refresh_offset": 0,
             "estimated_full_refresh_minutes": 0,
         }
+    estimated_full_refresh_minutes = max(1, int(math.ceil(max(1.0, float(poll_interval_seconds or 180)) / 60.0)))
     return {
         "refresh_symbols": list(universe),
         "refresh_count": total_symbols,
         "refresh_start_offset": 0,
         "refresh_end_offset": total_symbols,
         "next_refresh_offset": 0,
-        "estimated_full_refresh_minutes": 1,
+        "estimated_full_refresh_minutes": estimated_full_refresh_minutes,
     }
 
 
@@ -1090,7 +1098,7 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
         simulated_quote_client = GbmSyntheticRtDailyClient(
             tushare_data_path=config["tushare-data-path"],
             batch_size=config.get("live-price-batch-size", 100),
-            poll_interval_seconds=config.get("live-price-poll-interval-seconds", 60),
+            poll_interval_seconds=config.get("live-price-poll-interval-seconds", 180),
             lookback_days=config.get("simulated-live-price-lookback-days", 60),
             min_history_days=config.get("simulated-live-price-min-history-days", 20),
             trading_minutes_per_day=config.get("simulated-live-price-trading-minutes-per-day", 240),
@@ -1144,7 +1152,11 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
         f"jump_sigma={config.get('simulated-live-price-jump-scale')}",
         flush=True,
     )
-    print("Refresh model      : full-universe refresh each minute with carry-forward only for transient misses", flush=True)
+    print(
+        f"Refresh model      : full-universe refresh every {max(1, int(math.ceil(poll_interval / 60.0)))} minutes "
+        "with carry-forward only for transient misses",
+        flush=True,
+    )
     print("=" * 80)
 
     try:
@@ -1186,6 +1198,7 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
                 int(config.get("live-price-max-requests-per-minute", 50)),
                 previous_snapshot_payload,
                 trade_date,
+                poll_interval,
             )
             refresh_symbols = list(refresh_plan["refresh_symbols"])
             print(

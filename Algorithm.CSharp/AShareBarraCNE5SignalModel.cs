@@ -32,7 +32,17 @@ namespace QuantConnect.Algorithm.CSharp
         public decimal LiquidityWeight { get; set; } = 0.05m;
         public decimal NonLinearSizeWeight { get; set; } = 0.00m;
         public int MinimumPresentFactors { get; set; } = 6;
-        public string WeightingMode { get; set; } = "equal";
+        public string WeightingMode { get; set; } = "black-litterman";
+        public decimal BlackLittermanTau { get; set; } = 0.05m;
+        public decimal BlackLittermanRiskAversion { get; set; } = 2.20m;
+        public decimal BlackLittermanViewScale { get; set; } = 0.08m;
+        public decimal BlackLittermanViewConfidence { get; set; } = 0.65m;
+        public decimal BlackLittermanPriorBlend { get; set; } = 0.30m;
+        public decimal KellyWeightFraction { get; set; } = 0.50m;
+        public decimal KellyVarianceFloor { get; set; } = 0.35m;
+        public decimal KellyResidualVolatilityScale { get; set; } = 0.40m;
+        public decimal KellyBetaPenaltyScale { get; set; } = 0.10m;
+        public decimal MaxSingleWeight { get; set; } = 0.12m;
     }
 
     public sealed class AShareBarraCNE5Target
@@ -81,8 +91,13 @@ namespace QuantConnect.Algorithm.CSharp
             int topN,
             decimal minScoreSpread,
             decimal targetExposure,
-            string weightingMode)
+            string weightingMode,
+            AShareBarraCNE5SignalSettings settings = null)
         {
+            settings ??= new AShareBarraCNE5SignalSettings
+            {
+                WeightingMode = weightingMode
+            };
             if (scores == null || scores.Count == 0 || topN <= 0 || targetExposure <= 0m)
             {
                 return new List<AShareBarraCNE5Target>();
@@ -102,34 +117,34 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             var selected = ranked.Take(topN).ToList();
-            var mode = (weightingMode ?? "equal").Trim().ToLowerInvariant();
-            var totalMv = selected
-                .Select(pair => factors.TryGetValue(pair.Key, out var factor) ? factor.TotalMv.GetValueOrDefault() : 0m)
-                .Where(value => value > 0m)
-                .Sum();
-
-            var targets = new List<AShareBarraCNE5Target>(selected.Count);
-            foreach (var item in selected)
+            var mode = (weightingMode ?? settings.WeightingMode ?? "equal").Trim().ToLowerInvariant();
+            Dictionary<Symbol, decimal> rawWeights;
+            switch (mode)
             {
-                decimal weight;
-                if (mode == "market-cap" && totalMv > 0m && factors.TryGetValue(item.Key, out var factor) && factor.TotalMv.GetValueOrDefault() > 0m)
-                {
-                    weight = targetExposure * factor.TotalMv.Value / totalMv;
-                }
-                else
-                {
-                    weight = targetExposure / selected.Count;
-                }
-
-                targets.Add(new AShareBarraCNE5Target
-                {
-                    Symbol = item.Key,
-                    Weight = weight,
-                    Score = item.Value
-                });
+                case "market-cap":
+                case "marketcap":
+                    rawWeights = BuildPriorWeights(selected, factors, useMarketCap: true);
+                    break;
+                case "black-litterman":
+                case "blacklitterman":
+                case "bl":
+                    rawWeights = BuildBlackLittermanKellyWeights(selected, factors, settings);
+                    break;
+                default:
+                    rawWeights = BuildPriorWeights(selected, factors, useMarketCap: false);
+                    break;
             }
 
-            return targets;
+            var normalizedWeights = NormalizeAndCapWeights(rawWeights, targetExposure, settings.MaxSingleWeight);
+            return selected
+                .Where(item => normalizedWeights.TryGetValue(item.Key, out var weight) && weight > 0m)
+                .Select(item => new AShareBarraCNE5Target
+                {
+                    Symbol = item.Key,
+                    Weight = normalizedWeights[item.Key],
+                    Score = item.Value
+                })
+                .ToList();
         }
 
         public static Dictionary<string, decimal> ComputePortfolioExposure(
@@ -263,6 +278,208 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             result[key] += normalizedWeight * value.Value;
+        }
+
+        private static Dictionary<Symbol, decimal> BuildPriorWeights(
+            IReadOnlyList<KeyValuePair<Symbol, decimal>> selected,
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> factors,
+            bool useMarketCap)
+        {
+            var weights = new Dictionary<Symbol, decimal>();
+            if (selected == null || selected.Count == 0)
+            {
+                return weights;
+            }
+
+            if (!useMarketCap)
+            {
+                foreach (var item in selected)
+                {
+                    weights[item.Key] = 1m;
+                }
+                return weights;
+            }
+
+            var totalMarketValue = selected
+                .Select(item => factors.TryGetValue(item.Key, out var factor) ? factor.TotalMv.GetValueOrDefault() : 0m)
+                .Where(value => value > 0m)
+                .Sum();
+
+            if (totalMarketValue <= 0m)
+            {
+                foreach (var item in selected)
+                {
+                    weights[item.Key] = 1m;
+                }
+                return weights;
+            }
+
+            foreach (var item in selected)
+            {
+                var marketValue = factors.TryGetValue(item.Key, out var factor)
+                    ? factor.TotalMv.GetValueOrDefault()
+                    : 0m;
+                weights[item.Key] = marketValue > 0m ? marketValue / totalMarketValue : 0m;
+            }
+
+            return weights;
+        }
+
+        private static Dictionary<Symbol, decimal> BuildBlackLittermanKellyWeights(
+            IReadOnlyList<KeyValuePair<Symbol, decimal>> selected,
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> factors,
+            AShareBarraCNE5SignalSettings settings)
+        {
+            var priorWeights = BuildPriorWeights(selected, factors, useMarketCap: true);
+            var viewScores = SafeZScores(selected.Select(item => item.Value).ToList());
+            var posteriorReturns = new Dictionary<Symbol, decimal>();
+            var rawKellyWeights = new Dictionary<Symbol, decimal>();
+            var tau = Clamp(settings.BlackLittermanTau, 0.01m, 1.0m);
+            var confidence = Clamp(settings.BlackLittermanViewConfidence, 0.05m, 0.95m);
+            var omega = Math.Max(0.05m, 1m - confidence);
+            var priorBlend = Clamp(settings.BlackLittermanPriorBlend, 0m, 1m);
+            var kellyFraction = Clamp(settings.KellyWeightFraction, 0m, 1m);
+
+            for (var index = 0; index < selected.Count; index++)
+            {
+                var item = selected[index];
+                var symbol = item.Key;
+                var priorWeight = priorWeights.TryGetValue(symbol, out var weight) ? weight : 0m;
+                var priorReturn = settings.BlackLittermanRiskAversion * priorWeight;
+                var viewReturn = settings.BlackLittermanViewScale * viewScores[index];
+                var posteriorReturn =
+                    (priorReturn / tau + viewReturn / omega) /
+                    (1m / tau + 1m / omega);
+
+                posteriorReturns[symbol] = posteriorReturn;
+
+                var factor = factors.TryGetValue(symbol, out var resolvedFactor) ? resolvedFactor : null;
+                var riskProxy = ComputeKellyRiskProxy(factor, settings);
+                var kellyWeight = posteriorReturn > 0m && riskProxy > 0m
+                    ? (posteriorReturn / riskProxy) * kellyFraction
+                    : 0m;
+                rawKellyWeights[symbol] = Math.Max(0m, kellyWeight);
+            }
+
+            var normalizedKellyWeights = NormalizePositiveWeights(rawKellyWeights);
+            if (normalizedKellyWeights.Count == 0)
+            {
+                return priorWeights;
+            }
+
+            var blendedWeights = new Dictionary<Symbol, decimal>();
+            foreach (var item in selected)
+            {
+                var symbol = item.Key;
+                var priorWeight = priorWeights.TryGetValue(symbol, out var prior) ? prior : 0m;
+                var kellyWeight = normalizedKellyWeights.TryGetValue(symbol, out var kelly) ? kelly : 0m;
+                blendedWeights[symbol] = priorBlend * priorWeight + (1m - priorBlend) * kellyWeight;
+            }
+            return blendedWeights;
+        }
+
+        private static Dictionary<Symbol, decimal> NormalizeAndCapWeights(
+            IReadOnlyDictionary<Symbol, decimal> rawWeights,
+            decimal targetExposure,
+            decimal maxSingleWeight)
+        {
+            var exposure = Math.Max(0m, targetExposure);
+            if (rawWeights == null || rawWeights.Count == 0 || exposure <= 0m)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+
+            var normalized = NormalizePositiveWeights(rawWeights);
+            if (normalized.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+
+            var cap = maxSingleWeight > 0m ? Math.Min(maxSingleWeight, exposure) : exposure;
+            var result = normalized.ToDictionary(pair => pair.Key, _ => 0m);
+            var remaining = normalized.ToDictionary(pair => pair.Key, pair => pair.Value);
+            var remainingExposure = exposure;
+
+            while (remaining.Count > 0 && remainingExposure > 0m)
+            {
+                var totalRemaining = remaining.Values.Sum();
+                if (totalRemaining <= 0m)
+                {
+                    break;
+                }
+
+                var cappedAny = false;
+                foreach (var pair in remaining.ToList())
+                {
+                    var proposed = remainingExposure * pair.Value / totalRemaining;
+                    if (proposed <= cap)
+                    {
+                        continue;
+                    }
+
+                    result[pair.Key] = cap;
+                    remainingExposure -= cap;
+                    remaining.Remove(pair.Key);
+                    cappedAny = true;
+                }
+
+                if (cappedAny)
+                {
+                    continue;
+                }
+
+                foreach (var pair in remaining)
+                {
+                    result[pair.Key] = remainingExposure * pair.Value / totalRemaining;
+                }
+                break;
+            }
+
+            return result
+                .Where(pair => pair.Value > 0m)
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+        }
+
+        private static Dictionary<Symbol, decimal> NormalizePositiveWeights(IReadOnlyDictionary<Symbol, decimal> rawWeights)
+        {
+            var filtered = rawWeights
+                .Where(pair => pair.Value > 0m)
+                .ToList();
+            if (filtered.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+
+            var total = filtered.Sum(pair => pair.Value);
+            if (total <= 0m)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+
+            return filtered.ToDictionary(pair => pair.Key, pair => pair.Value / total);
+        }
+
+        private static decimal ComputeKellyRiskProxy(AShareBarraCNE5FactorData factor, AShareBarraCNE5SignalSettings settings)
+        {
+            var riskProxy = settings.KellyVarianceFloor;
+            if (factor?.ResidualVolatility != null)
+            {
+                riskProxy += Math.Abs(factor.ResidualVolatility.Value) * settings.KellyResidualVolatilityScale;
+            }
+            if (factor?.Beta != null)
+            {
+                riskProxy += Math.Abs(factor.Beta.Value) * settings.KellyBetaPenaltyScale;
+            }
+            return Math.Max(settings.KellyVarianceFloor, riskProxy);
+        }
+
+        private static decimal Clamp(decimal value, decimal minValue, decimal maxValue)
+        {
+            if (value < minValue)
+            {
+                return minValue;
+            }
+            return value > maxValue ? maxValue : value;
         }
     }
 }

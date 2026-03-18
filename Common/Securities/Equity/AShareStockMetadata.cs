@@ -29,6 +29,16 @@ namespace QuantConnect.Securities.Equity
         public string Ticker { get; set; }
 
         /// <summary>
+        /// Stock display name.
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// Whether this stock is marked as special treatment.
+        /// </summary>
+        public bool IsSt { get; set; }
+
+        /// <summary>
         /// Daily price limit percentage.
         /// </summary>
         public decimal PriceLimitPercentage { get; set; } = AShareStock.DefaultPriceLimitPercentage;
@@ -40,6 +50,7 @@ namespace QuantConnect.Securities.Equity
     /// </summary>
     public static class AShareStockMetadataRegistry
     {
+        private static readonly string[] SpecialTreatmentPrefixes = { "*ST", "ST", "S*ST", "SST" };
         private static readonly Dictionary<string, AShareStockMetadata> Overrides = new(StringComparer.OrdinalIgnoreCase)
         {
             { "300750", new AShareStockMetadata { Ticker = "300750", PriceLimitPercentage = AShareStock.GrowthBoardPriceLimitPercentage } },
@@ -51,31 +62,98 @@ namespace QuantConnect.Securities.Equity
         /// </summary>
         public static AShareStockMetadata GetMetadata(string ticker)
         {
-            return ticker != null && Overrides.TryGetValue(ticker, out var metadata) ? metadata : null;
+            var normalizedTicker = NormalizeTicker(ticker);
+            return normalizedTicker != null && Overrides.TryGetValue(normalizedTicker, out var metadata) ? metadata : null;
         }
 
         /// <summary>
         /// Gets the daily price limit percentage for the specified ticker.
         /// </summary>
-        public static decimal GetPriceLimitPercentage(string ticker)
+        public static decimal GetPriceLimitPercentage(string ticker, string description = null)
         {
-            if (string.IsNullOrWhiteSpace(ticker))
+            var normalizedTicker = NormalizeTicker(ticker);
+            if (string.IsNullOrWhiteSpace(normalizedTicker))
             {
                 return AShareStock.DefaultPriceLimitPercentage;
             }
 
-            var metadata = GetMetadata(ticker);
+            var metadata = GetMetadata(normalizedTicker);
+            if (metadata?.IsSt == true || LooksLikeSpecialTreatment(metadata?.Name) || LooksLikeSpecialTreatment(description))
+            {
+                return AShareStock.SpecialTreatmentPriceLimitPercentage;
+            }
+
             if (metadata != null)
             {
                 return metadata.PriceLimitPercentage;
             }
 
-            if (ticker.StartsWith("300", StringComparison.Ordinal) || ticker.StartsWith("688", StringComparison.Ordinal))
+            if (normalizedTicker.StartsWith("300", StringComparison.Ordinal)
+                || normalizedTicker.StartsWith("301", StringComparison.Ordinal)
+                || normalizedTicker.StartsWith("688", StringComparison.Ordinal))
             {
                 return AShareStock.GrowthBoardPriceLimitPercentage;
             }
 
+            if (normalizedTicker.StartsWith("43", StringComparison.Ordinal)
+                || normalizedTicker.StartsWith("83", StringComparison.Ordinal)
+                || normalizedTicker.StartsWith("87", StringComparison.Ordinal))
+            {
+                return AShareStock.BeijingExchangePriceLimitPercentage;
+            }
+
             return AShareStock.DefaultPriceLimitPercentage;
+        }
+
+        /// <summary>
+        /// Determines whether the specified ticker/name pair should be treated as ST.
+        /// </summary>
+        public static bool IsSpecialTreatment(string ticker, string description = null)
+        {
+            var metadata = GetMetadata(ticker);
+            return metadata?.IsSt == true || LooksLikeSpecialTreatment(metadata?.Name) || LooksLikeSpecialTreatment(description);
+        }
+
+        private static string NormalizeTicker(string ticker)
+        {
+            if (string.IsNullOrWhiteSpace(ticker))
+            {
+                return null;
+            }
+
+            var normalizedTicker = ticker.Trim();
+            var separatorIndex = normalizedTicker.IndexOf('.');
+            if (separatorIndex >= 0)
+            {
+                normalizedTicker = normalizedTicker.Substring(0, separatorIndex);
+            }
+
+            return normalizedTicker;
+        }
+
+        private static bool LooksLikeSpecialTreatment(string nameOrDescription)
+        {
+            if (string.IsNullOrWhiteSpace(nameOrDescription))
+            {
+                return false;
+            }
+
+            var normalized = nameOrDescription
+                .Trim()
+                .Replace(" ", string.Empty)
+                .Replace("　", string.Empty)
+                .Replace("＊", "*", StringComparison.Ordinal)
+                .ToUpperInvariant();
+
+            foreach (var prefix in SpecialTreatmentPrefixes)
+            {
+                if (normalized.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

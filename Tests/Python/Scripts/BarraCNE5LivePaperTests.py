@@ -303,7 +303,7 @@ class BarraCNE5LivePaperTests(unittest.TestCase):
                     "received_quote_count": 300,
                     "refreshed_quote_count": 300,
                     "carried_forward_quote_count": 0,
-                    "estimated_full_refresh_minutes": 1,
+                    "estimated_full_refresh_minutes": 3,
                 },
             }), encoding="utf-8")
             snapshot_file.write_text(json.dumps({

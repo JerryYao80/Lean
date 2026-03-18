@@ -91,7 +91,30 @@ namespace QuantConnect.Tests.Common.Securities
             StringAssert.Contains("available", result.Reason.ToLowerInvariant());
         }
 
-        private static AShareStock CreateSecurity(string ticker, string market)
+        [Test]
+        public void BuyOrderFailsBuyingPowerForSpecialTreatmentStocks()
+        {
+            var localTime = new DateTime(2024, 3, 4, 10, 0, 0);
+            var timeKeeper = new TimeKeeper(localTime.ConvertToUtc(TimeZones.Shanghai), new[] { TimeZones.Shanghai });
+            var securities = new SecurityManager(timeKeeper);
+            var transactions = new SecurityTransactionManager(null, securities);
+            var portfolio = new SecurityPortfolioManager(securities, transactions, new AlgorithmSettings());
+            portfolio.SetAccountCurrency(Currencies.CNY, 100000m);
+            portfolio.SetCash(Currencies.CNY, 100000m, 1m);
+
+            var security = CreateSecurity("600000", Market.SSE, "*ST浦发");
+            securities.Add(security);
+            security.SetMarketPrice(new TradeBar(localTime, security.Symbol, 10m, 10m, 10m, 10m, 10000));
+
+            var buyOrder = new MarketOrder(security.Symbol, 100m, localTime.ConvertToUtc(TimeZones.Shanghai));
+            var result = security.BuyingPowerModel.HasSufficientBuyingPowerForOrder(
+                new HasSufficientBuyingPowerForOrderParameters(portfolio, security, buyOrder));
+
+            Assert.IsFalse(result.IsSufficient);
+            StringAssert.Contains("st", result.Reason.ToLowerInvariant());
+        }
+
+        private static AShareStock CreateSecurity(string ticker, string market, string description = null)
         {
             var symbol = Symbol.Create(ticker, SecurityType.Equity, market);
             var exchangeHours = MarketHoursDatabase.FromDataFolder().GetExchangeHours(market, symbol, SecurityType.Equity);
@@ -100,7 +123,7 @@ namespace QuantConnect.Tests.Common.Securities
                 symbol,
                 exchangeHours,
                 new Cash(Currencies.CNY, 0m, 1m),
-                new SymbolProperties(ticker, Currencies.CNY, 1m, AShareStock.DefaultMinimumPriceVariation, AShareStock.LotSize, ticker),
+                new SymbolProperties(description ?? ticker, Currencies.CNY, 1m, AShareStock.DefaultMinimumPriceVariation, AShareStock.LotSize, ticker),
                 ErrorCurrencyConverter.Instance,
                 RegisteredSecurityDataTypesProvider.Null,
                 new SecurityCache());

@@ -39,6 +39,12 @@ namespace QuantConnect.Securities
         {
             var result = base.GetMaximumOrderQuantityForTargetBuyingPower(parameters);
             var adjustedQuantity = AdjustToLotSize(result.Quantity);
+            var description = parameters.Security.SymbolProperties?.Description;
+
+            if (adjustedQuantity > 0 && AShareStock.IsSpecialTreatment(parameters.Security.Symbol, description))
+            {
+                return new GetMaximumOrderQuantityResult(0m, "Cannot buy ST stock", result.IsError);
+            }
 
             if (adjustedQuantity < 0)
             {
@@ -54,6 +60,12 @@ namespace QuantConnect.Securities
         public override HasSufficientBuyingPowerForOrderResult HasSufficientBuyingPowerForOrder(HasSufficientBuyingPowerForOrderParameters parameters)
         {
             var order = parameters.Order;
+            var description = parameters.Security.SymbolProperties?.Description;
+
+            if (order.Direction == OrderDirection.Buy && AShareStock.IsSpecialTreatment(parameters.Security.Symbol, description))
+            {
+                return parameters.Insufficient("Cannot buy ST stock");
+            }
 
             if (!AShareStock.IsValidQuantity(Math.Abs(order.Quantity)))
             {

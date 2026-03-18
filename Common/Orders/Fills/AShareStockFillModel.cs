@@ -35,6 +35,12 @@ namespace QuantConnect.Orders.Fills
         {
             var order = parameters.Order;
             var security = parameters.Security;
+            var description = security.SymbolProperties?.Description;
+
+            if (order.Direction == OrderDirection.Buy && AShareStock.IsSpecialTreatment(security.Symbol, description))
+            {
+                return InvalidFill(order, security, "Cannot buy ST stock");
+            }
 
             if (!AShareStock.IsValidQuantity(Math.Abs(order.Quantity)))
             {
@@ -60,8 +66,8 @@ namespace QuantConnect.Orders.Fills
             if (previousClose.HasValue)
             {
                 var minimumPriceVariation = security.SymbolProperties.MinimumPriceVariation;
-                var upperLimit = AShareStock.GetUpperPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
-                var lowerLimit = AShareStock.GetLowerPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
+                var upperLimit = AShareStock.GetUpperPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation, description);
+                var lowerLimit = AShareStock.GetLowerPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation, description);
 
                 // Validate limit orders
                 if (order is LimitOrder limitOrder)
@@ -109,8 +115,8 @@ namespace QuantConnect.Orders.Fills
                 if (previousClose.HasValue)
                 {
                     var minimumPriceVariation = security.SymbolProperties.MinimumPriceVariation;
-                    var upperLimit = AShareStock.GetUpperPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
-                    var lowerLimit = AShareStock.GetLowerPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation);
+                    var upperLimit = AShareStock.GetUpperPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation, description);
+                    var lowerLimit = AShareStock.GetLowerPriceLimit(security.Symbol, previousClose.Value, minimumPriceVariation, description);
 
                     if (fillEvent.FillPrice > upperLimit || fillEvent.FillPrice < lowerLimit)
                     {

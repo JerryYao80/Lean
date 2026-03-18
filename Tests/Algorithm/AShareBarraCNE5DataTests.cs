@@ -117,6 +117,44 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
+        public void SelectPortfolioBlackLittermanKellyProducesCappedConvictionWeights()
+        {
+            var symbolA = Symbol.Create("A", SecurityType.Equity, Market.SSE);
+            var symbolB = Symbol.Create("B", SecurityType.Equity, Market.SSE);
+            var symbolC = Symbol.Create("C", SecurityType.Equity, Market.SSE);
+
+            var scores = new Dictionary<Symbol, decimal>
+            {
+                [symbolA] = 2.4m,
+                [symbolB] = 1.1m,
+                [symbolC] = 0.5m
+            };
+            var factors = new Dictionary<Symbol, AShareBarraCNE5FactorData>
+            {
+                [symbolA] = new AShareBarraCNE5FactorData { TotalMv = 5000m, ResidualVolatility = -0.2m, Beta = 0.4m, PresentFactorCount = 10 },
+                [symbolB] = new AShareBarraCNE5FactorData { TotalMv = 3000m, ResidualVolatility = 0.1m, Beta = 0.7m, PresentFactorCount = 10 },
+                [symbolC] = new AShareBarraCNE5FactorData { TotalMv = 2000m, ResidualVolatility = 0.5m, Beta = 1.1m, PresentFactorCount = 10 }
+            };
+
+            var targets = AShareBarraCNE5SignalModel.SelectPortfolio(
+                scores,
+                factors,
+                topN: 3,
+                minScoreSpread: 0m,
+                targetExposure: 0.30m,
+                weightingMode: "black-litterman",
+                settings: new AShareBarraCNE5SignalSettings());
+
+            Assert.That(targets, Has.Count.EqualTo(3));
+            Assert.That(targets.Sum(target => target.Weight), Is.EqualTo(0.30m).Within(0.0001m));
+            Assert.That(targets.Max(target => target.Weight), Is.LessThanOrEqualTo(0.12m));
+
+            var ordered = targets.OrderByDescending(target => target.Weight).Select(target => target.Symbol).ToList();
+            Assert.That(ordered[0], Is.EqualTo(symbolA));
+            Assert.That(targets.Single(target => target.Symbol == symbolA).Weight, Is.GreaterThan(targets.Single(target => target.Symbol == symbolC).Weight));
+        }
+
+        [Test]
         public void MonteCarloSummaryProducesFiniteStatistics()
         {
             var start = new DateTime(2024, 1, 1);

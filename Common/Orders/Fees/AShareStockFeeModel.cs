@@ -25,24 +25,44 @@ namespace QuantConnect.Orders.Fees
     public class AShareStockFeeModel : FeeModel
     {
         /// <summary>
+        /// Default commission rate.
+        /// </summary>
+        public const decimal DefaultCommissionRate = 0.0003m;
+
+        /// <summary>
+        /// Default minimum commission in CNY.
+        /// </summary>
+        public const decimal DefaultMinimumCommission = 5m;
+
+        /// <summary>
+        /// Default stamp duty rate applied on sells.
+        /// </summary>
+        public const decimal DefaultStampDutyRate = 0.0005m;
+
+        /// <summary>
+        /// Default transfer fee rate applied to A-share stocks.
+        /// </summary>
+        public const decimal DefaultTransferFeeRate = 0.00001m;
+
+        /// <summary>
         /// Commission rate.
         /// </summary>
-        public decimal CommissionRate { get; set; } = 0.0003m;
+        public decimal CommissionRate { get; set; } = DefaultCommissionRate;
 
         /// <summary>
         /// Minimum commission in CNY.
         /// </summary>
-        public decimal MinimumCommission { get; set; } = 5m;
+        public decimal MinimumCommission { get; set; } = DefaultMinimumCommission;
 
         /// <summary>
         /// Stamp duty rate applied on sells.
         /// </summary>
-        public decimal StampDutyRate { get; set; } = 0.001m;
+        public decimal StampDutyRate { get; set; } = DefaultStampDutyRate;
 
         /// <summary>
-        /// Transfer fee rate for Shanghai-listed stocks.
+        /// Transfer fee rate for A-share stocks.
         /// </summary>
-        public decimal TransferFeeRate { get; set; } = 0.00002m;
+        public decimal TransferFeeRate { get; set; } = DefaultTransferFeeRate;
 
         /// <summary>
         /// Gets the order fee.
@@ -58,7 +78,7 @@ namespace QuantConnect.Orders.Fees
 
             var commission = Math.Max(orderValue * CommissionRate, MinimumCommission);
             var stampDuty = order.Direction == OrderDirection.Sell ? orderValue * StampDutyRate : 0m;
-            var transferFee = security.Symbol.ID.Market == Market.SSE ? orderValue * TransferFeeRate : 0m;
+            var transferFee = orderValue * TransferFeeRate;
 
             return new OrderFee(new CashAmount(commission + stampDuty + transferFee, Currencies.CNY));
         }

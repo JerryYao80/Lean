@@ -35,16 +35,17 @@ namespace QuantConnect.Algorithm.CSharp
     /// </summary>
     public class AShareBarraCNE5Algorithm : QCAlgorithm
     {
-        private const decimal CommissionRate = 0.0003m;
-        private const decimal MinimumCommission = 5m;
-        private const decimal StampDutyRate = 0.001m;
-        private const decimal ShanghaiTransferFeeRate = 0.00002m;
+        private const decimal CommissionRate = AShareStockFeeModel.DefaultCommissionRate;
+        private const decimal MinimumCommission = AShareStockFeeModel.DefaultMinimumCommission;
+        private const decimal StampDutyRate = AShareStockFeeModel.DefaultStampDutyRate;
+        private const decimal TransferFeeRate = AShareStockFeeModel.DefaultTransferFeeRate;
 
         private readonly Dictionary<Symbol, Symbol> _factorToUnderlying = new();
         private readonly Dictionary<Symbol, AShareBarraCNE5FactorData> _latestFactorsByUnderlying = new();
         private readonly Dictionary<Symbol, decimal> _latestScoresByUnderlying = new();
         private readonly Dictionary<Symbol, decimal> _latestTargetWeightsByUnderlying = new();
         private readonly Dictionary<Symbol, SyntheticPosition> _positions = new();
+        private readonly Dictionary<Symbol, DateTime> _riskCooldownUntilBySymbol = new();
         private readonly List<TradeRow> _tradeRows = new();
         private readonly List<DailySummaryRow> _dailyRows = new();
         private readonly List<AllocationRow> _allocationRows = new();
@@ -67,9 +68,20 @@ namespace QuantConnect.Algorithm.CSharp
         private decimal _minScoreSpread;
         private decimal _minTurnoverRate;
         private decimal? _minTotalMv;
+        private decimal _portfolioKellyFraction;
+        private decimal _kellyFallbackScale;
+        private decimal _kellyMinExposureScale;
+        private decimal _kellyMaxExposureScale;
+        private decimal _stopLossPct;
+        private decimal _profitActivationPct;
+        private decimal _trailingStopPct;
         private int _topN;
         private int _minListedDays;
         private int _maxMissingFactorCount;
+        private int _kellyLookbackClosedTrades;
+        private int _kellyMinClosedTrades;
+        private int _riskExitCooldownDays;
+        private int _minHoldDaysForProfitProtection;
         private int _monteCarloTrials;
         private int _monteCarloHorizonDays;
         private int _monteCarloBlockSize;
@@ -86,7 +98,11 @@ namespace QuantConnect.Algorithm.CSharp
         private bool _syncLeanPortfolio;
         private bool _monteCarloEnabled;
         private decimal _latestScoreSpread;
+        private decimal _latestKellyScale;
+        private decimal _latestEffectiveTargetExposure;
         private decimal _monteCarloFactorPerturbationScale;
+        private int _latestStopLossExitCount;
+        private int _latestTrailingStopExitCount;
         private AShareBarraCNE5SignalSettings _signalSettings;
         private Dictionary<Symbol, decimal> _liveSnapshotPricesBySymbol = new();
         private TimeSpan _liveSignalInterval = TimeSpan.FromMinutes(3);
@@ -113,6 +129,17 @@ namespace QuantConnect.Algorithm.CSharp
             _maxMissingFactorCount = GetIntParameter("max-missing-factor-count", 3);
             _minTurnoverRate = GetDecimalParameter("min-turnover-rate", 0m);
             _minTotalMv = GetOptionalDecimalParameter("min-total-mv");
+            _portfolioKellyFraction = GetDecimalParameter("portfolio-kelly-fraction", 0.50m);
+            _kellyLookbackClosedTrades = GetIntParameter("kelly-lookback-closed-trades", 24);
+            _kellyMinClosedTrades = GetIntParameter("kelly-min-closed-trades", 8);
+            _kellyFallbackScale = GetDecimalParameter("kelly-fallback-scale", 0.70m);
+            _kellyMinExposureScale = GetDecimalParameter("kelly-min-scale", 0.25m);
+            _kellyMaxExposureScale = GetDecimalParameter("kelly-max-scale", 1.00m);
+            _stopLossPct = GetDecimalParameter("stop-loss-pct", 0.10m);
+            _profitActivationPct = GetDecimalParameter("take-profit-activation-pct", 0.12m);
+            _trailingStopPct = GetDecimalParameter("trailing-stop-pct", 0.06m);
+            _riskExitCooldownDays = GetIntParameter("risk-exit-cooldown-days", 5);
+            _minHoldDaysForProfitProtection = GetIntParameter("min-hold-days-for-profit-protection", 2);
             _signalSettings = new AShareBarraCNE5SignalSettings
             {
                 BetaWeight = GetDecimalParameter("factor-weight-beta", -0.05m),
@@ -126,8 +153,20 @@ namespace QuantConnect.Algorithm.CSharp
                 LiquidityWeight = GetDecimalParameter("factor-weight-liquidity", 0.05m),
                 NonLinearSizeWeight = GetDecimalParameter("factor-weight-nlsize", 0.00m),
                 MinimumPresentFactors = GetIntParameter("minimum-present-factors", 6),
-                WeightingMode = (GetParameter("weighting-mode") ?? "equal").Trim()
+                WeightingMode = (GetParameter("weighting-mode") ?? "black-litterman").Trim(),
+                BlackLittermanTau = GetDecimalParameter("black-litterman-tau", 0.05m),
+                BlackLittermanRiskAversion = GetDecimalParameter("black-litterman-risk-aversion", 2.20m),
+                BlackLittermanViewScale = GetDecimalParameter("black-litterman-view-scale", 0.08m),
+                BlackLittermanViewConfidence = GetDecimalParameter("black-litterman-view-confidence", 0.65m),
+                BlackLittermanPriorBlend = GetDecimalParameter("black-litterman-prior-blend", 0.30m),
+                KellyWeightFraction = GetDecimalParameter("kelly-weight-fraction", 0.50m),
+                KellyVarianceFloor = GetDecimalParameter("kelly-variance-floor", 0.35m),
+                KellyResidualVolatilityScale = GetDecimalParameter("kelly-residual-volatility-scale", 0.40m),
+                KellyBetaPenaltyScale = GetDecimalParameter("kelly-beta-penalty-scale", 0.10m),
+                MaxSingleWeight = GetDecimalParameter("max-single-weight", 0.12m)
             };
+            _latestKellyScale = _kellyFallbackScale;
+            _latestEffectiveTargetExposure = _targetPortfolioExposure * _latestKellyScale;
 
             SetStartDate(startDate);
             SetEndDate(endDate);
@@ -179,7 +218,10 @@ namespace QuantConnect.Algorithm.CSharp
                 : "Execution mode: synthetic-only portfolio; no Lean orders or Lean portfolio sync.");
             Log(
                 $"Synthetic execution enabled: factor path={_factorDataPath} fallback={_fallbackFactorDataPath ?? "-"} rebalance={_rebalanceFrequency} " +
-                $"topN={_topN} exposure={_targetPortfolioExposure:F2} minScoreSpread={_minScoreSpread:F2}");
+                $"topN={_topN} exposure={_targetPortfolioExposure:F2} weighting={_signalSettings.WeightingMode} minScoreSpread={_minScoreSpread:F2}");
+            Log(
+                $"Risk overlay: portfolioKelly={_portfolioKellyFraction:F2} fallbackScale={_kellyFallbackScale:F2} " +
+                $"stopLoss={_stopLossPct:P0} takeProfitActivation={_profitActivationPct:P0} trailingStop={_trailingStopPct:P0} cooldownDays={_riskExitCooldownDays}");
             if (_monteCarloEnabled)
             {
                 Log(
@@ -194,6 +236,8 @@ namespace QuantConnect.Algorithm.CSharp
             SetRuntimeStatistic("Exec Mode", _syncLeanPortfolio ? "synthetic+sync" : "synthetic");
             SetRuntimeStatistic("Syn Equity", _syntheticCash.ToString("F0", CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Holdings", "0");
+            SetRuntimeStatistic("Kelly", _latestKellyScale.ToString("F2", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Target Exp", _latestEffectiveTargetExposure.ToString("F2", CultureInfo.InvariantCulture));
             if (LiveMode)
             {
                 BootstrapLiveSessionState();
@@ -312,15 +356,30 @@ namespace QuantConnect.Algorithm.CSharp
                 }
             }
 
+            PruneExpiredRiskCooldowns(sessionDate);
             var prices = BuildPriceMap();
+            var riskExitSummary = ApplyRiskManagementExits(sessionDate, prices);
+            if (riskExitSummary.TotalExits > 0)
+            {
+                RemoveRiskBlockedTargets(sessionDate);
+                prices = BuildPriceMap();
+                if (_syncLeanPortfolio)
+                {
+                    SyncLeanPortfolioState(prices);
+                }
+            }
+
             var eligibleFactors = _latestFactorsByUnderlying
-                .Where(pair => IsFreshFactorSnapshot(pair.Value, sessionDate) && IsEligibleFactor(pair.Value))
+                .Where(pair =>
+                    IsFreshFactorSnapshot(pair.Value, sessionDate) &&
+                    IsEligibleFactor(pair.Value) &&
+                    !IsSymbolInRiskCooldown(pair.Key, sessionDate))
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
 
             var rebalance = false;
             var liveAligned = false;
             var scoreSpread = _latestScoreSpread;
-            var turnover = 0m;
+            var turnover = riskExitSummary.Turnover;
             var shouldEvaluateSignals = LiveMode || _lastSignalEvaluationDate != sessionDate;
             if (shouldEvaluateSignals)
             {
@@ -332,15 +391,23 @@ namespace QuantConnect.Algorithm.CSharp
                     ReplaceLatestScores(scores);
                     _latestScoreSpread = GetScoreSpread(scores);
                     scoreSpread = _latestScoreSpread;
+                    var kellyState = ComputePortfolioKellyState();
+                    _latestKellyScale = kellyState.ExposureScale;
+                    _latestEffectiveTargetExposure = Math.Min(1m, _targetPortfolioExposure * _latestKellyScale);
                     LogSignalRanking(sessionDate, eligibleFactors.Count, scores);
+                    Log(
+                        $"[kelly] trade_date={sessionDate:yyyyMMdd} closed_trades={kellyState.ClosedTrades} " +
+                        $"win_rate={kellyState.WinRate:P1} payoff={kellyState.PayoffRatio:F2} raw={kellyState.RawKellyFraction:F2} " +
+                        $"scale={_latestKellyScale:F2} effective_exposure={_latestEffectiveTargetExposure:F2}");
 
                     var targets = AShareBarraCNE5SignalModel.SelectPortfolio(
                         scores,
                         eligibleFactors,
                         _topN,
                         _minScoreSpread,
-                        _targetPortfolioExposure,
-                        _signalSettings.WeightingMode);
+                        _latestEffectiveTargetExposure,
+                        _signalSettings.WeightingMode,
+                        _signalSettings);
 
                     if (targets.Count == 0)
                     {
@@ -351,7 +418,7 @@ namespace QuantConnect.Algorithm.CSharp
                     {
                         ReplaceLatestTargets(targets);
                         var tradeCountBeforeRebalance = _tradeRows.Count;
-                        turnover = ApplyTargetPortfolio(sessionDate, targets, prices);
+                        turnover += ApplyTargetPortfolio(sessionDate, targets, prices);
                         var executedTrades = _tradeRows.Count > tradeCountBeforeRebalance;
                         if (LiveMode)
                         {
@@ -364,14 +431,16 @@ namespace QuantConnect.Algorithm.CSharp
 
                             Log(
                                 $"{sessionDate:yyyy-MM-dd} live-cycle -> eligible={eligibleFactors.Count} selected={targets.Count} " +
-                                $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} executed={(executedTrades ? 1 : 0)}");
+                                $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} kelly={_latestKellyScale:F2} executed={(executedTrades ? 1 : 0)}");
                         }
                         else
                         {
                             rebalance = true;
                             _syntheticRebalanceCount += 1;
                             _lastRebalanceDate = sessionDate;
-                            Log($"{sessionDate:yyyy-MM-dd} rebalance -> eligible={eligibleFactors.Count} selected={targets.Count} turnover={turnover:P2} scoreSpread={scoreSpread:F4}");
+                            Log(
+                                $"{sessionDate:yyyy-MM-dd} rebalance -> eligible={eligibleFactors.Count} selected={targets.Count} " +
+                                $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} kelly={_latestKellyScale:F2}");
                         }
                         LogTargetPreview(sessionDate, targets);
                     }
@@ -380,17 +449,17 @@ namespace QuantConnect.Algorithm.CSharp
 
             if (!LiveMode && !rebalance && _latestTargetWeightsByUnderlying.Count > 0)
             {
-                var retainedTargets = BuildTargetsFromLatestWeights();
+                var retainedTargets = BuildTargetsFromLatestWeights(sessionDate);
                 if (retainedTargets.Count > 0)
                 {
                     var tradeCountBeforeAlignment = _tradeRows.Count;
-                    turnover = ApplyTargetPortfolio(sessionDate, retainedTargets, prices);
+                    turnover += ApplyTargetPortfolio(sessionDate, retainedTargets, prices);
                     liveAligned = _tradeRows.Count > tradeCountBeforeAlignment;
                     if (liveAligned)
                     {
                         Log(
                             $"{sessionDate:yyyy-MM-dd} live-align -> selected={retainedTargets.Count} " +
-                            $"turnover={turnover:P2} scoreSpread={scoreSpread:F4}");
+                            $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} kelly={_latestKellyScale:F2}");
                     }
                 }
             }
@@ -419,7 +488,11 @@ namespace QuantConnect.Algorithm.CSharp
                 SelectedSymbols = selectedCount,
                 Turnover = turnover,
                 ScoreSpread = scoreSpread,
-                Rebalanced = rebalance || liveAligned
+                Rebalanced = rebalance || liveAligned || riskExitSummary.TotalExits > 0,
+                KellyScale = _latestKellyScale,
+                EffectiveExposure = _latestEffectiveTargetExposure,
+                StopLossExits = riskExitSummary.StopLossExits,
+                TrailingStopExits = riskExitSummary.TrailingStopExits
             });
 
             UpsertFactorExposure(new FactorExposureRow
@@ -444,15 +517,29 @@ namespace QuantConnect.Algorithm.CSharp
             SetRuntimeStatistic("Signals", selectedCount.ToString(CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Score Spr", scoreSpread.ToString("F2", CultureInfo.InvariantCulture));
             SetRuntimeStatistic("Turnover", turnover.ToString("P1", CultureInfo.InvariantCulture));
-            if (ShouldPersistRuntimeOutputs(rebalance || liveAligned, firstUpdateOfSession))
+            SetRuntimeStatistic("Kelly", _latestKellyScale.ToString("F2", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Target Exp", _latestEffectiveTargetExposure.ToString("F2", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Risk Exit", riskExitSummary.TotalExits.ToString(CultureInfo.InvariantCulture));
+            if (ShouldPersistRuntimeOutputs(rebalance || liveAligned || riskExitSummary.TotalExits > 0, firstUpdateOfSession))
             {
                 PersistOutputs();
                 _lastRuntimePersistUtc = UtcTime;
             }
 
-            if (ShouldEmitRuntimeStatusLog(rebalance || liveAligned, firstUpdateOfSession))
+            if (ShouldEmitRuntimeStatusLog(rebalance || liveAligned || riskExitSummary.TotalExits > 0, firstUpdateOfSession))
             {
-                LogDailySnapshot(sessionDate, equity, invested, eligibleFactors.Count, selectedCount, scoreSpread, turnover, rebalance || liveAligned);
+                LogDailySnapshot(
+                    sessionDate,
+                    equity,
+                    invested,
+                    eligibleFactors.Count,
+                    selectedCount,
+                    scoreSpread,
+                    turnover,
+                    rebalance || liveAligned || riskExitSummary.TotalExits > 0,
+                    riskExitSummary,
+                    _latestKellyScale,
+                    _latestEffectiveTargetExposure);
                 LogPortfolioSnapshot(sessionDate, prices, weightMap, equity);
                 _lastPortfolioLogUtc = UtcTime;
             }
@@ -462,6 +549,265 @@ namespace QuantConnect.Algorithm.CSharp
                 _lastLiveProcessingTime = ResolveLiveProcessingTimestamp();
             }
             _previousEquity = equity;
+        }
+
+        private RiskExitSummary ApplyRiskManagementExits(DateTime sessionDate, IReadOnlyDictionary<Symbol, decimal> prices)
+        {
+            var summary = new RiskExitSummary();
+            if (_positions.Count == 0 || prices == null || prices.Count == 0)
+            {
+                _latestStopLossExitCount = 0;
+                _latestTrailingStopExitCount = 0;
+                return summary;
+            }
+
+            var equityBeforeExits = Math.Max(ComputeEquity(prices), 1m);
+            var exits = new List<SyntheticOrderChange>();
+
+            foreach (var pair in _positions.ToList())
+            {
+                if (!prices.TryGetValue(pair.Key, out var price) || price <= 0m)
+                {
+                    continue;
+                }
+
+                var position = pair.Value;
+                position.LastPrice = price;
+                position.PeakPrice = Math.Max(position.PeakPrice, price);
+                _positions[pair.Key] = position;
+
+                var reason = ResolveRiskExitReason(position, price);
+                if (reason == null)
+                {
+                    continue;
+                }
+
+                exits.Add(new SyntheticOrderChange
+                {
+                    Symbol = pair.Key,
+                    Price = price,
+                    CurrentQuantity = position.Quantity,
+                    TargetQuantity = 0,
+                    DeltaQuantity = -position.Quantity,
+                    Score = _latestScoresByUnderlying.GetValueOrDefault(pair.Key),
+                    Reason = reason
+                });
+            }
+
+            foreach (var exit in exits.OrderBy(change => change.Symbol.Value, StringComparer.Ordinal))
+            {
+                if (exit.CurrentQuantity <= 0)
+                {
+                    continue;
+                }
+
+                summary.Turnover += exit.CurrentQuantity * exit.Price / equityBeforeExits;
+                ExecuteOrderChange(sessionDate, exit);
+                _riskCooldownUntilBySymbol[exit.Symbol] = sessionDate.AddDays(_riskExitCooldownDays);
+                if (string.Equals(exit.Reason, "STOP_LOSS", StringComparison.Ordinal))
+                {
+                    summary.StopLossExits += 1;
+                }
+                else if (string.Equals(exit.Reason, "TRAILING_STOP", StringComparison.Ordinal))
+                {
+                    summary.TrailingStopExits += 1;
+                }
+            }
+
+            summary.TotalExits = summary.StopLossExits + summary.TrailingStopExits;
+            _latestStopLossExitCount = summary.StopLossExits;
+            _latestTrailingStopExitCount = summary.TrailingStopExits;
+
+            if (summary.TotalExits > 0)
+            {
+                Log(
+                    $"[risk exits] trade_date={sessionDate:yyyyMMdd} stop_loss={summary.StopLossExits} " +
+                    $"trailing_stop={summary.TrailingStopExits} turnover={summary.Turnover:P2}");
+            }
+
+            return summary;
+        }
+
+        private string ResolveRiskExitReason(SyntheticPosition position, decimal currentPrice)
+        {
+            if (position == null || position.Quantity <= 0 || currentPrice <= 0m)
+            {
+                return null;
+            }
+
+            var averagePrice = position.AveragePrice > 0m ? position.AveragePrice : currentPrice;
+            if (averagePrice <= 0m)
+            {
+                return null;
+            }
+
+            if (_stopLossPct > 0m && currentPrice <= averagePrice * (1m - _stopLossPct))
+            {
+                return "STOP_LOSS";
+            }
+
+            var profitActivated =
+                _profitActivationPct > 0m &&
+                position.HoldingDays >= _minHoldDaysForProfitProtection &&
+                position.PeakPrice >= averagePrice * (1m + _profitActivationPct);
+            if (profitActivated && _trailingStopPct > 0m && currentPrice <= position.PeakPrice * (1m - _trailingStopPct))
+            {
+                return "TRAILING_STOP";
+            }
+
+            return null;
+        }
+
+        private void PruneExpiredRiskCooldowns(DateTime sessionDate)
+        {
+            foreach (var pair in _riskCooldownUntilBySymbol.ToList())
+            {
+                if (pair.Value.Date < sessionDate.Date)
+                {
+                    _riskCooldownUntilBySymbol.Remove(pair.Key);
+                }
+            }
+        }
+
+        private bool IsSymbolInRiskCooldown(Symbol symbol, DateTime sessionDate)
+        {
+            return _riskCooldownUntilBySymbol.TryGetValue(symbol, out var cooldownUntil)
+                && cooldownUntil.Date >= sessionDate.Date;
+        }
+
+        private void RemoveRiskBlockedTargets(DateTime sessionDate)
+        {
+            foreach (var symbol in _latestTargetWeightsByUnderlying.Keys.ToList())
+            {
+                if (IsSymbolInRiskCooldown(symbol, sessionDate))
+                {
+                    _latestTargetWeightsByUnderlying.Remove(symbol);
+                }
+            }
+        }
+
+        private KellySizingState ComputePortfolioKellyState()
+        {
+            var realizedReturns = ExtractClosedTradeReturns();
+            var recentReturns = realizedReturns
+                .TakeLast(Math.Max(1, _kellyLookbackClosedTrades))
+                .ToList();
+            if (recentReturns.Count < _kellyMinClosedTrades)
+            {
+                return new KellySizingState
+                {
+                    ClosedTrades = recentReturns.Count,
+                    ExposureScale = Clamp(_kellyFallbackScale, _kellyMinExposureScale, _kellyMaxExposureScale),
+                    RawKellyFraction = 0m,
+                    WinRate = 0m,
+                    PayoffRatio = 0m
+                };
+            }
+
+            var wins = recentReturns.Where(value => value > 0m).ToList();
+            var losses = recentReturns.Where(value => value < 0m).ToList();
+            if (wins.Count == 0 || losses.Count == 0)
+            {
+                return new KellySizingState
+                {
+                    ClosedTrades = recentReturns.Count,
+                    ExposureScale = Clamp(_kellyFallbackScale, _kellyMinExposureScale, _kellyMaxExposureScale),
+                    RawKellyFraction = 0m,
+                    WinRate = wins.Count == 0 ? 0m : 1m,
+                    PayoffRatio = 0m
+                };
+            }
+
+            var winRate = wins.Count / (decimal)recentReturns.Count;
+            var averageWin = wins.Average();
+            var averageLoss = Math.Abs(losses.Average());
+            var payoffRatio = averageLoss > 0m ? averageWin / averageLoss : 0m;
+            var rawKelly = payoffRatio > 0m
+                ? winRate - (1m - winRate) / payoffRatio
+                : 0m;
+            var exposureScale = Clamp(
+                Math.Max(0m, rawKelly) * Clamp(_portfolioKellyFraction, 0m, 1m),
+                _kellyMinExposureScale,
+                _kellyMaxExposureScale);
+
+            return new KellySizingState
+            {
+                ClosedTrades = recentReturns.Count,
+                WinRate = winRate,
+                PayoffRatio = payoffRatio,
+                RawKellyFraction = rawKelly,
+                ExposureScale = exposureScale
+            };
+        }
+
+        private List<decimal> ExtractClosedTradeReturns()
+        {
+            var closedReturns = new List<decimal>();
+            var openLotsBySymbol = new Dictionary<string, Queue<SyntheticOpenLot>>(StringComparer.Ordinal);
+
+            foreach (var row in _tradeRows)
+            {
+                if (row == null || row.Quantity <= 0 || row.Price <= 0m || string.IsNullOrWhiteSpace(row.Symbol))
+                {
+                    continue;
+                }
+
+                if (string.Equals(row.Action, "BUY", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!openLotsBySymbol.TryGetValue(row.Symbol, out var openLots))
+                    {
+                        openLots = new Queue<SyntheticOpenLot>();
+                        openLotsBySymbol[row.Symbol] = openLots;
+                    }
+
+                    openLots.Enqueue(new SyntheticOpenLot
+                    {
+                        Quantity = row.Quantity,
+                        Price = row.Price,
+                        FeePerShare = row.Fee / row.Quantity
+                    });
+                    continue;
+                }
+
+                if (!string.Equals(row.Action, "SELL", StringComparison.OrdinalIgnoreCase) ||
+                    !openLotsBySymbol.TryGetValue(row.Symbol, out var queuedLots) ||
+                    queuedLots.Count == 0)
+                {
+                    continue;
+                }
+
+                var sellQuantityRemaining = row.Quantity;
+                var sellFeePerShare = row.Fee / row.Quantity;
+                while (sellQuantityRemaining > 0 && queuedLots.Count > 0)
+                {
+                    var lot = queuedLots.Peek();
+                    var matchedQuantity = Math.Min(sellQuantityRemaining, lot.Quantity);
+                    var matchedQuantityDecimal = matchedQuantity;
+                    var costBasis = Math.Max(1m, matchedQuantityDecimal * lot.Price);
+                    var profitLoss =
+                        (row.Price - lot.Price) * matchedQuantityDecimal -
+                        (lot.FeePerShare + sellFeePerShare) * matchedQuantityDecimal;
+                    closedReturns.Add(profitLoss / costBasis);
+
+                    lot.Quantity -= matchedQuantity;
+                    sellQuantityRemaining -= matchedQuantity;
+                    if (lot.Quantity <= 0)
+                    {
+                        queuedLots.Dequeue();
+                    }
+                }
+            }
+
+            return closedReturns;
+        }
+
+        private static decimal Clamp(decimal value, decimal minValue, decimal maxValue)
+        {
+            if (value < minValue)
+            {
+                return minValue;
+            }
+            return value > maxValue ? maxValue : value;
         }
 
         private bool ShouldRunLiveProcessingCycle(DateTime sessionDate)
@@ -770,9 +1116,10 @@ namespace QuantConnect.Algorithm.CSharp
             }
         }
 
-        private List<AShareBarraCNE5Target> BuildTargetsFromLatestWeights()
+        private List<AShareBarraCNE5Target> BuildTargetsFromLatestWeights(DateTime sessionDate)
         {
             return _latestTargetWeightsByUnderlying
+                .Where(pair => !IsSymbolInRiskCooldown(pair.Key, sessionDate))
                 .OrderByDescending(pair => pair.Value)
                 .ThenBy(pair => pair.Key.Value, StringComparer.Ordinal)
                 .Select(pair => new AShareBarraCNE5Target
@@ -825,7 +1172,8 @@ namespace QuantConnect.Algorithm.CSharp
                     CurrentQuantity = currentQuantity,
                     TargetQuantity = targetQuantity,
                     DeltaQuantity = deltaQuantity,
-                    Score = targets.FirstOrDefault(target => target.Symbol == symbol)?.Score ?? 0m
+                    Score = targets.FirstOrDefault(target => target.Symbol == symbol)?.Score ?? 0m,
+                    Reason = "TARGET_ALIGN"
                 });
             }
 
@@ -895,6 +1243,7 @@ namespace QuantConnect.Algorithm.CSharp
                     Quantity = 0,
                     AveragePrice = 0m,
                     LastPrice = order.Price,
+                    PeakPrice = order.Price,
                     HoldingDays = 0
                 };
             }
@@ -911,6 +1260,7 @@ namespace QuantConnect.Algorithm.CSharp
                 position.AveragePrice = position.Quantity > 0
                     ? totalCost / position.Quantity
                     : 0m;
+                position.PeakPrice = Math.Max(position.PeakPrice, order.Price);
             }
             else
             {
@@ -918,12 +1268,18 @@ namespace QuantConnect.Algorithm.CSharp
                 if (position.Quantity == 0)
                 {
                     position.AveragePrice = 0m;
+                    position.PeakPrice = 0m;
                 }
             }
             position.LastPrice = order.Price;
             if (deltaQuantity > 0 && position.Quantity > 0 && !_positions.ContainsKey(order.Symbol))
             {
                 position.HoldingDays = 0;
+                position.PeakPrice = order.Price;
+            }
+            if (deltaQuantity > 0)
+            {
+                _riskCooldownUntilBySymbol.Remove(order.Symbol);
             }
             var quantityAfter = position.Quantity;
 
@@ -948,7 +1304,8 @@ namespace QuantConnect.Algorithm.CSharp
                 Price = order.Price,
                 TradeValue = tradeValue,
                 Fee = fee,
-                Score = order.Score
+                Score = order.Score,
+                Reason = order.Reason
             });
         }
 
@@ -1017,6 +1374,10 @@ namespace QuantConnect.Algorithm.CSharp
             row.Turnover = Math.Max(existing.Turnover, row.Turnover);
             row.Rebalanced = existing.Rebalanced || row.Rebalanced;
             row.ScoreSpread = Math.Max(existing.ScoreSpread, row.ScoreSpread);
+            row.KellyScale = row.KellyScale > 0m ? row.KellyScale : existing.KellyScale;
+            row.EffectiveExposure = row.EffectiveExposure > 0m ? row.EffectiveExposure : existing.EffectiveExposure;
+            row.StopLossExits = Math.Max(existing.StopLossExits, row.StopLossExits);
+            row.TrailingStopExits = Math.Max(existing.TrailingStopExits, row.TrailingStopExits);
             _dailyRows[existingIndex] = row;
         }
 
@@ -1213,12 +1574,17 @@ namespace QuantConnect.Algorithm.CSharp
             int selectedCount,
             decimal scoreSpread,
             decimal turnover,
-            bool rebalanced)
+            bool rebalanced,
+            RiskExitSummary riskExitSummary,
+            decimal kellyScale,
+            decimal effectiveExposure)
         {
             Log(
                 $"[daily] trade_date={sessionDate:yyyyMMdd} equity={equity:F2} cash={_syntheticCash:F2} invested={invested:F2} " +
                 $"holdings={_positions.Count} eligible={eligibleCount} selected={selectedCount} " +
-                $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} rebalanced={(rebalanced ? 1 : 0)}");
+                $"turnover={turnover:P2} scoreSpread={scoreSpread:F4} kelly={kellyScale:F2} " +
+                $"targetExposure={effectiveExposure:F2} stopLossExits={riskExitSummary?.StopLossExits ?? 0} " +
+                $"trailingExits={riskExitSummary?.TrailingStopExits ?? 0} rebalanced={(rebalanced ? 1 : 0)}");
         }
 
         private void LogPortfolioSnapshot(
@@ -1306,7 +1672,7 @@ namespace QuantConnect.Algorithm.CSharp
         {
             var commission = Math.Max(tradeValue * CommissionRate, MinimumCommission);
             var stampDuty = isSell ? tradeValue * StampDutyRate : 0m;
-            var transferFee = symbol.ID.Market == Market.SSE ? tradeValue * ShanghaiTransferFeeRate : 0m;
+            var transferFee = tradeValue * TransferFeeRate;
             return commission + stampDuty + transferFee;
         }
 
@@ -1527,6 +1893,7 @@ namespace QuantConnect.Algorithm.CSharp
         private void ResetSyntheticState()
         {
             _positions.Clear();
+            _riskCooldownUntilBySymbol.Clear();
             _tradeRows.Clear();
             _dailyRows.Clear();
             _allocationRows.Clear();
@@ -1536,6 +1903,10 @@ namespace QuantConnect.Algorithm.CSharp
             _syntheticCash = _initialSyntheticCash;
             _previousEquity = _initialSyntheticCash;
             _syntheticRebalanceCount = 0;
+            _latestKellyScale = _kellyFallbackScale;
+            _latestEffectiveTargetExposure = _targetPortfolioExposure * _latestKellyScale;
+            _latestStopLossExitCount = 0;
+            _latestTrailingStopExitCount = 0;
             _lastProcessedDate = default;
             _lastSignalEvaluationDate = default;
             _lastRebalanceDate = default;
@@ -1607,6 +1978,7 @@ namespace QuantConnect.Algorithm.CSharp
                     Quantity = Math.Max(0, entry.Quantity),
                     AveragePrice = entry.AveragePrice > 0m ? entry.AveragePrice : Math.Max(0m, entry.LastPrice),
                     LastPrice = Math.Max(0m, entry.LastPrice),
+                    PeakPrice = Math.Max(0m, entry.PeakPrice),
                     HoldingDays = Math.Max(0, entry.HoldingDays)
                 };
             }
@@ -1627,10 +1999,30 @@ namespace QuantConnect.Algorithm.CSharp
                 }
             }
 
+            foreach (var entry in state.RiskCooldowns ?? new List<SyntheticStateDateValue>())
+            {
+                if (TryParseTsCode(entry.Symbol, out var symbol) &&
+                    allowedSymbols.Contains(symbol) &&
+                    TryParseTradeDate(entry.Date, out var cooldownUntil))
+                {
+                    _riskCooldownUntilBySymbol[symbol] = cooldownUntil;
+                }
+            }
+
             _tradeRows.AddRange(state.Trades ?? new List<TradeRow>());
             _dailyRows.AddRange(state.DailyRows ?? new List<DailySummaryRow>());
             _allocationRows.AddRange(state.AllocationRows ?? new List<AllocationRow>());
             _factorExposureRows.AddRange(state.FactorExposureRows ?? new List<FactorExposureRow>());
+            var latestDaily = _dailyRows
+                .OrderBy(row => row.TradeDate, StringComparer.Ordinal)
+                .LastOrDefault();
+            if (latestDaily != null)
+            {
+                _latestKellyScale = latestDaily.KellyScale > 0m ? latestDaily.KellyScale : _kellyFallbackScale;
+                _latestEffectiveTargetExposure = latestDaily.EffectiveExposure > 0m
+                    ? latestDaily.EffectiveExposure
+                    : _targetPortfolioExposure * _latestKellyScale;
+            }
 
             Log(
                 $"[state] restored path={_portfolioStatePath} cash={_syntheticCash:F2} " +
@@ -1647,7 +2039,7 @@ namespace QuantConnect.Algorithm.CSharp
 
             var payload = new SyntheticPortfolioState
             {
-                SchemaVersion = 1,
+                SchemaVersion = 2,
                 SavedAtUtc = (UtcTime == default ? DateTime.UtcNow : UtcTime),
                 InitialCash = _initialSyntheticCash,
                 Cash = _syntheticCash,
@@ -1664,6 +2056,7 @@ namespace QuantConnect.Algorithm.CSharp
                         Quantity = Math.Max(0, pair.Value.Quantity),
                         AveragePrice = Math.Max(0m, pair.Value.AveragePrice),
                         LastPrice = Math.Max(0m, pair.Value.LastPrice),
+                        PeakPrice = Math.Max(0m, pair.Value.PeakPrice),
                         HoldingDays = Math.Max(0, pair.Value.HoldingDays)
                     })
                     .ToList(),
@@ -1674,6 +2067,14 @@ namespace QuantConnect.Algorithm.CSharp
                 LatestTargetWeights = _latestTargetWeightsByUnderlying
                     .OrderBy(pair => pair.Key.Value, StringComparer.Ordinal)
                     .Select(pair => new SyntheticStateDecimalValue { Symbol = ToTsCode(pair.Key), Value = pair.Value })
+                    .ToList(),
+                RiskCooldowns = _riskCooldownUntilBySymbol
+                    .OrderBy(pair => pair.Key.Value, StringComparer.Ordinal)
+                    .Select(pair => new SyntheticStateDateValue
+                    {
+                        Symbol = ToTsCode(pair.Key),
+                        Date = pair.Value.ToString("yyyyMMdd", CultureInfo.InvariantCulture)
+                    })
                     .ToList(),
                 Trades = _tradeRows.ToList(),
                 DailyRows = _dailyRows.ToList(),
@@ -1917,7 +2318,7 @@ namespace QuantConnect.Algorithm.CSharp
         private void WriteTradeReport()
         {
             var builder = new StringBuilder();
-            builder.AppendLine("trade_date,executed_at,symbol,action,quantity,quantity_before,quantity_after,price,trade_value,fee,score");
+            builder.AppendLine("trade_date,executed_at,symbol,action,quantity,quantity_before,quantity_after,price,trade_value,fee,score,reason");
             foreach (var row in _tradeRows)
             {
                 builder.AppendLine(string.Join(",",
@@ -1931,7 +2332,8 @@ namespace QuantConnect.Algorithm.CSharp
                     row.Price.ToString("F6", CultureInfo.InvariantCulture),
                     row.TradeValue.ToString("F6", CultureInfo.InvariantCulture),
                     row.Fee.ToString("F6", CultureInfo.InvariantCulture),
-                    row.Score.ToString("F6", CultureInfo.InvariantCulture)));
+                    row.Score.ToString("F6", CultureInfo.InvariantCulture),
+                    row.Reason ?? string.Empty));
             }
             WriteFile(_tradeReportPath, builder.ToString());
         }
@@ -1939,7 +2341,7 @@ namespace QuantConnect.Algorithm.CSharp
         private void WriteDailySummary()
         {
             var builder = new StringBuilder();
-            builder.AppendLine("trade_date,equity,cash,invested,gross_return,net_return,holdings,eligible_symbols,selected_symbols,turnover,score_spread,rebalanced");
+            builder.AppendLine("trade_date,equity,cash,invested,gross_return,net_return,holdings,eligible_symbols,selected_symbols,turnover,score_spread,rebalanced,kelly_scale,effective_exposure,stop_loss_exits,trailing_stop_exits");
             foreach (var row in _dailyRows)
             {
                 builder.AppendLine(string.Join(",",
@@ -1954,7 +2356,11 @@ namespace QuantConnect.Algorithm.CSharp
                     row.SelectedSymbols.ToString(CultureInfo.InvariantCulture),
                     row.Turnover.ToString("F8", CultureInfo.InvariantCulture),
                     row.ScoreSpread.ToString("F8", CultureInfo.InvariantCulture),
-                    row.Rebalanced ? "1" : "0"));
+                    row.Rebalanced ? "1" : "0",
+                    row.KellyScale.ToString("F6", CultureInfo.InvariantCulture),
+                    row.EffectiveExposure.ToString("F6", CultureInfo.InvariantCulture),
+                    row.StopLossExits.ToString(CultureInfo.InvariantCulture),
+                    row.TrailingStopExits.ToString(CultureInfo.InvariantCulture)));
             }
             WriteFile(_dailySummaryPath, builder.ToString());
         }
@@ -2023,6 +2429,7 @@ namespace QuantConnect.Algorithm.CSharp
             public int Quantity { get; set; }
             public decimal AveragePrice { get; set; }
             public decimal LastPrice { get; set; }
+            public decimal PeakPrice { get; set; }
             public int HoldingDays { get; set; }
         }
 
@@ -2034,6 +2441,7 @@ namespace QuantConnect.Algorithm.CSharp
             public int TargetQuantity { get; set; }
             public int DeltaQuantity { get; set; }
             public decimal Score { get; set; }
+            public string Reason { get; set; }
         }
 
         private sealed class TradeRow
@@ -2049,6 +2457,7 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal TradeValue { get; set; }
             public decimal Fee { get; set; }
             public decimal Score { get; set; }
+            public string Reason { get; set; }
         }
 
         private sealed class DailySummaryRow
@@ -2065,6 +2474,10 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal Turnover { get; set; }
             public decimal ScoreSpread { get; set; }
             public bool Rebalanced { get; set; }
+            public decimal KellyScale { get; set; }
+            public decimal EffectiveExposure { get; set; }
+            public int StopLossExits { get; set; }
+            public int TrailingStopExits { get; set; }
         }
 
         private sealed class AllocationRow
@@ -2119,6 +2532,23 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal PortfolioTurnover { get; set; }
         }
 
+        private sealed class KellySizingState
+        {
+            public int ClosedTrades { get; set; }
+            public decimal WinRate { get; set; }
+            public decimal PayoffRatio { get; set; }
+            public decimal RawKellyFraction { get; set; }
+            public decimal ExposureScale { get; set; }
+        }
+
+        private sealed class RiskExitSummary
+        {
+            public int StopLossExits { get; set; }
+            public int TrailingStopExits { get; set; }
+            public int TotalExits { get; set; }
+            public decimal Turnover { get; set; }
+        }
+
         private sealed class SyntheticPortfolioState
         {
             [JsonProperty("schema_version")]
@@ -2157,6 +2587,9 @@ namespace QuantConnect.Algorithm.CSharp
             [JsonProperty("latest_target_weights")]
             public List<SyntheticStateDecimalValue> LatestTargetWeights { get; set; } = new();
 
+            [JsonProperty("risk_cooldowns")]
+            public List<SyntheticStateDateValue> RiskCooldowns { get; set; } = new();
+
             [JsonProperty("trades")]
             public List<TradeRow> Trades { get; set; } = new();
 
@@ -2184,6 +2617,9 @@ namespace QuantConnect.Algorithm.CSharp
             [JsonProperty("last_price")]
             public decimal LastPrice { get; set; }
 
+            [JsonProperty("peak_price")]
+            public decimal PeakPrice { get; set; }
+
             [JsonProperty("holding_days")]
             public int HoldingDays { get; set; }
         }
@@ -2195,6 +2631,15 @@ namespace QuantConnect.Algorithm.CSharp
 
             [JsonProperty("value")]
             public decimal Value { get; set; }
+        }
+
+        private sealed class SyntheticStateDateValue
+        {
+            [JsonProperty("symbol")]
+            public string Symbol { get; set; }
+
+            [JsonProperty("date")]
+            public string Date { get; set; }
         }
 
         private sealed class LivePriceSnapshotPayload
