@@ -1,0 +1,54 @@
+{
+  "strategy_id": "2409-06289-automate-strategy-finding-with-llm-in-quant-investment",
+  "class_name": "SoloQuantGeneratedAlphaMlpAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMlpAlgorithm.cs",
+  "description": "A LEAN C# algorithm implementing the LLM-generated alpha factory concept from [2409.06289], using a composite of momentum, mean-reversion, and fundamental factors, with A-share specific T+1 constraints, top-k/drop-n portfolio construction, and strict risk management.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMlpAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/arxiv-q-fin-02604a1214cfc481.json",
+  "parameters": {
+    "universe": "csi300",
+    "start-date": "2019-01-01",
+    "end-date": "2024-06-30",
+    "initial-capital": "1000000",
+    "k": "13",
+    "n": "5"
+  },
+  "risk_controls": [
+    "5% Stop Loss per security",
+    "10% Max Drawdown liquidation",
+    "T+1 settlement constraint (cannot sell on purchase date)",
+    "Drop-N turnover control (max 5 sells per day)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "daily",
+      "field": "open"
+    },
+    {
+      "dataset": "daily",
+      "field": "high"
+    },
+    {
+      "dataset": "daily",
+      "field": "low"
+    },
+    {
+      "dataset": "daily",
+      "field": "close"
+    },
+    {
+      "dataset": "daily",
+      "field": "vol"
+    },
+    {
+      "dataset": "daily_basic",
+      "field": "total_mv"
+    },
+    {
+      "dataset": "income",
+      "field": "eps"
+    }
+  ],
+  "generated_at_utc": "2026-05-14T00:19:54.863199+00:00"
+}
