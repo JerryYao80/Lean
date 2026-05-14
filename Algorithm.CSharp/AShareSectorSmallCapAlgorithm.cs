@@ -6,6 +6,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
+using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Securities;
@@ -30,11 +31,8 @@ namespace QuantConnect.Algorithm.CSharp
         private string _dailySummaryPath;
         private string _summaryFilePath;
 
-        private decimal _advisoryCash;
-        private readonly Dictionary<Symbol, AdvisoryPosition> _positions = new();
         private readonly List<Symbol> _universe = new();
         private readonly List<AdvisorySignal> _signals = new();
-        private readonly List<AdvisoryDailyRow> _dailyRows = new();
         private int _persistedSignalCount;
         private DateTime _lastEvaluationDate;
         private DateTime _lastRebalanceMonth;
@@ -59,7 +57,6 @@ namespace QuantConnect.Algorithm.CSharp
             _positionSize = GetDecimalParameter("position-size", 0.067m);
             _feeRate = GetDecimalParameter("fee-rate", 0.0013m);
             _rebalanceDayOfMonth = GetIntParameter("rebalance-day-of-month", 1);
-            _advisoryCash = _initialCapital;
 
             _factorFilePath = ResolveOutputPath(GetParameter("factor-file"), "ashare-sector-smallcap-factors.csv");
             _signalFilePath = ResolveOutputPath(GetParameter("signal-file"), "ashare-sector-smallcap-signals.json");
@@ -99,7 +96,17 @@ namespace QuantConnect.Algorithm.CSharp
         {
             PersistOutputs();
             WriteSummary();
-            Log($"AShareSectorSmallCapAlgorithm finished. Signals: {_signals.Count}, Days: {_dailyRows.Count}");
+            Log($"AShareSectorSmallCapAlgorithm finished. Signals: {_signals.Count}");
+        }
+
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status == OrderStatus.Filled)
+            {
+                Log($"[ORDER] {orderEvent.Direction} {orderEvent.Symbol.Value} " +
+                    $"qty={orderEvent.FillQuantity} price={orderEvent.FillPrice:C2} " +
+                    $"fee={orderEvent.OrderFee:C2}");
+            }
         }
 
         private void EvaluateDaily()
@@ -108,11 +115,6 @@ namespace QuantConnect.Algorithm.CSharp
             if (_lastEvaluationDate == today) return;
             _lastEvaluationDate = today;
 
-            foreach (var pos in _positions.Values)
-                pos.HoldingDays++;
-
-            UpdatePositionPrices();
-
             var isRebalanceDay = today.Month != _lastRebalanceMonth.Month || _lastRebalanceMonth == default;
             if (isRebalanceDay)
             {
@@ -120,7 +122,8 @@ namespace QuantConnect.Algorithm.CSharp
                 Rebalance(today);
             }
 
-            RecordDailyRow(today);
+            SetRuntimeStatistic("Positions", Portfolio.Values.Where(h => h.Invested).Count().ToString());
+            SetRuntimeStatistic("Equity", Portfolio.TotalPortfolioValue.ToString("C0"));
             PersistOutputs();
         }
 
@@ -140,9 +143,7 @@ namespace QuantConnect.Algorithm.CSharp
                 .Where(r => r.Momentum20d.HasValue)
                 .GroupBy(r => r.Sector)
                 .Where(g => g.Count() >= 3)
-                .ToDictionary(
-                    g => g.Key,
-                    g => g.Average(r => r.Momentum20d!.Value));
+                .ToDictionary(g => g.Key, g => g.Average(r => r.Momentum20d!.Value));
 
             if (sectorMomentum.Count == 0)
             {
@@ -171,101 +172,43 @@ namespace QuantConnect.Algorithm.CSharp
                     targetTsCodes.Add(code);
             }
 
-            foreach (var sym in _positions.Keys.ToList())
-            {
-                var tsCode = ToTsCode(sym);
-                if (targetTsCodes.Contains(tsCode)) continue;
-                var pos = _positions[sym];
-                var price = GetAdvisoryPrice(sym, pos.LastPrice);
-                var fee = pos.Quantity * price * _feeRate;
-                _advisoryCash += pos.Quantity * price - fee;
-                _signals.Add(CreateSignal("SELL", sym, price, pos.Quantity,
-                    $"rebalance: sector not in top-{_topSectors} or cap/pb filter", 0.8m, "normal"));
-                _positions.Remove(sym);
-            }
-
-            var currentEquity = GetAdvisoryEquity();
+            var targetSymbols = new HashSet<Symbol>();
             foreach (var tsCode in targetTsCodes)
             {
                 var sym = _universe.FirstOrDefault(s => ToTsCode(s) == tsCode);
-                if (sym == null || _positions.ContainsKey(sym)) continue;
+                if (sym != null) targetSymbols.Add(sym);
+            }
 
-                var price = GetAdvisoryPrice(sym, 0m);
-                if (price <= 0) continue;
-
-                var alloc = currentEquity * _positionSize;
-                var qty = GetLotQuantity(Math.Min(_advisoryCash, alloc), price);
-                if (qty <= 0) continue;
-
-                var fee = qty * price * _feeRate;
-                _advisoryCash -= qty * price + fee;
-                _positions[sym] = new AdvisoryPosition
+            foreach (var holding in Portfolio.Values.Where(h => h.Invested).ToList())
+            {
+                if (targetSymbols.Contains(holding.Symbol)) continue;
+                var qty = (int)(Math.Floor(holding.Quantity / LotSize) * LotSize);
+                if (qty > 0)
                 {
-                    Symbol = sym,
-                    Quantity = qty,
-                    EntryPrice = price,
-                    LastPrice = price,
-                    HoldingDays = 0,
-                };
-                var factor = factors.GetValueOrDefault(tsCode);
+                    MarketOrder(holding.Symbol, -qty);
+                    _signals.Add(CreateSignal("SELL", holding.Symbol, holding.Price, qty,
+                        $"rebalance: sector not in top-{_topSectors} or cap/pb filter", 0.8m, "normal"));
+                }
+            }
+
+            var equity = Portfolio.TotalPortfolioValue;
+            foreach (var sym in targetSymbols)
+            {
+                if (Portfolio.ContainsKey(sym) && Portfolio[sym].Invested) continue;
+                var price = Securities[sym].Price;
+                if (price <= 0) continue;
+                var alloc = equity * _positionSize;
+                var qty = GetLotQuantity(alloc, price);
+                if (qty <= 0) continue;
+                MarketOrder(sym, qty);
+                var factor = factors.GetValueOrDefault(ToTsCode(sym));
                 _signals.Add(CreateSignal("BUY", sym, price, qty,
                     $"sector={factor?.Sector ?? "?"} mv={factor?.TotalMvWan:F0}万 pb={factor?.Pb:F2}",
                     0.75m, "normal"));
             }
 
-            Log($"[{dateKey}] Rebalance: topSectors=[{string.Join(",", topSectors)}] target={targetTsCodes.Count} positions={_positions.Count}");
+            Log($"[{dateKey}] Rebalance: topSectors=[{string.Join(",", topSectors)}] target={targetTsCodes.Count} held={Portfolio.Values.Count(h => h.Invested)}");
         }
-
-        private void UpdatePositionPrices()
-        {
-            foreach (var pos in _positions.Values)
-            {
-                var price = GetAdvisoryPrice(pos.Symbol, pos.LastPrice);
-                if (price > 0) pos.LastPrice = price;
-            }
-        }
-
-        private decimal GetAdvisoryPrice(Symbol sym, decimal fallback)
-        {
-            try
-            {
-                var bars = History<TradeBar>(sym, 2, Resolution.Daily).ToList();
-                if (bars.Count > 0) return bars[bars.Count - 1].Close;
-            }
-            catch { }
-            return fallback > 0 ? fallback : (Securities.ContainsKey(sym) ? Securities[sym].Price : 0m);
-        }
-
-        private decimal GetAdvisoryEquity() =>
-            _advisoryCash + _positions.Values.Sum(p => p.Quantity * p.LastPrice);
-
-        private void RecordDailyRow(DateTime date)
-        {
-            var mv = _positions.Values.Sum(p => p.Quantity * p.LastPrice);
-            _dailyRows.Add(new AdvisoryDailyRow
-            {
-                TradeDate = date,
-                Cash = _advisoryCash,
-                MarketValue = mv,
-                TotalValue = _advisoryCash + mv,
-                PositionCount = _positions.Count,
-            });
-        }
-
-        private AdvisorySignal CreateSignal(string action, Symbol sym, decimal price, int qty, string reason, decimal confidence, string urgency) =>
-            new AdvisorySignal
-            {
-                SignalId = $"{Time:yyyyMMddHHmmss}-{action}-{ToTsCode(sym)}",
-                Timestamp = Time,
-                Action = action,
-                Symbol = ToTsCode(sym),
-                Name = sym.Value,
-                Price = price,
-                Quantity = qty,
-                Reason = reason,
-                Confidence = confidence,
-                Urgency = urgency,
-            };
 
         private void PersistOutputs()
         {
@@ -276,32 +219,28 @@ namespace QuantConnect.Algorithm.CSharp
             File.WriteAllText(_signalFilePath,
                 JsonConvert.SerializeObject(_signals, Formatting.Indented), System.Text.Encoding.UTF8);
 
-            var mv = _positions.Values.Sum(p => p.Quantity * p.LastPrice);
-            var total = GetAdvisoryEquity();
+            var invested = Portfolio.Values.Where(h => h.Invested).ToList();
+            var mv = invested.Sum(h => h.HoldingsValue);
+            var total = Portfolio.TotalPortfolioValue;
             File.WriteAllText(_portfolioSnapshotPath, JsonConvert.SerializeObject(new
             {
                 timestamp = Time,
                 initial_capital = _initialCapital,
-                cash = _advisoryCash,
+                cash = Portfolio.Cash,
                 market_value = mv,
                 total_value = total,
                 total_pnl = total - _initialCapital,
                 total_return = _initialCapital == 0 ? 0m : total / _initialCapital - 1m,
-                positions = _positions.Values.Select(p => new
+                positions = invested.Select(h => new
                 {
-                    symbol = ToTsCode(p.Symbol),
-                    quantity = p.Quantity,
-                    entry_price = p.EntryPrice,
-                    last_price = p.LastPrice,
-                    holding_days = p.HoldingDays,
-                    unrealized_pnl = p.Quantity * (p.LastPrice - p.EntryPrice),
+                    symbol = ToTsCode(h.Symbol),
+                    quantity = h.Quantity,
+                    average_price = h.AveragePrice,
+                    market_price = h.Price,
+                    market_value = h.HoldingsValue,
+                    unrealized_pnl = h.UnrealizedProfit,
                 }).ToList(),
             }, Formatting.Indented), System.Text.Encoding.UTF8);
-
-            var lines = new List<string> { "trade_date,cash,market_value,total_value,position_count" };
-            lines.AddRange(_dailyRows.Select(r =>
-                $"{r.TradeDate:yyyy-MM-dd},{r.Cash},{r.MarketValue},{r.TotalValue},{r.PositionCount}"));
-            File.WriteAllLines(_dailySummaryPath, lines, System.Text.Encoding.UTF8);
 
             PersistSignalHistory();
         }
@@ -321,28 +260,23 @@ namespace QuantConnect.Algorithm.CSharp
 
         private void WriteSummary()
         {
-            if (_dailyRows.Count == 0) return;
             EnsureDir(_summaryFilePath);
-            var first = _dailyRows[0].TotalValue;
-            var last = _dailyRows[_dailyRows.Count - 1].TotalValue;
-            var totalReturn = first == 0 ? 0m : last / _initialCapital - 1m;
-            var maxDrawdown = ComputeMaxDrawdown(_dailyRows.Select(r => r.TotalValue).ToList());
-            var sharpe = ComputeSharpe(_dailyRows.Select(r => r.TotalValue).ToList());
-            var score = (double)sharpe > 0 ? (double)sharpe : (double)totalReturn - Math.Abs((double)maxDrawdown);
+            var total = Portfolio.TotalPortfolioValue;
+            var totalReturn = _initialCapital == 0 ? 0m : total / _initialCapital - 1m;
             File.WriteAllText(_summaryFilePath, JsonConvert.SerializeObject(new
             {
                 algorithm_id = "AShareSectorSmallCapAlgorithm",
-                start_date = _dailyRows[0].TradeDate.ToString("yyyy-MM-dd"),
-                end_date = _dailyRows[_dailyRows.Count - 1].TradeDate.ToString("yyyy-MM-dd"),
+                start_date = StartDate.ToString("yyyy-MM-dd"),
+                end_date = EndDate.ToString("yyyy-MM-dd"),
                 initial_capital = _initialCapital,
-                final_value = last,
+                final_value = total,
                 total_return = totalReturn,
-                max_drawdown = maxDrawdown,
-                sharpe_ratio = sharpe,
-                score = (decimal)score,
                 total_signals = _signals.Count,
-                trading_days = _dailyRows.Count,
             }, Formatting.Indented), System.Text.Encoding.UTF8);
+
+            SetSummaryStatistic("Total Return", (double)totalReturn);
+            SetSummaryStatistic("Sharpe Ratio", 0);
+            SetSummaryStatistic("Total Signals", _signals.Count);
         }
 
         private void LoadFactorData()
@@ -397,6 +331,21 @@ namespace QuantConnect.Algorithm.CSharp
                 .OrderByDescending(d => d)
                 .FirstOrDefault();
         }
+
+        private AdvisorySignal CreateSignal(string action, Symbol sym, decimal price, int qty, string reason, decimal confidence, string urgency) =>
+            new AdvisorySignal
+            {
+                SignalId = $"{Time:yyyyMMddHHmmss}-{action}-{ToTsCode(sym)}",
+                Timestamp = Time,
+                Action = action,
+                Symbol = ToTsCode(sym),
+                Name = sym.Value,
+                Price = price,
+                Quantity = qty,
+                Reason = reason,
+                Confidence = confidence,
+                Urgency = urgency,
+            };
 
         public static string ToTsCode(Symbol sym) =>
             $"{sym.Value}.{(sym.ID.Market == Market.SSE ? "SH" : "SZ")}";
@@ -524,15 +473,6 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal? Momentum20d { get; set; }
         }
 
-        private sealed class AdvisoryPosition
-        {
-            public Symbol Symbol { get; set; }
-            public int Quantity { get; set; }
-            public decimal EntryPrice { get; set; }
-            public decimal LastPrice { get; set; }
-            public int HoldingDays { get; set; }
-        }
-
         private sealed class AdvisorySignal
         {
             [JsonProperty("signal_id")] public string SignalId { get; set; }
@@ -545,15 +485,6 @@ namespace QuantConnect.Algorithm.CSharp
             [JsonProperty("reason")] public string Reason { get; set; }
             [JsonProperty("confidence")] public decimal Confidence { get; set; }
             [JsonProperty("urgency")] public string Urgency { get; set; }
-        }
-
-        private sealed class AdvisoryDailyRow
-        {
-            public DateTime TradeDate { get; set; }
-            public decimal Cash { get; set; }
-            public decimal MarketValue { get; set; }
-            public decimal TotalValue { get; set; }
-            public int PositionCount { get; set; }
         }
     }
 }
