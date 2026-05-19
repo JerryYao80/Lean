@@ -1355,7 +1355,7 @@ class SoloQuantOrchestratorTests(unittest.TestCase):
                     run_date="20260510",
                 )
 
-            self.assertEqual(report["generated_count"], 1)
+            self.assertEqual(report["reproduced_count"], 1)
             self.assertTrue(Path(report["packages"][0]["code-file"]).exists())
 
     def test_materialize_generated_strategy_implementations_writes_three_real_generated_configs(self):
@@ -1543,7 +1543,7 @@ class SoloQuantOrchestratorTests(unittest.TestCase):
                 llm_implementation_client=fake_llm,
                 language="Python",
             )
-            self.assertEqual(result["generated_count"], 1)
+            self.assertEqual(result["reproduced_count"], 1)
             manifest = json.loads(Path(result["packages"][0]["manifest-file"]).read_text(encoding="utf-8"))
             self.assertEqual(manifest["algorithm_language"], "Python")
 
@@ -2795,7 +2795,7 @@ class SoloQuantOrchestratorTests(unittest.TestCase):
                 language="Python",
             )
             self.assertGreaterEqual(result["error_count"], 1)
-            self.assertGreaterEqual(result["generated_count"], 1)
+            self.assertGreaterEqual(result["reproduced_count"], 1)
 
     def test_collect_strategy_progress_lines_reads_registry_and_manifests(self):
         module = load_module()
@@ -2887,7 +2887,7 @@ class SoloQuantOrchestratorTests(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             line = lines[0]
             self.assertIn("crawled_count=42", line)
-            self.assertIn("reproduced_count=2", line)
+            self.assertIn("summarized_count=2", line)
             self.assertIn("backtested_count=3", line)
             self.assertIn("serving_count=1", line)
             self.assertIn("retired_count=1", line)

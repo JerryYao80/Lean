@@ -55,7 +55,7 @@ class FakeServices:
 
     def generate_strategy_code(self, config, run_date=None):
         self.calls.append("generate_strategy_code")
-        return {"status": "ok", "generated_count": 1}
+        return {"status": "ok", "reproduced_count": 1}
 
     def compile_strategies(self, config):
         self.calls.append("compile_strategies")

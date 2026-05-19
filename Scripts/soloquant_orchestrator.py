@@ -3367,7 +3367,7 @@ def generate_strategy_implementations(
     return {
         "status": "ok",
         "run_date": str(run_date or utc_run_date()).replace("-", ""),
-        "generated_count": len(packages),
+        "reproduced_count": len(packages),
         "skipped_count": skipped_count,
         "error_count": error_count,
         "packages": packages,
@@ -4371,17 +4371,17 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
                 except Exception:
                     pass
 
-    reproduced_count = 0
+    summarized_count = 0
     repro_dir = artifact_root / "reproduction" / "strategy"
     if repro_dir.exists():
         for index_path in sorted(repro_dir.glob("*/index.json")):
             try:
                 index = load_json_payload(index_path)
-                reproduced_count += int(index.get("count") or 0)
+                summarized_count += int(index.get("count") or 0)
             except Exception:
                 pass
 
-    generated_count = sum(1 for _ in iter_generated_strategy_manifest_files())
+    reproduced_count = sum(1 for _ in iter_generated_strategy_manifest_files())
 
     registry_strategies: list[dict] = []
     if registry_path.exists():
@@ -4395,8 +4395,8 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
 
     fields = {
         "crawled_count": format_influx_field_value(crawled_count),
+        "summarized_count": format_influx_field_value(summarized_count),
         "reproduced_count": format_influx_field_value(reproduced_count),
-        "generated_count": format_influx_field_value(generated_count),
         "backtested_count": format_influx_field_value(backtested_count),
         "live_paper_count": format_influx_field_value(live_paper_count),
         "serving_count": format_influx_field_value(serving_count),
