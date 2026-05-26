@@ -106,6 +106,7 @@ namespace QuantConnect.Algorithm.CSharp
         private AShareBarraCNE5SignalSettings _signalSettings;
         private Dictionary<Symbol, decimal> _liveSnapshotPricesBySymbol = new();
         private TimeSpan _liveSignalInterval = TimeSpan.FromMinutes(3);
+        private TimeSpan _livePriceSyncInterval = TimeSpan.FromMinutes(1);
 
         public override void Initialize()
         {
@@ -177,6 +178,7 @@ namespace QuantConnect.Algorithm.CSharp
             _syntheticCash = initialCash;
             _previousEquity = initialCash;
             _liveSignalInterval = TimeSpan.FromMinutes(Math.Max(1, GetIntParameter("live-signal-interval-minutes", 3)));
+            _livePriceSyncInterval = TimeSpan.FromSeconds(Math.Max(10, GetIntParameter("live-price-poll-interval-seconds", 60)));
             _syncLeanPortfolio = GetBoolParameter("sync-lean-portfolio", !LiveMode);
             _monteCarloEnabled = GetBoolParameter("monte-carlo-enabled", false);
             _monteCarloTrials = GetIntParameter("monte-carlo-trials", 500);
@@ -230,8 +232,10 @@ namespace QuantConnect.Algorithm.CSharp
             }
             if (LiveMode)
             {
-                Schedule.On(DateRules.EveryDay(_anchorSymbol), TimeRules.Every(_liveSignalInterval), RunLiveMonitoringCycle);
-                Log($"Live monitoring schedule: every {_liveSignalInterval.TotalMinutes:F0} minutes using rt_k snapshot prices and Barra factor CSV refresh.");
+                Schedule.On(DateRules.EveryDay(_anchorSymbol), TimeRules.Every(_livePriceSyncInterval), RunLiveMonitoringCycle);
+                Log(
+                    $"Live monitoring schedule: signal every {_liveSignalInterval.TotalMinutes:F0} minute(s); " +
+                    $"snapshot sync every {_livePriceSyncInterval.TotalSeconds:F0} second(s) using rt_k snapshot prices and Barra factor CSV refresh.");
             }
             SetRuntimeStatistic("Exec Mode", _syncLeanPortfolio ? "synthetic+sync" : "synthetic");
             SetRuntimeStatistic("Syn Equity", _syntheticCash.ToString("F0", CultureInfo.InvariantCulture));
@@ -323,7 +327,10 @@ namespace QuantConnect.Algorithm.CSharp
             if (ShouldRunLiveProcessingCycle(sessionDate))
             {
                 ProcessSession(sessionDate);
+                return;
             }
+
+            SyncLiveSnapshotPortfolioState(sessionDate);
         }
 
         private void BootstrapLiveSessionState()
@@ -342,6 +349,26 @@ namespace QuantConnect.Algorithm.CSharp
                 $"[bootstrap] trade_date={bootstrapDate:yyyyMMdd} snapshot_prices={snapshotPrices.Count} " +
                 $"loaded_factors={loadedCount}");
             ProcessSession(bootstrapDate, true);
+        }
+
+        private void SyncLiveSnapshotPortfolioState(DateTime sessionDate)
+        {
+            if (!LiveMode || !_syncLeanPortfolio)
+            {
+                return;
+            }
+
+            var prices = BuildPriceMap();
+            if (prices.Count == 0)
+            {
+                return;
+            }
+
+            var equity = ComputeEquity(prices);
+            SyncLeanPortfolioState(prices);
+            SetRuntimeStatistic("Syn Equity", equity.ToString("F0", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Holdings", _positions.Count.ToString(CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Last Session", sessionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         }
 
         private void ProcessSession(DateTime sessionDate, bool force = false)
@@ -474,6 +501,10 @@ namespace QuantConnect.Algorithm.CSharp
             var weightMap = BuildCurrentWeightMap(prices, equity);
             UpsertAllocations(sessionDate, prices);
             var exposure = AShareBarraCNE5SignalModel.ComputePortfolioExposure(weightMap, _latestFactorsByUnderlying);
+            if (_syncLeanPortfolio)
+            {
+                SyncLeanPortfolioState(prices);
+            }
 
             UpsertDailySummary(new DailySummaryRow
             {
@@ -1307,6 +1338,14 @@ namespace QuantConnect.Algorithm.CSharp
                 Score = order.Score,
                 Reason = order.Reason
             });
+
+            Log(
+                $"[synthetic order] trade_date={sessionDate:yyyyMMdd} " +
+                $"executed_at={ResolveTradeTimestamp(order.Symbol):yyyy-MM-dd HH:mm:ss} " +
+                $"symbol={ToTsCode(order.Symbol)} action={(isSell ? "SELL" : "BUY")} " +
+                $"quantity={absoluteQuantity} before={quantityBefore} after={quantityAfter} " +
+                $"price={order.Price:F6} trade_value={tradeValue:F6} fee={fee:F6} " +
+                $"score={order.Score:F6} reason={order.Reason ?? string.Empty}");
         }
 
         private int ClampBuyQuantityToCash(Symbol symbol, int quantity, decimal price)
@@ -1393,15 +1432,15 @@ namespace QuantConnect.Algorithm.CSharp
             var snapshotPrices = LiveMode ? LoadLiveSnapshotPrices() : null;
             foreach (var symbol in _factorToUnderlying.Values)
             {
-                if (Securities.TryGetValue(symbol, out var security) && security.Price > 0m)
-                {
-                    result[symbol] = security.Price;
-                    continue;
-                }
-
                 if (snapshotPrices != null && snapshotPrices.TryGetValue(symbol, out var snapshotPrice) && snapshotPrice > 0m)
                 {
                     result[symbol] = snapshotPrice;
+                    continue;
+                }
+
+                if (Securities.TryGetValue(symbol, out var security) && security.Price > 0m)
+                {
+                    result[symbol] = security.Price;
                 }
             }
 
@@ -1736,6 +1775,25 @@ namespace QuantConnect.Algorithm.CSharp
                 else if (security.Price > 0m)
                 {
                     averagePrice = security.Price;
+                }
+
+                if (prices.TryGetValue(symbol, out var marketPrice) && marketPrice > 0m)
+                {
+                    var localTime = security.LocalTime != default ? security.LocalTime : Time;
+                    security.SetMarketPrice(new TradeBar
+                    {
+                        Symbol = symbol,
+                        Time = localTime,
+                        EndTime = localTime,
+                        Open = marketPrice,
+                        High = marketPrice,
+                        Low = marketPrice,
+                        Close = marketPrice,
+                        Value = marketPrice,
+                        Volume = 0,
+                        Period = TimeSpan.Zero,
+                        DataType = MarketDataType.TradeBar
+                    });
                 }
 
                 security.Holdings.SetHoldings(averagePrice, quantity);

@@ -1,54 +1,34 @@
 {
   "strategy_id": "2409-06289-automate-strategy-finding-with-llm-in-quant-investment",
-  "class_name": "SoloQuantGeneratedAlphaMlpAlgorithm",
+  "class_name": "SoloQuantGeneratedAlphaMLPAlgorithm",
   "algorithm_language": "CSharp",
-  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMlpAlgorithm.cs",
-  "description": "A LEAN C# algorithm implementing the LLM-generated alpha factory concept from [2409.06289], using a composite of momentum, mean-reversion, and fundamental factors, with A-share specific T+1 constraints, top-k/drop-n portfolio construction, and strict risk management.",
-  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMlpAlgorithm.cs",
-  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/arxiv-q-fin-02604a1214cfc481.json",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMLPAlgorithm.cs",
+  "description": "A quant algorithm that replicates the 12 seed alpha factors from the LLM-driven framework (arXiv:2409.06289) with pre-trained MLP weights, constructs a cross-sectional long-short portfolio on the SSE 50 universe, and applies basic risk controls and typical A-share transaction costs.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedAlphaMLPAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-9d28d0b6a3408141.json",
   "parameters": {
-    "universe": "csi300",
-    "start-date": "2019-01-01",
-    "end-date": "2024-06-30",
-    "initial-capital": "1000000",
-    "k": "13",
-    "n": "5"
+    "start-date": "2023-01-01",
+    "end-date": "2024-01-01",
+    "initial-capital": "1000000"
   },
   "risk_controls": [
-    "5% Stop Loss per security",
-    "10% Max Drawdown liquidation",
-    "T+1 settlement constraint (cannot sell on purchase date)",
-    "Drop-N turnover control (max 5 sells per day)"
+    "Stop-loss per position at -10% unrealised PnL",
+    "Positions sized only on valid insights with confidence > 0.5 (hardcoded 0.8 in this draft)",
+    "Portfolio long/short exposure proportional to signal strength via equal-weighting of Up/Down categories"
   ],
   "data_requirements": [
     {
-      "dataset": "daily",
-      "field": "open"
+      "dataset": "Daily OHLCV",
+      "field": "open, high, low, close, volume, amount"
     },
     {
-      "dataset": "daily",
-      "field": "high"
+      "dataset": "Fundamental data",
+      "field": "EarningRatios.BasicEPS, MarketCap (via FineFundamental)"
     },
     {
-      "dataset": "daily",
-      "field": "low"
-    },
-    {
-      "dataset": "daily",
-      "field": "close"
-    },
-    {
-      "dataset": "daily",
-      "field": "vol"
-    },
-    {
-      "dataset": "daily_basic",
-      "field": "total_mv"
-    },
-    {
-      "dataset": "income",
-      "field": "eps"
+      "dataset": "Benchmark",
+      "field": "SSE 50 index daily price (000016.SH)"
     }
   ],
-  "generated_at_utc": "2026-05-14T00:19:54.863199+00:00"
+  "generated_at_utc": "2026-05-19T12:25:01.497626+00:00"
 }

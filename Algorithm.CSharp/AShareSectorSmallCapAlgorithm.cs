@@ -30,15 +30,25 @@ namespace QuantConnect.Algorithm.CSharp
         private string _portfolioSnapshotPath;
         private string _dailySummaryPath;
         private string _summaryFilePath;
+        private string _monteCarloFilePath;
 
         private readonly List<Symbol> _universe = new();
         private readonly List<AdvisorySignal> _signals = new();
+        private readonly List<decimal> _dailyEquity = new();
         private int _persistedSignalCount;
         private DateTime _lastEvaluationDate;
         private DateTime _lastRebalanceMonth;
 
         private readonly Dictionary<string, Dictionary<string, FactorRow>> _factorData = new();
         private readonly HashSet<string> _allTsCodes = new();
+
+        // Monte Carlo parameters
+        private bool _monteCarloEnabled;
+        private int _monteCarloTrials;
+        private int _monteCarloHorizonDays;
+        private int _monteCarloBlockSize;
+        private int _monteCarloSeed;
+        private decimal _monteCarloFactorPerturbationScale;
 
         public override void Initialize()
         {
@@ -63,6 +73,14 @@ namespace QuantConnect.Algorithm.CSharp
             _portfolioSnapshotPath = ResolveOutputPath(GetParameter("portfolio-snapshot-file"), "ashare-sector-smallcap-portfolio.json");
             _dailySummaryPath = ResolveOutputPath(GetParameter("daily-summary-file"), "ashare-sector-smallcap-daily.csv");
             _summaryFilePath = ResolveOutputPath(GetParameter("summary-file"), "ashare-sector-smallcap-summary.json");
+            _monteCarloFilePath = ResolveOutputPath(GetParameter("monte-carlo-file"), "ashare-sector-smallcap-monte-carlo.json");
+
+            _monteCarloEnabled = GetBoolParameter("monte-carlo-enabled", true);
+            _monteCarloTrials = GetIntParameter("monte-carlo-trials", 500);
+            _monteCarloHorizonDays = GetIntParameter("monte-carlo-horizon-days", 63);
+            _monteCarloBlockSize = GetIntParameter("monte-carlo-block-size", 5);
+            _monteCarloSeed = GetIntParameter("monte-carlo-seed", 42);
+            _monteCarloFactorPerturbationScale = GetDecimalParameter("monte-carlo-factor-perturbation-scale", 0.15m);
 
             LoadFactorData();
 
@@ -115,6 +133,9 @@ namespace QuantConnect.Algorithm.CSharp
             if (_lastEvaluationDate == today) return;
             _lastEvaluationDate = today;
 
+            var equity = Portfolio.TotalPortfolioValue;
+            _dailyEquity.Add(equity);
+
             var isRebalanceDay = today.Month != _lastRebalanceMonth.Month || _lastRebalanceMonth == default;
             if (isRebalanceDay)
             {
@@ -122,8 +143,19 @@ namespace QuantConnect.Algorithm.CSharp
                 Rebalance(today);
             }
 
-            SetRuntimeStatistic("Positions", Portfolio.Values.Where(h => h.Invested).Count().ToString());
-            SetRuntimeStatistic("Equity", Portfolio.TotalPortfolioValue.ToString("C0"));
+            var invested = Portfolio.Values.Where(h => h.Invested).ToList();
+            var investedValue = invested.Sum(h => h.HoldingsValue);
+            var netReturn = _initialCapital > 0 ? equity / _initialCapital - 1m : 0m;
+            var drawdown = ComputeMaxDrawdown(_dailyEquity);
+
+            SetRuntimeStatistic("Positions", invested.Count.ToString(CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Equity", equity.ToString("F0", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Cash", Portfolio.Cash.ToString("F0", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Invested", investedValue.ToString("F0", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Return", netReturn.ToString("P2", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Drawdown", drawdown.ToString("P2", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("Signals", _signals.Count.ToString(CultureInfo.InvariantCulture));
+
             PersistOutputs();
         }
 
@@ -263,6 +295,27 @@ namespace QuantConnect.Algorithm.CSharp
             EnsureDir(_summaryFilePath);
             var total = Portfolio.TotalPortfolioValue;
             var totalReturn = _initialCapital == 0 ? 0m : total / _initialCapital - 1m;
+            var netProfit = total - _initialCapital;
+            var totalFees = Portfolio.TotalFees;
+            var maxDrawdown = ComputeMaxDrawdown(_dailyEquity);
+            var sharpe = ComputeSharpe(_dailyEquity);
+
+            // Compute trade statistics from LEAN's closed trades
+            var closedTrades = TradeBuilder.ClosedTrades;
+            var totalTrades = closedTrades.Count;
+            var winningTrades = closedTrades.Count(t => t.ProfitLoss > 0);
+            var losingTrades = closedTrades.Count(t => t.ProfitLoss <= 0);
+            var winRate = totalTrades > 0 ? (decimal)winningTrades / totalTrades : 0m;
+            var lossRate = totalTrades > 0 ? (decimal)losingTrades / totalTrades : 0m;
+            var avgWin = winningTrades > 0 ? closedTrades.Where(t => t.ProfitLoss > 0).Average(t => t.ProfitLoss) : 0m;
+            var avgLoss = losingTrades > 0 ? closedTrades.Where(t => t.ProfitLoss <= 0).Average(t => Math.Abs(t.ProfitLoss)) : 1m;
+            var profitLossRatio = avgLoss != 0 ? avgWin / avgLoss : 0m;
+            var expectancy = winRate * profitLossRatio - lossRate;
+            var totalOrders = Transactions.OrdersCount;
+
+            // Portfolio turnover from daily equity changes
+            var turnover = ComputePortfolioTurnover();
+
             File.WriteAllText(_summaryFilePath, JsonConvert.SerializeObject(new
             {
                 algorithm_id = "AShareSectorSmallCapAlgorithm",
@@ -272,11 +325,127 @@ namespace QuantConnect.Algorithm.CSharp
                 final_value = total,
                 total_return = totalReturn,
                 total_signals = _signals.Count,
+                max_drawdown = maxDrawdown,
+                sharpe_ratio = sharpe,
+                total_fees = totalFees,
+                total_orders = totalOrders,
+                closed_trades = totalTrades,
+                winning_trades = winningTrades,
+                losing_trades = losingTrades,
+                win_rate = winRate,
+                profit_loss_ratio = profitLossRatio,
             }, Formatting.Indented), System.Text.Encoding.UTF8);
 
+            // Publish summary statistics for Grafana (lean_backtest_stat measurement via export script)
             SetSummaryStatistic("Total Return", (double)totalReturn);
-            SetSummaryStatistic("Sharpe Ratio", 0);
+            SetSummaryStatistic("Net Profit", (double)netProfit);
+            SetSummaryStatistic("Sharpe Ratio", (double)sharpe);
+            SetSummaryStatistic("Drawdown", (double)maxDrawdown);
+            SetSummaryStatistic("Win Rate", (double)winRate);
+            SetSummaryStatistic("Loss Rate", (double)lossRate);
+            SetSummaryStatistic("Profit-Loss Ratio", Math.Round((double)profitLossRatio, 2));
+            SetSummaryStatistic("Expectancy", Math.Round((double)expectancy, 3));
+            SetSummaryStatistic("Average Win", (double)avgWin);
+            SetSummaryStatistic("Average Loss", (double)avgLoss);
+            SetSummaryStatistic("Total Orders", totalOrders);
+            SetSummaryStatistic("Total Trades", totalTrades);
+            SetSummaryStatistic("Winning Trades", winningTrades);
+            SetSummaryStatistic("Losing Trades", losingTrades);
+            SetSummaryStatistic("Portfolio Turnover", (double)turnover);
+            SetSummaryStatistic("Total Fees", (double)totalFees);
             SetSummaryStatistic("Total Signals", _signals.Count);
+            SetSummaryStatistic("End Equity", (double)total);
+
+            PublishMonteCarloSummary();
+        }
+
+        private decimal ComputePortfolioTurnover()
+        {
+            if (_dailyEquity.Count < 2) return 0m;
+            var totalSaleVolume = Portfolio.TotalSaleVolume;
+            var avgEquity = _dailyEquity.Average();
+            return avgEquity > 0 ? totalSaleVolume / avgEquity / _dailyEquity.Count : 0m;
+        }
+
+        private void PublishMonteCarloSummary()
+        {
+            if (!_monteCarloEnabled) return;
+
+            var dailyReturns = new List<StrategyMonteCarloDailyReturn>();
+            for (int i = 1; i < _dailyEquity.Count; i++)
+            {
+                if (_dailyEquity[i - 1] > 0)
+                {
+                    dailyReturns.Add(new StrategyMonteCarloDailyReturn
+                    {
+                        TradeDate = StartDate.AddDays(i),
+                        NetReturn = (double)(_dailyEquity[i] / _dailyEquity[i - 1] - 1m)
+                    });
+                }
+            }
+
+            if (dailyReturns.Count == 0)
+            {
+                Log("Monte Carlo summary skipped: insufficient daily returns.");
+                return;
+            }
+
+            var summary = StrategyMonteCarloStatistics.Compute(
+                new StrategyMonteCarloConfig
+                {
+                    Enabled = true,
+                    Trials = _monteCarloTrials,
+                    HorizonDays = _monteCarloHorizonDays,
+                    BlockSize = _monteCarloBlockSize,
+                    Seed = _monteCarloSeed,
+                    FactorPerturbationScale = (double)_monteCarloFactorPerturbationScale
+                },
+                dailyReturns);
+
+            if (!summary.HasData)
+            {
+                Log("Monte Carlo summary skipped: insufficient inputs to generate simulation paths.");
+                return;
+            }
+
+            foreach (var statistic in summary.ToSummaryStatistics())
+            {
+                SetSummaryStatistic(statistic.Key, statistic.Value);
+            }
+
+            WriteMonteCarloJson(summary);
+        }
+
+        private void WriteMonteCarloJson(StrategyMonteCarloSummary summary)
+        {
+            if (summary == null || !summary.HasData) return;
+
+            EnsureDir(_monteCarloFilePath);
+            var payload = new
+            {
+                generatedAtUtc = DateTime.UtcNow.ToString("o"),
+                scenarios = new Dictionary<string, Dictionary<string, object>>
+                {
+                    ["baseline"] = new Dictionary<string, object>
+                    {
+                        ["scenario"] = "baseline",
+                        ["lossProbability"] = summary.BaselineLossProbability,
+                        ["medianTotalReturn"] = summary.CombinedMedianReturn,
+                        ["p95Drawdown"] = summary.CombinedP95Drawdown,
+                    },
+                    ["combinedStress"] = new Dictionary<string, object>
+                    {
+                        ["scenario"] = "combinedStress",
+                        ["lossProbability"] = summary.CombinedLossProbability,
+                        ["medianTotalReturn"] = summary.CombinedMedianReturn,
+                        ["p95Drawdown"] = summary.CombinedP95Drawdown,
+                    },
+                },
+            };
+
+            File.WriteAllText(_monteCarloFilePath,
+                JsonConvert.SerializeObject(payload, Formatting.Indented),
+                System.Text.Encoding.UTF8);
         }
 
         private void LoadFactorData()
@@ -444,6 +613,13 @@ namespace QuantConnect.Algorithm.CSharp
         {
             var p = GetParameter(name);
             return int.TryParse(p, out var v) ? v : def;
+        }
+
+        private bool GetBoolParameter(string name, bool def)
+        {
+            var p = GetParameter(name);
+            if (string.IsNullOrEmpty(p)) return def;
+            return p.Equals("true", StringComparison.OrdinalIgnoreCase) || p == "1";
         }
 
         private DateTime GetDateParameter(string name, DateTime def)

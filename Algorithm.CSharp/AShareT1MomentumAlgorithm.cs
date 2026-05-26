@@ -132,6 +132,11 @@ namespace QuantConnect.Algorithm.CSharp
             return holdingDays >= 1 && momentum <= exitThreshold;
         }
 
+        public static decimal SelectAdvisoryPrice(IReadOnlyList<decimal> visibleCloses, decimal currentSecurityPrice)
+        {
+            return visibleCloses == null || visibleCloses.Count == 0 ? currentSecurityPrice : visibleCloses[visibleCloses.Count - 1];
+        }
+
         public static bool ShouldEvaluateLiveCatchUp(bool isLiveMode, bool hasData, bool exchangeOpen, DateTime currentTime, DateTime lastEvaluationDate, TimeSpan? cutoff = null)
         {
             return AShareT1MeanReversionAlgorithm.ShouldEvaluateLiveCatchUp(isLiveMode, hasData, exchangeOpen, currentTime, lastEvaluationDate, cutoff);
@@ -184,7 +189,7 @@ namespace QuantConnect.Algorithm.CSharp
                 }
 
                 momentumScores[symbol] = ComputeMomentum(closes);
-                prices[symbol] = Securities[symbol].Price > 0 ? Securities[symbol].Price : closes.Last();
+                prices[symbol] = SelectAdvisoryPrice(closes, Securities[symbol].Price);
             }
 
             foreach (var position in _positions.Values)
