@@ -95,7 +95,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
             Path(config["data"]["field-mapping-path"]).write_text(json.dumps({"datasets": {}}), encoding="utf-8")
             calls = []
 
-            def fake_pipeline(config, keywords, categories, search_client, crawl_client, glm_screen_client, run_date, max_queries, max_results_per_query, tick_offset=0):
+            def fake_pipeline(config, keywords, categories, search_client, crawl_client, llm_screen_client, run_date, max_queries, max_results_per_query, tick_offset=0):
                 calls.append(
                     {
                         "keywords": keywords,
@@ -103,7 +103,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
                         "run_date": run_date,
                         "max_queries": max_queries,
                         "max_results_per_query": max_results_per_query,
-                        "screen": glm_screen_client is not None,
+                        "screen": llm_screen_client is not None,
                         "tick_offset": tick_offset,
                     }
                 )
@@ -126,7 +126,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
                     state=module.SchedulerState(state_path),
                     search_client=lambda query: [],
                     crawl_client=lambda result: {},
-                    glm_screen_client=lambda payload: {},
+                    llm_screen_client=lambda payload: {},
                     now=datetime(2026, 5, 10, 9, 30),
                     run_date="20260510",
                 )
@@ -173,7 +173,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
                     state=module.SchedulerState(state_path),
                     search_client=lambda query: [],
                     crawl_client=lambda result: {},
-                    glm_screen_client=lambda payload: {},
+                    llm_screen_client=lambda payload: {},
                     now=datetime(2026, 5, 10, 9, 30),
                     run_date="20260510",
                 )
@@ -223,7 +223,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
                     state=state,
                     search_client=lambda query: [],
                     crawl_client=lambda result: {},
-                    glm_screen_client=lambda payload: {},
+                    llm_screen_client=lambda payload: {},
                     now=datetime(2026, 5, 10, 9, 30),
                     run_date="20260510",
                     logger=module.SchedulerLogger(),
@@ -234,7 +234,7 @@ class SoloQuantCrawlSchedulerTests(unittest.TestCase):
                     state=state,
                     search_client=lambda query: [],
                     crawl_client=lambda result: {},
-                    glm_screen_client=lambda payload: {},
+                    llm_screen_client=lambda payload: {},
                     now=datetime(2026, 5, 10, 9, 45),
                     run_date="20260510",
                     logger=module.SchedulerLogger(),

@@ -22,24 +22,25 @@ def load_module():
 
 
 class FakeServices:
-    def __init__(self, fail_compile=False, market_open=False, fail_crawl=False, fail_prepare=False):
+    def __init__(self, fail_compile=False, market_open=False):
         self.fail_compile = fail_compile
         self.market_open = market_open
-        self.fail_crawl = fail_crawl
-        self.fail_prepare = fail_prepare
         self.calls = []
+
+    def ingest_local_strategies(self, config, run_date=None):
+        self.calls.append("ingest_local_strategies")
+        return {"status": "ok", "ingested": 0, "skipped": 0, "errors": 0}
 
     def crawl_research(self, config, run_date=None):
         self.calls.append("crawl_research")
-        if self.fail_crawl:
-            return {"status": "error", "error": "crawl timeout"}
-        return {"status": "ok", "run_date": run_date, "written_count": 1}
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": 10001}
 
     def prepare_reproduction(self, config, run_date=None):
         self.calls.append("prepare_reproduction")
-        if self.fail_prepare:
-            return {"status": "error", "error": "glm timeout"}
-        return {"status": "ok", "written_count": 1}
+        return {"status": "ok", "mode": "background", "launched": [
+            {"stage_key": "prepare_reproduction", "action": "launched", "pid": 10002},
+            {"stage_key": "analyze_finance_intelligence", "action": "launched", "pid": 10003},
+        ]}
 
     def prepare_iv_data(self, config, run_date=None):
         self.calls.append("prepare_iv_data")
@@ -53,21 +54,25 @@ class FakeServices:
         self.calls.append("build_event_signals")
         return {"status": "ok"}
 
-    def generate_strategy_code(self, config, run_date=None):
-        self.calls.append("generate_strategy_code")
-        return {"status": "ok", "reproduced_count": 1}
+    def reproduce_one(self, config, run_date=None):
+        self.calls.append("reproduce_one")
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": 10004}
 
     def compile_strategies(self, config):
         self.calls.append("compile_strategies")
         return {"status": "error" if self.fail_compile else "ok", "returncode": 1 if self.fail_compile else 0}
 
+    def smoke_test_strategies(self, config):
+        self.calls.append("smoke_test_strategies")
+        return {"status": "ok", "passed_count": 0, "failed_count": 0, "skipped_count": 0}
+
     def materialize_variants(self, config, run_date=None):
         self.calls.append("materialize_variants")
         return {"status": "ok", "materialized_count": 1}
 
-    def optimize_backtests(self, config):
+    def optimize_backtests(self, config, run_date=None):
         self.calls.append("optimize_backtests")
-        return {"status": "ok", "optimized_count": 1}
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": 10005}
 
     def prepare_live_market_data(self, config, now=None):
         self.calls.append("prepare_live_market_data")
@@ -101,13 +106,13 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
         self.assertEqual(
             services.calls,
             [
+                "ingest_local_strategies",
                 "crawl_research",
                 "prepare_reproduction",
                 "prepare_iv_data",
                 "build_event_graph",
                 "build_event_signals",
-                "generate_strategy_code",
-                "compile_strategies",
+                "reproduce_one",
                 "materialize_variants",
                 "optimize_backtests",
                 "prepare_live_market_data",
@@ -117,27 +122,39 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
             ],
         )
 
-    def test_pipeline_tick_stops_before_backtest_when_compile_fails(self):
+    def test_pipeline_tick_degraded_stage_continues(self):
+        """A non-LLM degradable stage failure should degrade the pipeline, not stop it."""
         module = load_module()
-        services = FakeServices(fail_compile=True)
 
+        class FailIvDataServices(FakeServices):
+            def prepare_iv_data(self, config, run_date=None):
+                self.calls.append("prepare_iv_data")
+                return {"status": "error", "error": "iv data failed"}
+
+        services = FailIvDataServices()
         report = module.run_pipeline_tick({"workflow-root": "/tmp/soloquant"}, services=services)
 
-        self.assertEqual(report["status"], "error")
-        self.assertEqual(report["failed_stage"], "compile_strategies")
-        self.assertNotIn("optimize_backtests", services.calls)
-        self.assertNotIn("run_live_paper", services.calls)
+        self.assertIn("prepare_iv_data", services.calls)
+        self.assertIn("prepare_iv_data", report.get("degraded_stages", []))
+        self.assertIn("reproduce_one", services.calls)
+        self.assertNotEqual(report["status"], "error")
 
     def test_pipeline_continues_with_existing_artifacts_when_crawl_is_degraded(self):
+        """Background LLM stages always return ok; test that a non-LLM degradable stage
+        (e.g. build_event_graph) doesn't stop the pipeline."""
         module = load_module()
-        services = FakeServices(fail_crawl=True, fail_prepare=True)
 
+        class FailEventGraphServices(FakeServices):
+            def build_event_graph(self, config, run_date=None):
+                self.calls.append("build_event_graph")
+                return {"status": "error", "error": "graph build failed"}
+
+        services = FailEventGraphServices()
         report = module.run_pipeline_tick({"workflow-root": "/tmp/soloquant"}, services=services)
 
-        self.assertEqual(report["status"], "degraded")
-        self.assertEqual(report["degraded_stages"], ["crawl_research", "prepare_reproduction"])
         self.assertIn("build_event_graph", services.calls)
-        self.assertIn("compile_strategies", services.calls)
+        self.assertIn("build_event_graph", report.get("degraded_stages", []))
+        self.assertIn("reproduce_one", services.calls)
         self.assertIn("run_live_paper", services.calls)
         self.assertIn("export_influx", services.calls)
 
@@ -202,31 +219,44 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
 
     def test_default_services_build_expected_real_commands(self):
         module = load_module()
-        commands = []
-
-        def fake_runner(command, cwd, timeout_seconds=None):
-            commands.append({"command": list(command), "cwd": str(cwd), "timeout_seconds": timeout_seconds})
-            return 0
-
-        services = module.DefaultPipelineServices(command_runner=fake_runner)
-        crawl_report = services.crawl_research(
-            {
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {
+                "workflow-root": str(root),
                 "pipeline": {
                     "crawl-max-queries-per-task": 2,
                     "crawl-max-results-per-query": 1,
-                }
+                },
             }
-        )
-        compile_report = services.compile_strategies({"lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
-        live_report = services.run_live_paper({"registry-file": "/tmp/registry.json"})
 
-        self.assertEqual(crawl_report["returncode"], 0)
-        self.assertEqual(compile_report["returncode"], 0)
-        self.assertEqual(live_report["started_count"], 0)
-        self.assertIn("--max-queries-per-task", commands[0]["command"])
-        self.assertIn("2", commands[0]["command"])
-        self.assertIn("--max-results-per-query", commands[0]["command"])
-        self.assertEqual(commands[1]["command"][:3], ["/usr/local/dotnet/dotnet", "build", "Algorithm.CSharp/QuantConnect.Algorithm.CSharp.csproj"])
+            class FakeProcess:
+                def __init__(self, pid):
+                    self.pid = pid
+
+            launched_processes = []
+
+            def fake_popen(command, cwd, stdout, stderr, start_new_session=True, env=None):
+                launched_processes.append({"command": list(command), "cwd": cwd})
+                return FakeProcess(9000 + len(launched_processes))
+
+            services = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: False,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                crawl_report = services.crawl_research(config)
+
+            self.assertEqual(crawl_report["status"], "ok")
+            self.assertEqual(crawl_report["mode"], "background")
+            self.assertTrue(len(launched_processes) > 0)
+            # The command is [python, soloquant_crawl_scheduler.py, ...]
+            cmd_parts = " ".join(launched_processes[0]["command"])
+            self.assertIn("soloquant_crawl_scheduler", cmd_parts)
+
+            compile_report = services.compile_strategies({"strategy-policy": {"languages": ["CSharp"]}, "lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
+            live_report = services.run_live_paper({"registry-file": "/tmp/registry.json"})
+
+            self.assertEqual(live_report["started_count"], 0)
 
     def test_start_registered_live_paper_strategies_starts_all_non_retired_without_duplicates(self):
         module = load_module()
@@ -302,23 +332,34 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
     # ── 变更三：pipeline 解耦 ──────────────────────────────────────────────
 
     def test_prepare_reproduction_does_not_call_build_finance_event_graph(self):
-        """prepare_reproduction stage should only call --prepare-reproduction and
-        --analyze-finance-intelligence; --build-finance-event-graph must be its own stage."""
+        """prepare_reproduction stage launches --prepare-reproduction and
+        --analyze-finance-intelligence as background processes."""
         module = load_module()
-        commands = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "pipeline": {}, "glm": {}, "lean": {}, "data": {}}
 
-        def fake_runner(command, cwd, timeout_seconds=None):
-            commands.append(list(command))
-            return 0
+            class FakeProcess:
+                def __init__(self, pid):
+                    self.pid = pid
 
-        services = module.DefaultPipelineServices(command_runner=fake_runner)
-        services.prepare_reproduction({"pipeline": {}, "glm": {}, "lean": {}, "data": {}})
+            launched_commands = []
 
-        # Collect all flag-style args (starting with --) from all commands
-        all_flags = [arg for cmd in commands for arg in cmd if arg.startswith("--")]
-        self.assertIn("--prepare-reproduction", all_flags)
-        self.assertIn("--analyze-finance-intelligence", all_flags)
-        self.assertNotIn("--build-finance-event-graph", all_flags)
+            def fake_popen(command, cwd, stdout, stderr, start_new_session=True, env=None):
+                launched_commands.append(list(command))
+                return FakeProcess(8000 + len(launched_commands))
+
+            services = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: False,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                report = services.prepare_reproduction(config)
+
+            all_flags = [arg for cmd in launched_commands for arg in cmd if arg.startswith("--")]
+            self.assertIn("--prepare-reproduction", all_flags)
+            self.assertIn("--analyze-finance-intelligence", all_flags)
+            self.assertNotIn("--build-finance-event-graph", all_flags)
 
     def test_pipeline_stages_include_build_event_graph(self):
         module = load_module()
@@ -342,7 +383,7 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
 
         self.assertIn("build_event_graph", services.calls)
         self.assertIn("build_event_graph", report.get("degraded_stages", []))
-        self.assertIn("compile_strategies", services.calls)
+        self.assertIn("reproduce_one", services.calls)
         self.assertNotEqual(report["status"], "error")
 
 
@@ -355,10 +396,15 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
             return 0
 
         services = module.DefaultPipelineServices(command_runner=fake_runner)
-        report = services.compile_strategies({"strategy-policy": {"language": "Python"}, "lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Algorithm.Python" / "SoloQuantGenerated").mkdir(parents=True)
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=root):
+                report = services.compile_strategies({"strategy-policy": {"language": "Python"}, "lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
 
         self.assertEqual(report["status"], "ok")
-        self.assertEqual(report["language"], "Python")
+        py_result = [l for l in report["languages"] if l["language"] == "Python"][0]
+        self.assertEqual(py_result["language"], "Python")
         self.assertEqual(len(commands), 0)
 
     def test_default_services_compile_strategies_python_detects_syntax_errors(self):
@@ -377,21 +423,42 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
                 report = services.compile_strategies({"strategy-policy": {"language": "Python"}, "lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
 
             self.assertEqual(report["status"], "error")
-            self.assertEqual(report["language"], "Python")
-            self.assertTrue(len(report["syntax_errors"]) > 0)
+            # Multi-language format: check the Python entry in languages list
+            py_result = [l for l in report["languages"] if l["language"] == "Python"][0]
+            self.assertEqual(py_result["language"], "Python")
+            self.assertTrue(len(py_result["syntax_errors"]) > 0)
 
-    def test_default_services_generate_strategy_code_passes_language(self):
+    def test_default_services_reproduce_one_passes_max_items_one(self):
         module = load_module()
-        commands = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "strategy-policy": {"language": "Python"}, "pipeline": {}}
 
-        def fake_runner(command, cwd, timeout_seconds=None):
-            commands.append({"command": list(command), "cwd": str(cwd), "timeout_seconds": timeout_seconds})
-            return 0
+            class FakeProcess:
+                def __init__(self, pid):
+                    self.pid = pid
 
-        services = module.DefaultPipelineServices(command_runner=fake_runner)
-        services.generate_strategy_code({"strategy-policy": {"language": "Python"}, "pipeline": {}})
+            launched_commands = []
 
-        self.assertTrue(any("--language" in cmd["command"] and "Python" in cmd["command"] for cmd in commands))
+            def fake_popen(command, cwd, stdout, stderr, start_new_session=True, env=None):
+                launched_commands.append(list(command))
+                return FakeProcess(7000 + len(launched_commands))
+
+            services = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: False,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                report = services.reproduce_one(config)
+
+            self.assertEqual(report["status"], "ok")
+            self.assertEqual(report["mode"], "background")
+            all_args = [arg for cmd in launched_commands for arg in cmd]
+            self.assertIn("--generate-strategy-implementations", all_args)
+            self.assertIn("--max-items", all_args)
+            self.assertIn("--smoke-test-strategies", all_args)
+            idx = all_args.index("--max-items")
+            self.assertEqual(all_args[idx + 1], "1")
 
     def test_default_services_materialize_variants_passes_language(self):
         module = load_module()
@@ -406,6 +473,388 @@ class SoloQuantPipelineRunnerTests(unittest.TestCase):
 
         self.assertTrue(any("--language" in cmd["command"] and "Python" in cmd["command"] for cmd in commands))
 
+    def test_compile_strategies_renames_broken_cs_files_not_deletes(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            gen_root = root / "Algorithm.CSharp" / "SoloQuantGenerated"
+            strategy_dir = gen_root / "bad-strat"
+            strategy_dir.mkdir(parents=True)
+            (strategy_dir / "SoloQuantGeneratedBadAlgorithm.cs").write_text("bad code", encoding="utf-8")
 
-if __name__ == "__main__":
-    unittest.main()
+            def fake_runner(command, cwd, timeout_seconds=None, env=None):
+                return 1
+
+            services = module.DefaultPipelineServices(command_runner=fake_runner)
+
+            with mock.patch.object(services, "_last_build_output", return_value=f"{strategy_dir / 'SoloQuantGeneratedBadAlgorithm.cs'}(1,1): error CS0103: The name 'bad' does not exist"):
+                with mock.patch.object(module.orchestrator, "repo_root", return_value=root):
+                    with mock.patch.object(module.orchestrator, "parse_broken_cs_files", return_value=[strategy_dir / "SoloQuantGeneratedBadAlgorithm.cs"]):
+                        report = services.compile_strategies({"strategy-policy": {"languages": ["CSharp"]}, "lean": {"dotnet-binary": "/usr/local/dotnet/dotnet"}})
+
+            self.assertEqual(report["status"], "error")
+            # New multi-language format: languages list
+            csharp_result = [l for l in report["languages"] if l["language"] == "CSharp"][0]
+            self.assertIn(str(strategy_dir / "SoloQuantGeneratedBadAlgorithm.cs"), csharp_result["broken_files"])
+            # .cs should be renamed to .cs.broken, not deleted
+            self.assertFalse((strategy_dir / "SoloQuantGeneratedBadAlgorithm.cs").exists(), ".cs should be renamed")
+            self.assertTrue((strategy_dir / "SoloQuantGeneratedBadAlgorithm.cs.broken").exists(), ".cs.broken should exist")
+
+    def test_ingest_local_strategies_skipped_when_interval_not_elapsed(self):
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.payload["stage_timestamps"] = {
+                "ingest_local_strategies": datetime.now(timezone.utc).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {"local-ingest-interval-seconds": 3600}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+            )
+
+        self.assertNotIn("ingest_local_strategies", services.calls)
+        self.assertIn("crawl_research", services.calls)
+
+    def test_ingest_local_strategies_runs_when_interval_elapsed(self):
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.payload["stage_timestamps"] = {
+                "ingest_local_strategies": (datetime.now(timezone.utc) - timedelta(seconds=3700)).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {"local-ingest-interval-seconds": 3600}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+            )
+
+        self.assertIn("ingest_local_strategies", services.calls)
+
+    def test_crawl_research_skipped_when_interval_not_elapsed(self):
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.payload["stage_timestamps"] = {
+                "crawl_research": datetime.now(timezone.utc).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {"crawl-interval-seconds": 28800}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+            )
+
+        self.assertIn("ingest_local_strategies", services.calls)
+        self.assertNotIn("crawl_research", services.calls)
+        self.assertIn("prepare_reproduction", services.calls)
+
+    def test_crawl_research_runs_when_interval_elapsed(self):
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.payload["stage_timestamps"] = {
+                "crawl_research": (datetime.now(timezone.utc) - timedelta(seconds=28900)).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {"crawl-interval-seconds": 28800}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+            )
+
+        self.assertIn("crawl_research", services.calls)
+
+    def test_background_llm_stage_skips_when_process_running(self):
+        """If a background LLM process is still running, the stage should skip."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "pipeline": {}}
+
+            class FakeProcess:
+                def __init__(self, pid):
+                    self.pid = pid
+
+            launched = []
+
+            def fake_popen(command, cwd, stdout, stderr, start_new_session=True, env=None):
+                launched.append(list(command))
+                return FakeProcess(9100)
+
+            # First call: process not running → launch
+            services = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: False,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                report1 = services.crawl_research(config)
+            self.assertEqual(report1["mode"], "background")
+            self.assertEqual(report1["action"], "launched")
+
+            # Write PID file to simulate a running process
+            pid_dir = root / "llm-background"
+            pid_dir.mkdir(parents=True, exist_ok=True)
+            (pid_dir / "crawl_research.pid.json").write_text(
+                json.dumps({"pid": 9100, "stage": "crawl_research"}), encoding="utf-8"
+            )
+
+            # Second call: process running → skip
+            services2 = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: True,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                report2 = services2.crawl_research(config)
+            self.assertEqual(report2["mode"], "background")
+            self.assertEqual(report2["action"], "already_running")
+            # Only 1 launch happened
+            self.assertEqual(len(launched), 1)
+
+    def test_background_pid_cleanup_when_process_finished(self):
+        """PID file is cleaned up when the background process has finished."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "pipeline": {}}
+
+            pid_dir = root / "llm-background"
+            pid_dir.mkdir(parents=True, exist_ok=True)
+            pid_file = pid_dir / "crawl_research.pid.json"
+            pid_file.write_text(
+                json.dumps({"pid": 9200, "stage": "crawl_research"}), encoding="utf-8"
+            )
+
+            # Process is not alive → cleanup should remove the file
+            module._cleanup_finished_background("crawl_research", config)
+            self.assertFalse(pid_file.exists())
+
+    def test_background_prepare_reproduction_launches_two_processes(self):
+        """prepare_reproduction launches two background processes:
+        --prepare-reproduction and --analyze-finance-intelligence."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "pipeline": {}}
+
+            class FakeProcess:
+                def __init__(self, pid):
+                    self.pid = pid
+
+            launched = []
+
+            def fake_popen(command, cwd, stdout, stderr, start_new_session=True, env=None):
+                launched.append(list(command))
+                return FakeProcess(9300 + len(launched))
+
+            services = module.DefaultPipelineServices(
+                live_popen=fake_popen,
+                live_process_alive=lambda pid: False,
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                report = services.prepare_reproduction(config)
+
+            self.assertEqual(report["status"], "ok")
+            self.assertEqual(len(launched), 2)
+            all_args = [arg for cmd in launched for arg in cmd]
+            self.assertIn("--prepare-reproduction", all_args)
+            self.assertIn("--analyze-finance-intelligence", all_args)
+
+    # ── Debug mode vs Work mode ──────────────────────────────────────────────
+
+    def test_debug_mode_runs_all_stages_without_interval_skips(self):
+        """In debug mode, interval-based stage skips are bypassed — all stages run."""
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            # Set recent timestamps that would normally skip stages
+            state.payload["stage_timestamps"] = {
+                "ingest_local_strategies": datetime.now(timezone.utc).isoformat(),
+                "crawl_research": datetime.now(timezone.utc).isoformat(),
+                "reproduce_one": datetime.now(timezone.utc).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {
+                    "local-ingest-interval-seconds": 3600,
+                    "crawl-interval-seconds": 28800,
+                    "reproduce-interval-seconds": 1800,
+                }},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+                mode="debug",
+            )
+
+        self.assertEqual(report["status"], "ok")
+        self.assertIn("ingest_local_strategies", services.calls)
+        self.assertIn("crawl_research", services.calls)
+        self.assertIn("reproduce_one", services.calls)
+
+    def test_debug_mode_does_not_record_stage_timestamps(self):
+        """In debug mode, stage timestamps are not recorded in state."""
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+                mode="debug",
+            )
+
+        # Reload state from disk
+        state2 = module.PipelineState(state_path)
+        self.assertEqual(state2.payload.get("stage_timestamps"), None)
+
+    def test_work_mode_skips_stages_when_interval_not_elapsed(self):
+        """In work mode, stages with recent timestamps are skipped."""
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.payload["stage_timestamps"] = {
+                "ingest_local_strategies": datetime.now(timezone.utc).isoformat(),
+                "crawl_research": datetime.now(timezone.utc).isoformat(),
+                "reproduce_one": datetime.now(timezone.utc).isoformat(),
+            }
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {
+                    "local-ingest-interval-seconds": 3600,
+                    "crawl-interval-seconds": 28800,
+                    "reproduce-interval-seconds": 1800,
+                }},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+                mode="work",
+            )
+
+        self.assertNotIn("ingest_local_strategies", services.calls)
+        self.assertNotIn("crawl_research", services.calls)
+        self.assertNotIn("reproduce_one", services.calls)
+
+    def test_work_mode_records_stage_timestamps(self):
+        """In work mode, stage timestamps are recorded in state."""
+        module = load_module()
+        services = FakeServices()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            state = module.PipelineState(state_path)
+            state.save()
+
+            report = module.run_pipeline_tick(
+                {"workflow-root": "/tmp/soloquant", "pipeline": {}},
+                services=services,
+                now=datetime.now(timezone.utc),
+                state=state,
+                mode="work",
+            )
+
+            # state is mutated in-place, check directly
+            timestamps = state.payload.get("stage_timestamps") or {}
+            self.assertIn("ingest_local_strategies", timestamps)
+            self.assertIn("crawl_research", timestamps)
+
+    def test_debug_mode_uses_synchronous_crawl(self):
+        """In debug mode, crawl_research calls _crawl_research_sync instead of Popen."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = {"workflow-root": str(root), "pipeline": {"crawl-max-queries-per-task": 1, "crawl-max-results-per-query": 1}}
+
+            ran_commands = []
+
+            def fake_runner(command, cwd, timeout_seconds=None, env=None):
+                ran_commands.append(list(command))
+                return 0
+
+            services = module.DefaultPipelineServices(
+                command_runner=fake_runner,
+                live_popen=lambda *a, **kw: None,
+                live_process_alive=lambda pid: False,
+                mode="debug",
+            )
+            with mock.patch.object(module.orchestrator, "repo_root", return_value=Path(temp_dir)):
+                with mock.patch("subprocess.run") as mock_run:
+                    mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                    report = services.crawl_research(config)
+
+            self.assertEqual(report["status"], "ok")
+            self.assertEqual(report["mode"], "debug")
+            mock_run.assert_called_once()
+
+    def test_debug_mode_uses_synchronous_reproduce_one(self):
+        """In debug mode, reproduce_one calls _reproduce_one_sync instead of Popen."""
+        module = load_module()
+        commands = []
+
+        def fake_runner(command, cwd, timeout_seconds=None, env=None):
+            commands.append(list(command))
+            return 0
+
+        services = module.DefaultPipelineServices(
+            command_runner=fake_runner,
+            mode="debug",
+        )
+        config = {"workflow-root": "/tmp/soloquant", "pipeline": {}}
+        with mock.patch.object(module.orchestrator, "repo_root", return_value=Path("/tmp")):
+            report = services.reproduce_one(config)
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["mode"], "debug")
+        all_args = [arg for cmd in commands for arg in cmd]
+        self.assertIn("--generate-strategy-implementations", all_args)
+        self.assertIn("--smoke-test-strategies", all_args)
+
+    def test_debug_mode_uses_synchronous_prepare_reproduction(self):
+        """In debug mode, prepare_reproduction calls _prepare_reproduction_sync instead of Popen."""
+        module = load_module()
+        commands = []
+
+        def fake_runner(command, cwd, timeout_seconds=None, env=None):
+            commands.append(list(command))
+            return 0
+
+        services = module.DefaultPipelineServices(
+            command_runner=fake_runner,
+            mode="debug",
+        )
+        config = {"workflow-root": "/tmp/soloquant", "pipeline": {}}
+        with mock.patch.object(module.orchestrator, "repo_root", return_value=Path("/tmp")):
+            report = services.prepare_reproduction(config)
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["mode"], "debug")
+        all_args = [arg for cmd in commands for arg in cmd]
+        self.assertIn("--prepare-reproduction", all_args)
+        self.assertIn("--analyze-finance-intelligence", all_args)

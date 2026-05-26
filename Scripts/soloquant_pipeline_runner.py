@@ -21,13 +21,13 @@ import soloquant_orchestrator as orchestrator
 
 
 PIPELINE_STAGES = (
+    "ingest_local_strategies",
     "crawl_research",
     "prepare_reproduction",
     "prepare_iv_data",
     "build_event_graph",
     "build_event_signals",
-    "generate_strategy_code",
-    "compile_strategies",
+    "reproduce_one",
     "materialize_variants",
     "optimize_backtests",
     "prepare_live_market_data",
@@ -64,6 +64,87 @@ def is_pipeline_due(now: datetime, last_finished_at: str | None, interval_second
     return (now.astimezone(timezone.utc) - last_time).total_seconds() >= max(1, int(interval_seconds))
 
 
+LLM_BACKGROUND_STAGES = {"crawl_research", "prepare_reproduction", "reproduce_one", "optimize_backtests"}
+
+
+def process_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    return True
+
+
+def _background_pid_dir(config: dict) -> Path:
+    return Path(config.get("workflow-root", "Results/soloquant")) / "llm-background"
+
+
+def _background_pid_path(stage_name: str, config: dict) -> Path:
+    return _background_pid_dir(config) / f"{stage_name}.pid.json"
+
+
+def _load_background_pid(stage_name: str, config: dict) -> dict:
+    path = _background_pid_path(stage_name, config)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _is_background_process_running(
+    stage_name: str,
+    config: dict,
+    is_alive: Callable[[int], bool] = process_alive,
+) -> bool:
+    info = _load_background_pid(stage_name, config)
+    pid = orchestrator.safe_int(info.get("pid"), 0)
+    return pid > 0 and is_alive(pid)
+
+
+def _cleanup_finished_background(stage_name: str, config: dict) -> None:
+    info = _load_background_pid(stage_name, config)
+    pid = orchestrator.safe_int(info.get("pid"), 0)
+    if pid > 0 and not process_alive(pid):
+        path = _background_pid_path(stage_name, config)
+        if path.exists():
+            path.unlink()
+
+
+def _launch_background_command(
+    command: list[str],
+    stage_name: str,
+    config: dict,
+    run_date: str | None = None,
+    popen=subprocess.Popen,
+) -> dict:
+    pid_dir = _background_pid_dir(config)
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = pid_dir / f"{stage_name}.out"
+    stderr_path = pid_dir / f"{stage_name}.err"
+    env = _build_subprocess_env(config)
+    stdout_handle = stdout_path.open("ab")
+    stderr_handle = stderr_path.open("ab")
+    try:
+        proc = popen(command, cwd=str(orchestrator.repo_root()), stdout=stdout_handle, stderr=stderr_handle, start_new_session=True, env=env)
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
+    info = {
+        "stage": stage_name,
+        "pid": int(proc.pid),
+        "command": command,
+        "cwd": str(orchestrator.repo_root()),
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    pid_path = _background_pid_path(stage_name, config)
+    pid_path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    return info
+
+
 class PipelineState:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -85,6 +166,14 @@ class PipelineState:
     def last_finished_at(self) -> str | None:
         value = self.payload.get("last_finished_at_utc")
         return str(value) if value else None
+
+    def stage_last_run_at(self, stage_name: str) -> str | None:
+        value = (self.payload.get("stage_timestamps") or {}).get(stage_name)
+        return str(value) if value else None
+
+    def record_stage_run(self, stage_name: str, timestamp: str) -> None:
+        self.payload.setdefault("stage_timestamps", {})[stage_name] = timestamp
+        self.save()
 
     def record_run(self, report: dict) -> None:
         runs = self.payload.setdefault("runs", [])
@@ -336,14 +425,6 @@ def update_strategy_lifecycle(
     }
 
 
-def process_alive(pid: int) -> bool:
-    try:
-        os.kill(int(pid), 0)
-    except OSError:
-        return False
-    return True
-
-
 def load_pid_file(path: str | Path) -> dict:
     pid_path = Path(path)
     if not pid_path.exists():
@@ -475,13 +556,32 @@ class DefaultPipelineServices:
         timeout_seconds: int | None = None,
         live_popen=subprocess.Popen,
         live_process_alive: Callable[[int], bool] = process_alive,
+        mode: str = "work",
     ):
         self.command_runner = command_runner
         self.timeout_seconds = 900 if timeout_seconds is None else timeout_seconds
         self.live_popen = live_popen
         self.live_process_alive = live_process_alive
+        self._state: PipelineState | None = None
+        self.mode = mode
+
+    def set_state(self, state: PipelineState) -> None:
+        self._state = state
+
+    def ingest_local_strategies(self, config: dict, run_date: str | None = None) -> dict:
+        local_dir = Path(config["workflow-root"]) / "local-strategies"
+        return orchestrator.ingest_local_strategies(
+            local_dir=local_dir,
+            artifact_root=config["artifact-root"],
+            run_date=run_date,
+        )
 
     def crawl_research(self, config: dict, run_date: str | None = None) -> dict:
+        if self.mode == "debug":
+            return self._crawl_research_sync(config, run_date=run_date)
+        if _is_background_process_running("crawl_research", config, is_alive=self.live_process_alive):
+            return {"status": "ok", "mode": "background", "action": "already_running"}
+        _cleanup_finished_background("crawl_research", config)
         pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
         command = [
             sys.executable,
@@ -501,32 +601,34 @@ class DefaultPipelineServices:
         ]
         if run_date:
             command.extend(["--run-date", str(run_date)])
-        timeout_seconds = max(1, orchestrator.safe_int(pipeline_config.get("crawl-timeout-seconds"), min(60, self.timeout_seconds or 60)))
-        env = _build_subprocess_env(config)
         try:
-            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), timeout_seconds, env=env))
-        except TypeError:
-            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), timeout_seconds))
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "status": "error",
-                "returncode": 124,
-                "command": command,
-                "error": f"crawl timed out after {exc.timeout} seconds",
-            }
-        return {"status": "ok" if returncode == 0 else "error", "returncode": returncode, "command": command}
+            info = _launch_background_command(command, "crawl_research", config, run_date=run_date, popen=self.live_popen)
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": info["pid"]}
 
     def prepare_reproduction(self, config: dict, run_date: str | None = None) -> dict:
-        pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
-        base_timeout = max(1, orchestrator.safe_int(pipeline_config.get("llm-stage-timeout-seconds"), self.timeout_seconds or 480))
-        reports = []
-        for flag, extra_timeout in [("--prepare-reproduction", 180), ("--analyze-finance-intelligence", 0)]:
-            args = [flag, "--max-items", str(max(1, orchestrator.safe_int(pipeline_config.get("llm-max-items-per-tick"), 1)))]
+        if self.mode == "debug":
+            return self._prepare_reproduction_sync(config, run_date=run_date)
+        launched = []
+        for stage_key, flag in [("prepare_reproduction", "--prepare-reproduction"), ("analyze_finance_intelligence", "--analyze-finance-intelligence")]:
+            if _is_background_process_running(stage_key, config, is_alive=self.live_process_alive):
+                launched.append({"stage_key": stage_key, "action": "already_running"})
+                continue
+            _cleanup_finished_background(stage_key, config)
+            args = [flag, "--max-items", "1"]
             if run_date:
                 args.extend(["--run-date", str(run_date)])
-            reports.append(run_orchestrator_command(args, config, self.command_runner, base_timeout + extra_timeout))
-        status = "ok" if all(report.get("status") == "ok" for report in reports) else "error"
-        return {"status": status, "reports": reports}
+            python = sys.executable
+            script = orchestrator.repo_root() / "Scripts" / "soloquant_orchestrator.py"
+            config_path = orchestrator.repo_root() / "Launcher" / "config" / "config-soloquant.json"
+            command = [python, str(script), "--config", str(config_path), *[str(a) for a in args]]
+            try:
+                info = _launch_background_command(command, stage_key, config, run_date=run_date, popen=self.live_popen)
+                launched.append({"stage_key": stage_key, "action": "launched", "pid": info["pid"]})
+            except Exception as exc:
+                launched.append({"stage_key": stage_key, "action": "error", "error": str(exc)})
+        return {"status": "ok", "mode": "background", "launched": launched}
 
     def prepare_iv_data(self, config: dict, run_date: str | None = None) -> dict:
         data_config = config.get("data") if isinstance(config.get("data"), dict) else {}
@@ -559,62 +661,91 @@ class DefaultPipelineServices:
             args.extend(["--run-date", str(run_date)])
         return run_orchestrator_command(args, config, self.command_runner, self.timeout_seconds)
 
-    def generate_strategy_code(self, config: dict, run_date: str | None = None) -> dict:
-        pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
-        lang = str((config.get("strategy-policy") or {}).get("language") or "CSharp")
-        args = [
-            "--generate-strategy-implementations",
-            "--language", lang,
-            "--max-items",
-            str(max(1, orchestrator.safe_int(pipeline_config.get("llm-max-items-per-tick"), 1))),
+    def reproduce_one(self, config: dict, run_date: str | None = None) -> dict:
+        """Launch one full reproduction cycle:
+        generate code → compile → smoke test. In work mode runs as
+        background Popen; in debug mode runs synchronously."""
+        if self.mode == "debug":
+            return self._reproduce_one_sync(config, run_date=run_date)
+        if _is_background_process_running("reproduce_one", config, is_alive=self.live_process_alive):
+            return {"status": "ok", "mode": "background", "action": "already_running"}
+        _cleanup_finished_background("reproduce_one", config)
+        python = sys.executable
+        script = orchestrator.repo_root() / "Scripts" / "soloquant_orchestrator.py"
+        config_path = orchestrator.repo_root() / "Launcher" / "config" / "config-soloquant.json"
+        command = [
+            python, str(script), "--config", str(config_path),
+            "--generate-strategy-implementations", "--max-items", "1",
+            "--smoke-test-strategies",
         ]
         if run_date:
-            args.extend(["--run-date", str(run_date)])
-        timeout_seconds = max(1, orchestrator.safe_int(pipeline_config.get("llm-stage-timeout-seconds"), min(120, self.timeout_seconds or 120)))
-        return run_orchestrator_command(args, config, self.command_runner, timeout_seconds)
+            command.extend(["--run-date", str(run_date)])
+        try:
+            info = _launch_background_command(command, "reproduce_one", config, run_date=run_date, popen=self.live_popen)
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": info["pid"]}
 
     def compile_strategies(self, config: dict) -> dict:
-        lang = str((config.get("strategy-policy") or {}).get("language") or "CSharp")
-        is_python = lang.strip().lower() in {"python", "py"}
-        if is_python:
-            py_root = orchestrator.repo_root() / "Algorithm.Python" / "SoloQuantGenerated"
-            syntax_errors: list[str] = []
-            if py_root.exists():
-                for py_file in sorted(py_root.rglob("*.py")):
-                    try:
-                        compile(py_file.read_text(encoding="utf-8"), str(py_file), "exec")
-                    except SyntaxError as exc:
-                        syntax_errors.append(f"{py_file}: {exc}")
-            if syntax_errors:
-                return {"status": "error", "language": "Python", "syntax_errors": syntax_errors}
-            return {"status": "ok", "language": "Python", "syntax_errors": []}
-        dotnet = str((config.get("lean") or {}).get("dotnet-binary") or "/usr/local/dotnet/dotnet")
-        command = [dotnet, "build", "Algorithm.CSharp/QuantConnect.Algorithm.CSharp.csproj", "-c", "Debug"]
-        env = _build_subprocess_env(config)
-        try:
-            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds, env=env))
-        except TypeError:
-            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds))
-        removed = []
-        if returncode != 0:
-            # Try removing only the generated .cs files that have compilation errors
-            gen_root = orchestrator.repo_root() / "Algorithm.CSharp" / "SoloQuantGenerated"
-            build_output = self._last_build_output(command, dotnet)
-            broken_files = orchestrator.parse_broken_cs_files(build_output, gen_root)
-            if broken_files:
-                for cs_file in broken_files:
-                    cs_file.unlink(missing_ok=True)
-                    removed.append(str(cs_file))
-            elif gen_root.exists():
-                # Fallback: only remove files that appear in the build output as error sources
-                build_output_fallback = self._last_build_output(command, dotnet)
-                for cs_file in sorted(gen_root.rglob("*.cs")):
-                    if str(cs_file) in build_output_fallback or str(cs_file.resolve()) in build_output_fallback:
-                        cs_file.unlink()
-                        removed.append(str(cs_file))
-            if removed:
-                returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds))
-        return {"status": "ok" if returncode == 0 else "error", "returncode": returncode, "command": command, "removed_broken_files": removed if returncode == 0 else []}
+        languages = (config.get("strategy-policy") or {}).get("languages")
+        if isinstance(languages, list) and languages:
+            lang_list = [str(l).strip() for l in languages if str(l).strip()]
+        else:
+            lang_list = [str((config.get("strategy-policy") or {}).get("language") or "CSharp")]
+        combined: dict = {"status": "ok", "languages": []}
+        for lang in lang_list:
+            is_python = lang.strip().lower() in {"python", "py"}
+            if is_python:
+                py_root = orchestrator.repo_root() / "Algorithm.Python" / "SoloQuantGenerated"
+                syntax_errors: list[str] = []
+                if py_root.exists():
+                    for py_file in sorted(py_root.rglob("*.py")):
+                        try:
+                            compile(py_file.read_text(encoding="utf-8"), str(py_file), "exec")
+                        except SyntaxError as exc:
+                            syntax_errors.append(f"{py_file}: {exc}")
+                if syntax_errors:
+                    combined["languages"].append({"language": "Python", "status": "error", "syntax_errors": syntax_errors})
+                    combined["status"] = "error"
+                else:
+                    combined["languages"].append({"language": "Python", "status": "ok", "syntax_errors": []})
+            else:
+                dotnet = str((config.get("lean") or {}).get("dotnet-binary") or "/usr/local/dotnet/dotnet")
+                command = [dotnet, "build", "Algorithm.CSharp/QuantConnect.Algorithm.CSharp.csproj", "-c", "Debug"]
+                env = _build_subprocess_env(config)
+                try:
+                    returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds, env=env))
+                except TypeError:
+                    returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds))
+                broken_files = []
+                if returncode != 0:
+                    gen_root = orchestrator.repo_root() / "Algorithm.CSharp" / "SoloQuantGenerated"
+                    build_output = self._last_build_output(command, dotnet)
+                    broken_paths = orchestrator.parse_broken_cs_files(build_output, gen_root)
+                    if broken_paths:
+                        for cs_file in broken_paths:
+                            broken_dest = cs_file.with_suffix(".cs.broken")
+                            if cs_file.exists():
+                                cs_file.rename(broken_dest)
+                            broken_files.append(str(cs_file))
+                    elif gen_root.exists():
+                        build_output_fallback = self._last_build_output(command, dotnet)
+                        for cs_file in sorted(gen_root.rglob("*.cs")):
+                            if str(cs_file) in build_output_fallback or str(cs_file.resolve()) in build_output_fallback:
+                                broken_dest = cs_file.with_suffix(".cs.broken")
+                                if cs_file.exists():
+                                    cs_file.rename(broken_dest)
+                                broken_files.append(str(cs_file))
+                    if broken_files:
+                        try:
+                            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds, env=env))
+                        except TypeError:
+                            returncode = command_returncode(self.command_runner(command, orchestrator.repo_root(), self.timeout_seconds))
+                lang_result = {"language": "CSharp", "status": "ok" if returncode == 0 else "error", "returncode": returncode, "broken_files": broken_files}
+                combined["languages"].append(lang_result)
+                if returncode != 0:
+                    combined["status"] = "error"
+        return combined
 
     def _last_build_output(self, command: list[str], dotnet: str) -> str:
         """Capture dotnet build stdout+stderr for error parsing."""
@@ -624,6 +755,9 @@ class DefaultPipelineServices:
         except Exception:
             return ""
 
+    def smoke_test_strategies(self, config: dict) -> dict:
+        return run_orchestrator_command(["--smoke-test-strategies"], config, self.command_runner, self.timeout_seconds)
+
     def materialize_variants(self, config: dict, run_date: str | None = None) -> dict:
         lang = str((config.get("strategy-policy") or {}).get("language") or "CSharp")
         args = ["--materialize-generated-strategies", "--language", lang, "--start-date", "2020-01-01", "--end-date", "2025-12-31"]
@@ -631,8 +765,26 @@ class DefaultPipelineServices:
             args.extend(["--run-date", str(run_date)])
         return run_orchestrator_command(args, config, self.command_runner, self.timeout_seconds)
 
-    def optimize_backtests(self, config: dict) -> dict:
-        return run_orchestrator_command(["--optimize-strategies"], config, self.command_runner, self.timeout_seconds)
+    def optimize_backtests(self, config: dict, run_date: str | None = None) -> dict:
+        if self.mode == "debug":
+            return self._optimize_backtests_sync(config, run_date=run_date)
+        if _is_background_process_running("optimize_backtests", config, is_alive=self.live_process_alive):
+            return {"status": "ok", "mode": "background", "action": "already_running"}
+        _cleanup_finished_background("optimize_backtests", config)
+        python = sys.executable
+        script = orchestrator.repo_root() / "Scripts" / "soloquant_orchestrator.py"
+        config_path = orchestrator.repo_root() / "Launcher" / "config" / "config-soloquant.json"
+        command = [
+            python, str(script), "--config", str(config_path),
+            "--optimize-strategies", "--max-items", "1",
+        ]
+        if run_date:
+            command.extend(["--run-date", str(run_date)])
+        try:
+            info = _launch_background_command(command, "optimize_backtests", config, run_date=run_date, popen=self.live_popen)
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+        return {"status": "ok", "mode": "background", "action": "launched", "pid": info["pid"]}
 
     def prepare_live_market_data(self, config: dict, now: datetime | None = None) -> dict:
         import ashare_live_market_cache
@@ -716,6 +868,56 @@ class DefaultPipelineServices:
         status = "ok" if all(report.get("status") == "ok" for report in reports) else "error"
         return {"status": status, "reports": reports}
 
+    # -- Synchronous implementations for debug mode --
+
+    def _crawl_research_sync(self, config: dict, run_date: str | None = None) -> dict:
+        pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
+        args = [
+            "--task", "strategy",
+            "--task", "finance_intelligence",
+            "--force", "--once",
+            "--max-queries-per-task", str(max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-queries-per-task"), 2))),
+            "--max-results-per-query", str(max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-results-per-query"), 1))),
+        ]
+        if run_date:
+            args.extend(["--run-date", str(run_date)])
+        python = sys.executable
+        script = str(orchestrator.repo_root() / "Scripts" / "soloquant_crawl_scheduler.py")
+        config_path = str(orchestrator.repo_root() / "Launcher" / "config" / "config-soloquant.json")
+        command = [python, script, "--config", config_path, *args]
+        env = _build_subprocess_env(config)
+        try:
+            result = subprocess.run(command, cwd=str(orchestrator.repo_root()), capture_output=True, text=True, timeout=self.timeout_seconds, env=env)
+        except subprocess.TimeoutExpired as exc:
+            return {"status": "error", "mode": "debug", "error": f"timed out after {exc.timeout}s"}
+        status = "ok" if result.returncode == 0 else "error"
+        return {"status": status, "mode": "debug", "returncode": result.returncode}
+
+    def _prepare_reproduction_sync(self, config: dict, run_date: str | None = None) -> dict:
+        results = []
+        for flag in ["--prepare-reproduction", "--analyze-finance-intelligence"]:
+            args = [flag, "--max-items", "1"]
+            if run_date:
+                args.extend(["--run-date", str(run_date)])
+            report = run_orchestrator_command(args, config, self.command_runner, self.timeout_seconds)
+            results.append({"flag": flag, "status": report.get("status"), "returncode": report.get("returncode")})
+        status = "ok" if all(r.get("status") == "ok" for r in results) else "error"
+        return {"status": status, "mode": "debug", "results": results}
+
+    def _reproduce_one_sync(self, config: dict, run_date: str | None = None) -> dict:
+        args = ["--generate-strategy-implementations", "--max-items", "1", "--smoke-test-strategies"]
+        if run_date:
+            args.extend(["--run-date", str(run_date)])
+        report = run_orchestrator_command(args, config, self.command_runner, self.timeout_seconds)
+        return {**report, "mode": "debug"}
+
+    def _optimize_backtests_sync(self, config: dict, run_date: str | None = None) -> dict:
+        args = ["--optimize-strategies", "--max-items", "1"]
+        if run_date:
+            args.extend(["--run-date", str(run_date)])
+        report = run_orchestrator_command(args, config, self.command_runner, self.timeout_seconds)
+        return {**report, "mode": "debug"}
+
 
 def run_pipeline_tick(
     config: dict,
@@ -723,8 +925,12 @@ def run_pipeline_tick(
     run_date: str | None = None,
     now: datetime | None = None,
     logger: PipelineLogger | None = None,
+    state: PipelineState | None = None,
+    mode: str = "work",
 ) -> dict:
-    services = services or DefaultPipelineServices()
+    services = services or DefaultPipelineServices(mode=mode)
+    if state is not None and isinstance(services, DefaultPipelineServices):
+        services.set_state(state)
     now = now or datetime.now(timezone.utc)
     logger = logger or PipelineLogger()
     started_at = datetime.now(timezone.utc)
@@ -735,11 +941,41 @@ def run_pipeline_tick(
         "degraded_stages": [],
     }
 
+    pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
+    debug_mode = mode == "debug"
+
     for stage_name in PIPELINE_STAGES:
+        # Interval-based skip for stages with dedicated intervals (skip in debug mode)
+        if not debug_mode:
+            if stage_name == "ingest_local_strategies" and state is not None:
+                interval = max(1, orchestrator.safe_int(pipeline_config.get("local-ingest-interval-seconds"), 3600))
+                last_run = state.stage_last_run_at(stage_name)
+                if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
+                    logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
+                    continue
+            if stage_name == "crawl_research" and state is not None:
+                interval = max(1, orchestrator.safe_int(pipeline_config.get("crawl-interval-seconds"), 28800))
+                last_run = state.stage_last_run_at(stage_name)
+                if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
+                    logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
+                    continue
+            if stage_name == "reproduce_one" and state is not None:
+                interval = max(1, orchestrator.safe_int(pipeline_config.get("reproduce-interval-seconds"), 1800))
+                last_run = state.stage_last_run_at(stage_name)
+                if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
+                    logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
+                    continue
+            if stage_name == "optimize_backtests" and state is not None:
+                interval = max(1, orchestrator.safe_int(pipeline_config.get("optimize-interval-seconds"), 1800))
+                last_run = state.stage_last_run_at(stage_name)
+                if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
+                    logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
+                    continue
+
         logger.info("stage_start", stage=stage_name)
         stage_started_at = datetime.now(timezone.utc)
         try:
-            if stage_name in {"crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "generate_strategy_code", "materialize_variants", "export_influx"}:
+            if stage_name in {"ingest_local_strategies", "crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "reproduce_one", "materialize_variants", "optimize_backtests", "export_influx"}:
                 stage_report = getattr(services, stage_name)(config, run_date=run_date)
             elif stage_name == "prepare_live_market_data":
                 stage_report = services.prepare_live_market_data(config, now=now)
@@ -757,8 +993,13 @@ def run_pipeline_tick(
         }
         report["stages"].append(stage_row)
         logger.info("stage_complete", stage=stage_name, status=stage_row["status"])
-        if stage_row["status"] != "ok":
-            if stage_name in {"crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "generate_strategy_code", "optimize_backtests", "export_influx"}:
+
+        # Record stage timestamp for interval-based scheduling (skip in debug mode)
+        if not debug_mode and state is not None and stage_row["status"] == "ok":
+            state.record_stage_run(stage_name, datetime.now(timezone.utc).isoformat())
+
+        if stage_row["status"] != "ok" and stage_name not in LLM_BACKGROUND_STAGES:
+            if stage_name in {"ingest_local_strategies", "crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "reproduce_one", "optimize_backtests", "export_influx"}:
                 report["status"] = "degraded"
                 report["degraded_stage"] = stage_name
                 report["degraded_stages"].append(stage_name)
@@ -781,6 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=300)
     parser.add_argument("--timeout-seconds", type=int, default=0)
+    parser.add_argument("--mode", choices=["debug", "work"], default="work")
     parser.add_argument("--run-date")
     return parser
 
@@ -791,11 +1033,11 @@ def main() -> int:
     state = PipelineState(args.state_file or default_state_path(config))
     logger = PipelineLogger(args.log_file or default_log_path(config))
     timeout = args.timeout_seconds if args.timeout_seconds and args.timeout_seconds > 0 else None
-    services = DefaultPipelineServices(timeout_seconds=timeout)
+    services = DefaultPipelineServices(timeout_seconds=timeout, mode=args.mode)
 
     def tick(force: bool = False) -> dict:
         now = datetime.now(timezone.utc)
-        if not force and not is_pipeline_due(now, state.last_finished_at(), interval_seconds=max(1, int(args.poll_seconds))):
+        if not force and args.mode == "work" and not is_pipeline_due(now, state.last_finished_at(), interval_seconds=max(1, int(args.poll_seconds))):
             report = {
                 "status": "skipped",
                 "reason": "interval_not_elapsed",
@@ -805,14 +1047,14 @@ def main() -> int:
             }
             print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
             return report
-        report = run_pipeline_tick(config, services=services, run_date=args.run_date, now=now, logger=logger)
+        report = run_pipeline_tick(config, services=services, run_date=args.run_date, now=now, logger=logger, state=state, mode=args.mode)
         state.record_run(report)
         print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
         return report
 
     logger.info(
         "pipeline_start",
-        mode="daemon" if args.daemon else "once",
+        mode=args.mode,
         config=args.config,
         state_file=args.state_file or default_state_path(config),
         poll_seconds=max(1, int(args.poll_seconds)),

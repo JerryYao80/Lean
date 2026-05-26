@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import sys
 import time
 import re
 import subprocess
@@ -239,6 +240,31 @@ def safe_slug(value: str, fallback: str = "item") -> str:
     text = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value).strip())
     text = "-".join(part for part in text.split("-") if part)
     return text[:80] or fallback
+
+
+def normalize_paper_url(url: str) -> str:
+    """Normalize URLs to canonical form for dedup: arxiv /abs/ and /pdf/ map to the same paper."""
+    url = str(url or "").strip()
+    parsed = parse.urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path or ""
+    # arXiv: /abs/XXXX.XXXXX and /pdf/XXXX.XXXXX are the same paper
+    if host.endswith("arxiv.org"):
+        m = re.match(r"^/(abs|pdf)/(\d{4}\.\d{4,5})", path)
+        if m:
+            return f"https://arxiv.org/abs/{m.group(2)}"
+    # SSRN: various URL forms point to the same paper
+    if "ssrn.com" in host:
+        m = re.search(r"abstract_id=(\d+)", url)
+        if m:
+            return f"https://papers.ssrn.com/abstract_id={m.group(1)}"
+        m = re.search(r"/sol3/Delivery\.cfm/(\d+)", path)
+        if m:
+            return f"https://papers.ssrn.com/abstract_id={m.group(1)}"
+    # Quantpedia: strip trailing slashes and query params
+    if host.endswith("quantpedia.com"):
+        return f"https://{host}{path.rstrip('/')}"
+    return url
 
 
 def normalize_category(value: str | None) -> str:
@@ -590,6 +616,7 @@ def should_crawl_finance_intelligence_result(result: dict) -> dict:
 
 
 STRATEGY_MIN_CONTENT_CHARS = 500
+STRATEGY_MAX_CONTENT_CHARS = 200000  # ~200KB; reject books/oversized papers
 
 STRATEGY_LISTING_CONTENT_MARKERS = (
     "Showing 1",
@@ -636,6 +663,12 @@ STRATEGY_LISTING_TITLE_MARKERS = (
     "Page Not Found",
     "403 Forbidden",
     "Access Denied",
+    "Papers -",
+    "Selected Publications",
+    "Reading arXiv",
+    "How do quant devs",
+    "Substack",
+    "Reddit",
 )
 
 
@@ -683,6 +716,20 @@ def should_crawl_strategy_result(result: dict) -> dict:
     # Reject SSRN abstract-only pages (no full paper access)
     if "ssrn.com" in url.lower() and "abstract_id" in url.lower() and "/delivery" not in url.lower() and "/pdf" not in url.lower():
         reasons.append("ssrn_abstract_only")
+    # Reject social media discussion posts
+    if any(host in url.lower() for host in ["reddit.com/", "twitter.com/", "x.com/", "facebook.com/"]):
+        reasons.append("social_media")
+    # Reject promo/marketing/newsletter pages
+    if any(host in url.lower() for host in ["substack.com/", "medium.com/"]):
+        if "/p/" not in url.lower():
+            reasons.append("promo_page")
+    # Reject competition platform homepages (not specific strategy papers)
+    if any(host in url.lower() for host in ["numer.ai/", "numerai.com/"]):
+        if "/forum/" not in url.lower() and "/posts/" not in url.lower():
+            reasons.append("competition_homepage")
+    # Reject exchange announcement pages that are just listing pages
+    if any(host in url.lower() for host in ["pbc.gov.cn/zhengcehuobisi"]) and "delivery" not in url.lower() and "report" not in url.lower():
+        reasons.append("exchange_listing")
     return {
         "accepted": not reasons,
         "reject_reasons": sorted(set(reasons)),
@@ -741,7 +788,14 @@ def build_llm_screening_payload(crawled_items: Sequence[dict], model: str = "dee
                 "content": (
                     "你是个人自动化量化系统的研究筛选器。只保留真正可工程化的量化策略和财经情报。"
                     "有价值量化策略必须包含可理解的量化思路。实现步骤和回测效果为加分项，非必需。"
-                    "对缺少实现步骤或回测效果的条目，标注 confidence_level 为 low 或 medium。"
+                    "严格拒绝以下低质量内容：\n"
+                    "- 网站首页、导航页、列表页（如 SSRN Home Page、Oxford Man Publications 列表页）\n"
+                    "- 社交媒体讨论帖（如 Reddit、Twitter/X 帖子）\n"
+                    "- 交易所公告页面（如央行公开市场业务交易公告页，除非包含具体政策信号）\n"
+                    "- 推广/营销文章（如 Substack 推文、Newsletter 推广）\n"
+                    "- 课程大纲/教学页面（如 NYU 课程页面、教程索引）\n"
+                    "- 竞赛平台首页（如 Numerai 首页，不含具体策略论文）\n"
+                    "- 重复/镜像内容（同一论文的多个版本）\n"
                     "输出 JSON，不要输出无关文字。"
                 ),
             },
@@ -755,6 +809,7 @@ def build_llm_screening_payload(crawled_items: Sequence[dict], model: str = "dee
                             "部分或完整的实现步骤（加分项）",
                             "回测或实盘效果描述（加分项，非必需）",
                             "可映射到 Tushare 或可通过爬取补齐的数据字段",
+                            "不是网站首页/导航页/列表页/社交媒体帖/推广文章/课程页面/竞赛平台首页",
                         ],
                         "items": items,
                         "expected_schema": {
@@ -814,7 +869,7 @@ def parse_llm_screening_decisions(payload: dict | str) -> list[dict]:
 
 def build_reproduction_summary_payload(
     crawled_item: dict,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
     max_content_chars: int = 0,
     max_tokens: int = 0,
 ) -> dict:
@@ -889,7 +944,7 @@ def is_listing_content(content: str) -> bool:
     return marker_hits >= 3
 
 
-def select_reproduction_content(crawled_item: dict, max_chars: int = 45000) -> str:
+def select_reproduction_content(crawled_item: dict, max_chars: int = 30000) -> str:
     content = str(crawled_item.get("content") or crawled_item.get("text") or "")
     if str(crawled_item.get("content_source") or "").lower() != "pdf":
         content = content or str(crawled_item.get("markdown") or "")
@@ -905,7 +960,7 @@ def select_reproduction_content(crawled_item: dict, max_chars: int = 45000) -> s
     return _select_reproduction_sections(content, max_chars=max_chars, is_markdown=False)
 
 
-def _select_reproduction_sections(content: str, max_chars: int = 45000, is_markdown: bool = False) -> str:
+def _select_reproduction_sections(content: str, max_chars: int = 30000, is_markdown: bool = False) -> str:
     normalized = str(content or "").replace("\r\n", "\n")
     if not normalized:
         return ""
@@ -1275,7 +1330,6 @@ def resolve_pdf_url(crawled_item: dict) -> str | None:
 
 
 def pdf_artifact_paths(crawled_item: dict, artifact_root: str | Path, category: str = "strategy", run_date: str | None = None) -> tuple[Path, Path, Path]:
-    date_text = str(run_date or utc_run_date()).replace("-", "")
     pdf_url = resolve_pdf_url(crawled_item) or str(crawled_item.get("url") or "paper")
     paper_id = ""
     parsed = parse.urlparse(pdf_url)
@@ -1285,7 +1339,7 @@ def pdf_artifact_paths(crawled_item: dict, artifact_root: str | Path, category: 
     slug_input = paper_id or crawled_item.get("title") or pdf_url
     source_slug = safe_slug(str(crawled_item.get("source") or category), fallback=category)
     filename = f"{source_slug}-{safe_slug(str(slug_input), 'paper')}"
-    root = Path(artifact_root) / "pdf" / normalize_category(category) / date_text
+    root = Path(artifact_root) / "pdf" / normalize_category(category)
     return root / f"{filename}.pdf", root / f"{filename}.txt", root / f"{filename}.md"
 
 
@@ -1317,6 +1371,12 @@ def download_and_extract_pdf_text(
     content = text_path.read_text(encoding="utf-8", errors="ignore").strip()
     if not content:
         return None
+    if len(content) > STRATEGY_MAX_CONTENT_CHARS:
+        return {
+            "content_source": "pdf",
+            "pdf_error": f"PDF content too large ({len(content)} chars, max {STRATEGY_MAX_CONTENT_CHARS})",
+            "content": content[:5000],
+        }
     markdown_result = convert_pdf_text_to_markdown(content)
     markdown = str(markdown_result.get("markdown") or "").strip()
     markdown_quality = markdown_result.get("quality") if isinstance(markdown_result.get("quality"), dict) else {}
@@ -1339,11 +1399,8 @@ def iter_crawled_strategy_files(artifact_root: str | Path, run_date: str | None 
     root = Path(artifact_root) / "crawled" / "strategy"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
-    for path in sorted(root.glob("*/*.json")):
+    for path in sorted(root.glob("*.json")):
         if path.name == "index.json":
-            continue
-        if date_filter and path.parent.name != date_filter:
             continue
         yield path
 
@@ -1352,7 +1409,7 @@ def prepare_reproduction_summaries(
     artifact_root: str | Path,
     llm_summary_client: Callable[[dict], dict],
     run_date: str | None = None,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
     max_items: int | None = None,
     max_content_chars: int = 0,
     max_tokens: int = 0,
@@ -1364,8 +1421,8 @@ def prepare_reproduction_summaries(
     skipped_count = 0
     # Cross-tick dedup: skip URLs/titles already summarized
     seen_summaries: set[str] = set()
-    artifact_date = str(run_date or utc_run_date()).replace("-", "")
-    existing_index = output_root / artifact_date / "index.json"
+    # Scan reproduction index for already-summarized items
+    existing_index = output_root / "index.json"
     if existing_index.exists():
         try:
             for row in (load_json_payload(existing_index).get("items") or []):
@@ -1390,9 +1447,12 @@ def prepare_reproduction_summaries(
         content = str(item.get("content") or item.get("markdown") or item.get("text") or "").strip()
         if not content:
             continue
+        if len(content) > STRATEGY_MAX_CONTENT_CHARS:
+            skipped_count += 1
+            continue
         pdf_payload = None
         try:
-            pdf_payload = download_and_extract_pdf_text(item, artifact_root, category="strategy", run_date=run_date or path.parent.name)
+            pdf_payload = download_and_extract_pdf_text(item, artifact_root, category="strategy", run_date=run_date)
         except Exception as exc:
             pdf_payload = {
                 "content_source": "crawl",
@@ -1411,9 +1471,9 @@ def prepare_reproduction_summaries(
             summary = parse_llm_json_response(llm_summary_client(payload))
         except Exception as exc:
             summary = build_local_reproduction_summary(item, select_reproduction_content(item), llm_error=str(exc))
-        artifact_date = run_date or path.parent.name
-        summary_hash = stable_hash({"source_file": str(path), "title": item.get("title"), "summary": summary})
-        output_path = output_root / str(artifact_date).replace("-", "") / f"{safe_slug(str(item.get('source') or 'paper'), 'paper')}-{summary_hash}.json"
+        artifact_date = run_date or utc_run_date()
+        url_hash = stable_hash(item_url or item_title_norm or content[:500])
+        output_path = output_root / f"{safe_slug(str(item.get('source') or 'paper'), 'paper')}-{url_hash}.json"
         output = {
             "category": "strategy",
             "title": str(item.get("title") or ""),
@@ -1449,7 +1509,7 @@ def prepare_reproduction_summaries(
         processed += 1
 
     if index_rows:
-        index_path = output_root / str(run_date or utc_run_date()).replace("-", "") / "index.json"
+        index_path = output_root / "index.json"
         existing_items: list[dict] = []
         if index_path.exists():
             try:
@@ -1462,7 +1522,6 @@ def prepare_reproduction_summaries(
             index_path,
             {
                 "category": "strategy",
-                "run_date": str(run_date or utc_run_date()).replace("-", ""),
                 "count": len(merged_items),
                 "items": merged_items,
             },
@@ -1486,7 +1545,7 @@ def classify_finance_event_type(text: str) -> str:
 
 def build_finance_intelligence_analysis_payload(
     crawled_item: dict,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
     max_content_chars: int = 0,
     max_tokens: int = 4096,
 ) -> dict:
@@ -1536,11 +1595,8 @@ def iter_crawled_finance_intelligence_files(artifact_root: str | Path, run_date:
     root = Path(artifact_root) / "crawled" / "finance_intelligence"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
-    for path in sorted(root.glob("*/*.json")):
+    for path in sorted(root.glob("*.json")):
         if path.name == "index.json":
-            continue
-        if date_filter and path.parent.name != date_filter:
             continue
         yield path
 
@@ -1617,7 +1673,7 @@ def prepare_finance_intelligence_analyses(
     artifact_root: str | Path,
     llm_analysis_client: Callable[[dict], dict],
     run_date: str | None = None,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
     max_items: int | None = None,
     max_content_chars: int = 0,
     max_tokens: int = 0,
@@ -1625,9 +1681,9 @@ def prepare_finance_intelligence_analyses(
     output_root = Path(artifact_root) / "intelligence-analysis" / "finance_intelligence"
     date_str = str(run_date or utc_run_date()).replace("-", "")
 
-    # Cross-tick URL dedup: skip URLs already analyzed today to avoid redundant LLM calls
+    # Cross-tick URL dedup: skip URLs already analyzed to avoid redundant LLM calls
     analyzed_urls: set[str] = set()
-    existing_index = output_root / date_str / "index.json"
+    existing_index = output_root / "index.json"
     if existing_index.exists():
         try:
             for row in (load_json_payload(existing_index).get("items") or []):
@@ -1656,7 +1712,7 @@ def prepare_finance_intelligence_analyses(
         if is_low_quality_crawled_content(content):
             skipped_count += 1
             continue
-        quality = item.get("quality") if isinstance(item.get("quality"), dict) else evaluate_finance_intelligence_quality(item, run_date=run_date or path.parent.name)
+        quality = item.get("quality") if isinstance(item.get("quality"), dict) else evaluate_finance_intelligence_quality(item, run_date=date_str)
         if not quality.get("accepted"):
             skipped_count += 1
             continue
@@ -1675,10 +1731,9 @@ def prepare_finance_intelligence_analyses(
             kp_text = " ".join(str(p) for p in ((analysis or {}).get("key_points") or []))
             event_type = classify_finance_event_type(title + " " + kp_text)
 
-        artifact_date = run_date or path.parent.name
         analysis_hash = stable_hash({"source_file": str(path), "title": item.get("title"), "analysis": analysis})
         source_slug = safe_slug(str(item.get("source") or "finance"), "finance")
-        output_path = output_root / str(artifact_date).replace("-", "") / f"{event_type}-{source_slug}-{analysis_hash}.json"
+        output_path = output_root / f"{event_type}-{source_slug}-{analysis_hash}.json"
         output = {
             "category": "finance_intelligence",
             "event_type": event_type,
@@ -1709,7 +1764,7 @@ def prepare_finance_intelligence_analyses(
 
     if index_rows:
         # Merge with existing index rows to preserve cross-tick entries
-        index_path = output_root / date_str / "index.json"
+        index_path = output_root / "index.json"
         existing_items: list[dict] = []
         if index_path.exists():
             try:
@@ -1722,7 +1777,6 @@ def prepare_finance_intelligence_analyses(
             index_path,
             {
                 "category": "finance_intelligence",
-                "run_date": date_str,
                 "count": len(merged_rows),
                 "items": merged_rows,
             },
@@ -1759,11 +1813,8 @@ def iter_finance_analysis_files(artifact_root: str | Path, run_date: str | None 
     root = Path(artifact_root) / "intelligence-analysis" / "finance_intelligence"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
-    for path in sorted(root.glob("*/*.json")):
+    for path in sorted(root.glob("*.json")):
         if path.name == "index.json":
-            continue
-        if date_filter and path.parent.name != date_filter:
             continue
         yield path
 
@@ -1902,7 +1953,7 @@ def build_finance_event_graph(artifact_root: str | Path, run_date: str | None = 
         "nodes": sorted(nodes.values(), key=lambda node: node["id"]),
         "edges": sorted(edges.values(), key=lambda edge: edge["id"]),
     }
-    output_path = Path(artifact_root) / "event-graph" / "finance_intelligence" / date_text / "graph.json"
+    output_path = Path(artifact_root) / "event-graph" / "finance_intelligence" / "graph.json"
     write_json_payload(output_path, graph)
     return {
         "run_date": date_text,
@@ -1963,8 +2014,7 @@ def build_event_signal_context(
         context[f"{event_type}_signals"] = signals_by_type.get(event_type, [])
 
     if artifact_root is not None:
-        date_str = str(run_date or utc_run_date()).replace("-", "")
-        signal_dir = Path(artifact_root) / "event-signals" / date_str
+        signal_dir = Path(artifact_root) / "event-signals"
         signal_dir.mkdir(parents=True, exist_ok=True)
         write_json_payload(signal_dir / "signal-context.json", context)
 
@@ -2067,16 +2117,20 @@ def persist_crawled_items(
 ) -> dict:
     date_text = run_date or utc_run_date()
     root = Path(artifact_root) / "crawled"
-    # Pre-seed seen with URLs already written today (cross-tick dedup)
+    # Pre-seed seen with URLs already written (cross-tick dedup)
     seen: set[str] = set()
+    seen_titles: set[str] = set()
     for category in ("strategy", "finance_intelligence"):
-        existing_index = root / category / date_text / "index.json"
+        existing_index = root / category / "index.json"
         if existing_index.exists():
             try:
                 for row in (load_json_payload(existing_index).get("items") or []):
                     url = str(row.get("url") or "").strip()
+                    title = str(row.get("title") or "").strip()
                     if url:
-                        seen.add(stable_hash(url))
+                        seen.add(stable_hash(normalize_paper_url(url)))
+                    if title:
+                        seen_titles.add(stable_hash(title.lower().strip()))
             except Exception:
                 pass
     written_files: list[str] = []
@@ -2101,15 +2155,21 @@ def persist_crawled_items(
         if category == "strategy" and len(content.strip()) < STRATEGY_MIN_CONTENT_CHARS:
             rejected_count += 1
             continue
+        if category == "strategy" and len(content.strip()) > STRATEGY_MAX_CONTENT_CHARS:
+            rejected_count += 1
+            continue
         content_hash = stable_hash({"url": url, "title": title, "content": content[:2000]})
-        dedupe_key = stable_hash(url or {"title": title, "content": content[:500]})
-        if dedupe_key in seen:
+        dedupe_key = stable_hash(normalize_paper_url(url) or {"title": title, "content": content[:500]})
+        title_dedupe_key = stable_hash(title.lower().strip()) if title else ""
+        if dedupe_key in seen or (title_dedupe_key and title_dedupe_key in seen_titles):
             duplicate_count += 1
             continue
         seen.add(dedupe_key)
+        if title_dedupe_key:
+            seen_titles.add(title_dedupe_key)
 
         source_slug = safe_slug(str(item.get("source") or category), fallback=category)
-        path = root / category / date_text / f"{source_slug}-{content_hash}.json"
+        path = root / category / f"{source_slug}-{content_hash}.json"
         payload = {
             "category": category,
             "source": item.get("source"),
@@ -2136,7 +2196,7 @@ def persist_crawled_items(
         )
 
     for category, rows in index_by_category.items():
-        index_path = root / category / date_text / "index.json"
+        index_path = root / category / "index.json"
         # Merge with existing index to keep all items for the day, not just current batch
         existing_items: list[dict] = []
         if index_path.exists():
@@ -2151,7 +2211,6 @@ def persist_crawled_items(
             index_path,
             {
                 "category": category,
-                "run_date": date_text,
                 "count": len(merged_items),
                 "items": merged_items,
             },
@@ -2163,6 +2222,200 @@ def persist_crawled_items(
         "duplicate_count": duplicate_count,
         "rejected_count": rejected_count,
         "files": written_files,
+    }
+
+
+def ingest_local_strategies(
+    local_dir: str | Path,
+    artifact_root: str | Path,
+    run_date: str | None = None,
+) -> dict:
+    """Scan local_dir for new strategy files (.pdf/.md/.txt/.json) and ingest them.
+
+    Incremental: tracks ingested files in .ingested.json by filename+mtime hash.
+    PDF/MD/TXT files are routed to persist_crawled_items() for the normal pipeline.
+    JSON files with reproduction summary schema are written directly to reproduction/strategy/.
+    """
+    local_path = Path(local_dir)
+    if not local_path.exists():
+        return {"status": "ok", "ingested": 0, "skipped": 0, "errors": 0}
+
+    tracking_path = local_path / ".ingested.json"
+    if tracking_path.exists():
+        try:
+            tracking = load_json_payload(tracking_path)
+        except Exception:
+            tracking = {}
+    else:
+        tracking = {}
+    ingested_files: dict = tracking.get("files", {})
+
+    supported_extensions = {".pdf", ".md", ".txt", ".json"}
+    candidates = sorted(
+        f for f in local_path.iterdir()
+        if f.is_file() and f.suffix.lower() in supported_extensions and not f.name.startswith(".")
+    )
+
+    crawled_items: list[dict] = []
+    reproduction_items: list[dict] = []
+    ingested_count = 0
+    skipped_count = 0
+    error_count = 0
+    updated_tracking = dict(ingested_files)
+
+    for file_path in candidates:
+        try:
+            mtime = file_path.stat().st_mtime
+            file_key = stable_hash({"name": file_path.name, "mtime": mtime})
+            if file_key in ingested_files:
+                skipped_count += 1
+                continue
+
+            suffix = file_path.suffix.lower()
+            title = file_path.stem
+            url = f"local://{file_path.name}"
+
+            if suffix == ".json":
+                data = load_json_payload(file_path)
+                if isinstance(data.get("core_idea"), str) or isinstance(data.get("signals"), list):
+                    reproduction_items.append({**data, "_source_file": str(file_path), "_url": url, "_title": title})
+                else:
+                    content = json.dumps(data, ensure_ascii=False)
+                    if len(content) < STRATEGY_MIN_CONTENT_CHARS:
+                        skipped_count += 1
+                        updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "skipped_too_short"}
+                        continue
+                    crawled_items.append({
+                        "category": "strategy",
+                        "source": "local",
+                        "title": title,
+                        "url": url,
+                        "content": content,
+                        "content_source": "local_json",
+                    })
+                updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "ingested"}
+                ingested_count += 1
+                continue
+
+            if suffix == ".pdf":
+                text_result = _extract_local_pdf_text(file_path, artifact_root, run_date=run_date)
+                if text_result is None:
+                    skipped_count += 1
+                    updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "skipped_pdf_error"}
+                    continue
+                content = str(text_result.get("content") or "").strip()
+                markdown = str(text_result.get("markdown") or "").strip()
+                if not content:
+                    skipped_count += 1
+                    updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "skipped_empty"}
+                    continue
+                crawled_items.append({
+                    "category": "strategy",
+                    "source": "local",
+                    "title": title,
+                    "url": url,
+                    "content": content,
+                    "markdown": markdown,
+                    "content_source": "local_pdf",
+                    "pdf_file": str(file_path),
+                })
+            else:
+                content = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+                if not content or len(content) < STRATEGY_MIN_CONTENT_CHARS:
+                    skipped_count += 1
+                    updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "skipped_too_short" if not content else "skipped_empty"}
+                    continue
+                if len(content) > STRATEGY_MAX_CONTENT_CHARS:
+                    skipped_count += 1
+                    updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "skipped_too_large"}
+                    continue
+                crawled_items.append({
+                    "category": "strategy",
+                    "source": "local",
+                    "title": title,
+                    "url": url,
+                    "content": content,
+                    "content_source": "local_text",
+                })
+
+            updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "ingested"}
+            ingested_count += 1
+        except Exception:
+            error_count += 1
+
+    if crawled_items:
+        persist_crawled_items(crawled_items, artifact_root, run_date=run_date)
+
+    if reproduction_items:
+        repro_root = Path(artifact_root) / "reproduction" / "strategy"
+        repro_root.mkdir(parents=True, exist_ok=True)
+        for item in reproduction_items:
+            source_file = item.pop("_source_file", "")
+            item_url = item.pop("_url", "")
+            item_title = item.pop("_title", "")
+            url_hash = stable_hash(item_url or item_title or str(source_file))
+            slug = safe_slug(item_title or "local", fallback="local")
+            output_path = repro_root / f"{slug}-{url_hash}.json"
+            if not output_path.exists():
+                if "url" not in item:
+                    item["url"] = item_url
+                if "title" not in item:
+                    item["title"] = item_title
+                if "source" not in item:
+                    item["source"] = "local"
+                if "category" not in item:
+                    item["category"] = "strategy"
+                write_json_payload(output_path, item)
+
+    tracking["files"] = updated_tracking
+    tracking["last_ingest_at_utc"] = datetime.now(timezone.utc).isoformat()
+    write_json_payload(tracking_path, tracking)
+
+    return {
+        "status": "ok",
+        "ingested": ingested_count,
+        "skipped": skipped_count,
+        "errors": error_count,
+        "crawled_items": len(crawled_items),
+        "reproduction_items": len(reproduction_items),
+    }
+
+
+def _extract_local_pdf_text(
+    pdf_path: Path,
+    artifact_root: str | Path,
+    run_date: str | None = None,
+) -> dict | None:
+    """Extract text from a local PDF file using pdftotext."""
+    text_path = pdf_path.with_suffix(".txt")
+    if not text_path.exists() or text_path.stat().st_size == 0:
+        try:
+            subprocess.run(
+                ["pdftotext", "-layout", str(pdf_path), str(text_path)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+        except Exception:
+            return None
+    content = text_path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not content:
+        return None
+    if len(content) > STRATEGY_MAX_CONTENT_CHARS:
+        return {
+            "content_source": "pdf",
+            "pdf_error": f"PDF content too large ({len(content)} chars, max {STRATEGY_MAX_CONTENT_CHARS})",
+            "content": content[:5000],
+        }
+    markdown_result = convert_pdf_text_to_markdown(content)
+    markdown = str(markdown_result.get("markdown") or "").strip()
+    return {
+        "content": content,
+        "content_source": "pdf",
+        "markdown": markdown,
+        "markdown_quality": markdown_result.get("quality") if isinstance(markdown_result.get("quality"), dict) else {},
     }
 
 
@@ -2186,7 +2439,7 @@ def persist_screened_items(
 
     files: list[str] = []
     for category, rows in by_category.items():
-        path = root / category / date_text / "valuable-items.json"
+        path = root / category / "valuable-items.json"
         existing_items: list[dict] = []
         if path.exists():
             try:
@@ -2199,7 +2452,6 @@ def persist_screened_items(
             path,
             {
                 "category": category,
-                "run_date": date_text,
                 "count": len(merged_items),
                 "items": merged_items,
             },
@@ -2405,9 +2657,14 @@ class SoloQuantHttpClient:
 def create_http_client_from_config(
     config: dict,
     post_json: Callable[[str, dict, dict[str, str], int], dict] = default_post_json,
+    use_code_generation_llm: bool = False,
 ) -> SoloQuantHttpClient:
     # 'llm' key takes precedence over legacy 'glm' key for multi-provider support
-    llm = config.get("llm") or config.get("glm") or {}
+    # When use_code_generation_llm=True, use 'code-generation-llm' config instead
+    if use_code_generation_llm:
+        llm = config.get("code-generation-llm") or config.get("llm") or config.get("glm") or {}
+    else:
+        llm = config.get("llm") or config.get("glm") or {}
     searxng = config.get("searxng") or {}
     crawl4ai = config.get("crawl4ai") or {}
     api_key_env_var = str(llm.get("api-key-env-var") or "LLM_API_KEY")
@@ -2505,6 +2762,20 @@ def resolve_data_requirements(
     missing: list[dict] = []
     log_rows: list[dict] = []
 
+    lean_field_aliases: dict[str, str] = {
+        "close": "close", "open": "open", "high": "high", "low": "low",
+        "volume": "vol", "adj close": "close", "adjusted close": "close",
+        "price": "close", "last price": "close",
+    }
+    lean_dataset_aliases: dict[str, str] = {
+        "equity daily data": "bak_daily", "stock daily": "bak_daily",
+        "tradebar": "bak_daily", "daily": "bak_daily",
+        "coarsefundamental": "bak_daily", "coarse fundamental": "bak_daily",
+        "finefundamental": "income", "fine fundamental": "income",
+        "market cap": "bak_daily", "marketcap": "bak_daily",
+        "fundamental": "income",
+    }
+
     for requirement in required_fields:
         if isinstance(requirement, dict):
             field = str(requirement.get("field") or requirement.get("name") or "").strip()
@@ -2516,12 +2787,20 @@ def resolve_data_requirements(
             source = {"field": field}
 
         dataset_entry = datasets.get(dataset) if dataset else None
+        # Fallback: try LEAN-to-tushare dataset alias
+        if dataset_entry is None and dataset:
+            dataset_entry = datasets.get(lean_dataset_aliases.get(dataset.lower()))
         dataset_fields = dataset_entry.get("fields") if isinstance(dataset_entry, dict) else None
         dataset_fields = dataset_fields if isinstance(dataset_fields, dict) else {}
 
-        if field and ((dataset and field in dataset_fields) or any(field in (entry.get("fields") or {}) for entry in datasets.values() if isinstance(entry, dict))):
+        # Fallback: try LEAN-to-tushare field alias (case-insensitive)
+        resolved_field = field
+        if field and field not in dataset_fields:
+            resolved_field = lean_field_aliases.get(field.lower(), field)
+
+        if resolved_field and ((dataset and resolved_field in dataset_fields) or any(resolved_field in (entry.get("fields") or {}) for entry in datasets.values() if isinstance(entry, dict))):
             available.append({
-                "field": field,
+                "field": resolved_field,
                 "dataset": dataset,
                 "source": source,
             })
@@ -2817,10 +3096,23 @@ def materialize_strategy_package(
     }
 
 
+def _load_lean_reference_template(language: str) -> str:
+    """Load the verified LEAN A-share strategy template source code for LLM reference."""
+    root = Path(repo_root())
+    if language.lower() in {"python", "py"}:
+        template_path = root / "Algorithm.Python/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.py"
+    else:
+        template_path = root / "Algorithm.CSharp/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.cs"
+    try:
+        return template_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
 def build_strategy_implementation_payload(
     reproduction_summary: dict,
-    model: str = "deepseek-v4-pro",
-    max_tokens: int = 8192,
+    model: str = "glm-5.1",
+    max_tokens: int = 4096,
     language: str = "CSharp",
     event_signal_context: dict | None = None,
 ) -> dict:
@@ -2828,83 +3120,168 @@ def build_strategy_implementation_payload(
     normalized_lang = str(language or "CSharp").strip().lower()
     is_python = normalized_lang in {"python", "py"}
 
+    csharp_template = _load_lean_reference_template("CSharp")
+    python_template = _load_lean_reference_template("Python")
+
     if is_python:
+        template_section = ""
+        if python_template:
+            template_section = (
+                "\n\n=== 已验证可编译运行的 LEAN A股 Python 策略模板（必须模仿此结构）===\n"
+                + python_template
+                + "\n=== 模板结束 ===\n\n"
+            )
         system_prompt = (
             "你是 LEAN Python 策略实现工程师。只输出JSON，不要解释。"
             "输出必须是受限的可审计草案，不能包含任何密钥、token、网络调用或文件读取。"
+            "你必须严格按照以下已验证可编译运行的 LEAN A股策略模板编写代码。此模板已通过编译和smoke test验证，你的代码必须遵循完全相同的结构模式：\n"
+            + template_section
+            + "以下是关键类型和方法映射：\n"
+            "from AlgorithmImports import *  # 必须在文件开头\n"
+            "class 必须继承 QCAlgorithm\n"
+            "必须实现 def Initialize(self) 和 def OnData(self, slice)\n"
+            "LEAN Python 中没有 RSI，必须使用 RelativeStrengthIndex\n"
+            "AlphaModel 必须实现 update() 和 on_securities_changed()，不要 override on_order_event\n"
+            "IExecutionModel 必须实现 execute() 和 on_securities_changed()\n"
+            "FeeModel.get_order_fee 参数是 OrderFeeParameters\n"
+            "PortfolioConstructionModel.create_targets 参数是 Insight[] 列表\n"
+            "RiskManagementModel.manage_risk 参数是 IPortfolioTarget[] 列表\n"
+            "Insight.Price 签名: Insight.Price(symbol, timedelta, direction, magnitude, confidence, source)\n"
+            "不要使用 SetFeeModel()，在 Initialize 中对每个 Security 设置 security.FeeModel = CustomFeeModel()\n"
+            "不要使用 Symbol.Create() 设置基准，使用 self.SetBenchmark(ticker)\n"
+            "A股必须使用 Market.SSE 或 Market.SZSE，不是 Market.USA\n"
+            "A股必须设置 self.SetAccountCurrency('CNY')\n"
+            "A股ticker不能带交易所后缀！用 '600519' 不是 '600519.SSE'，用 '000001' 不是 '000001.SZSE'。AddEquity的ticker参数只用纯数字代码，市场通过 Market.SSE/SZSE 参数指定\n"
+            "A股市场推断：ticker首位是'6'→Market.SSE（沪市），'0'或'3'→Market.SZSE（深市）。代码：market = Market.SSE if ticker[0] == '6' else Market.SZSE\n"
+            "A股必须使用 AShareStockFeeModel（佣金万三、印花税千一卖出、过户费十万分之十五）\n"
+            "A股必须使用 DelayedSettlementModel(1, timedelta(hours=9)) 实现 T+1\n"
+            "A股最小交易单位100股，使用 AShareStockBuyingPowerModel\n"
+            "A股涨跌停：主板10%、创业板/科创板20%、ST 5%\n"
+            "A股交易时间：9:30-11:30, 13:00-15:00（北京时间）\n"
+            "Universe Selection 使用 self.AddUniverse(coarse_selection_function) 或 self.SetUniverseSelection(model)\n"
+            "不要使用 import requests、import subprocess、open()、pd.read_csv()、pd.read_parquet()\n"
+            "AShareStockBuyingPowerModel() 无构造函数参数，不要传 security 参数\n"
+            "基准设置：使用 self.SetBenchmark(lambda x: 0) 避免基准数据依赖\n"
+            "History DataFrame判空必须用 history.empty，绝对不能用 'if not history'（会触发ValueError）\n"
+            "A股没有基本面数据(FineFundamental)，不要使用 AddUniverse + CoarseFundamental/FineFundamental，改用 AddEquity 或直接 OnData\n"
+            "self.SetAccountCurrency('CNY') 必须在 self.SetCash() 之前调用\n"
         )
         lang_label = "Python"
         code_desc = "full Python source code inheriting from QCAlgorithm"
         lang_constraints = [
             "class_name 必须以 SoloQuantGenerated 开头并以 Algorithm 结尾",
-            "必须实现 def Initialize(self) 和 def OnData(self, data)",
+            "必须实现 def Initialize(self) 和 def OnData(self, slice)",
             "不要使用 import requests、import subprocess、open()、pd.read_csv()、pd.read_parquet()",
+            "必须使用 from AlgorithmImports import *",
+            "A股策略必须设置 self.SetAccountCurrency('CNY')",
+            "A股ticker只用纯数字代码（如'600519'），不能带.SSE/.SZSE后缀。市场通过Market.SSE/SZSE参数指定",
+            "A股市场推断：ticker[0]=='6'→Market.SSE，'0'或'3'→Market.SZSE",
+            "A股策略必须使用 AShareStockFeeModel 而不是自定义 FeeModel",
+            "A股策略必须使用 DelayedSettlementModel(1, timedelta(hours=9)) 实现 T+1",
+            "A股策略必须使用 AShareStockBuyingPowerModel",
+            "不要自定义 FeeModel/FillModel 类，使用已有的 AShareStockFeeModel, AShareStockFillModel",
+            "History DataFrame判空必须用 history.empty，绝对不能用 'if not history'（会触发ValueError）",
+            "self.SetBenchmark(lambda x: 0) 避免基准数据依赖",
         ]
     else:
+        template_section = ""
+        if csharp_template:
+            template_section = (
+                "\n\n=== 已验证可编译运行的 LEAN A股 C# 策略模板（必须模仿此结构）===\n"
+                + csharp_template
+                + "\n=== 模板结束 ===\n\n"
+            )
         system_prompt = (
             "你是 LEAN C# 策略实现工程师。只输出JSON，不要解释。"
             "输出必须是受限的可审计草案，不能包含任何密钥、token、网络调用或文件读取。"
-            "你必须使用正确的 LEAN API 类型和命名空间。以下是必需的 using 指令和关键类型映射：\n"
-            "using QuantConnect.Algorithm.Framework.Alphas;  // AlphaModel, Insight, InsightDirection\n"
-            "using QuantConnect.Algorithm.Framework.Execution;  // IExecutionModel\n"
-            "using QuantConnect.Algorithm.Framework.Portfolio;  // PortfolioConstructionModel, IPortfolioTarget, PortfolioTarget\n"
-            "using QuantConnect.Algorithm.Framework.Risk;  // RiskManagementModel\n"
-            "using QuantConnect.Algorithm.Framework.Selection;  // IUniverseSelectionModel\n"
-            "using QuantConnect.Data.UniverseSelection;  // CoarseFundamental, FineFundamental, SecurityChanges\n"
-            "using QuantConnect.Data.Market;  // TradeBar, QuoteBar\n"
-            "using QuantConnect.Orders.Fees;  // FeeModel, OrderFee, OrderFeeParameters, CashAmount\n"
-            "using QuantConnect.Orders;  // OrderDirection, OrderEvent\n"
-            "using QuantConnect.Indicators;  // RelativeStrengthIndex (不是RSI!), SimpleMovingAverage, BollingerBands, StandardDeviation, Maximum, Minimum, ExponentialMovingAverage\n"
-            "using QuantConnect.Securities;  // Security, Holding\n"
-            "LEAN 中没有 RSI 类，必须使用 RelativeStrengthIndex\n"
-            "AlphaModel 只有两个虚方法: Update() 和 OnSecuritiesChanged()，不要 override OnOrderEvent\n"
-            "IExecutionModel 只有两个方法: Execute() 和 OnSecuritiesChanged()，不要 override OnOrderEvent\n"
-            "FeeModel.GetOrderFee 参数是 OrderFeeParameters（不是 OrderParameters）\n"
-            "PortfolioConstructionModel.CreateTargets 参数是 Insight[]（数组，不是 List 或 IEnumerable）\n"
-            "RiskManagementModel.ManageRisk 参数是 IPortfolioTarget[]（数组，不是 List 或 IEnumerable）\n"
-            "IExecutionModel.Execute 参数是 IPortfolioTarget[]（数组，不是 List 或 IEnumerable）\n"
-            "Insight.Price() 签名: Insight.Price(Symbol, TimeSpan, InsightDirection, double? magnitude, double? confidence, object source)\n"
-            "不要使用 SetFeeModel()，在 Initialize 中对每个 Security 设置 security.FeeModel = new CustomFeeModel()\n"
-            "不要使用 Symbol.Create() 设置基准，使用 SetBenchmark(string ticker)\n"
-            "不要使用 IndexConstituent 枚举，LEAN 基本面数据中没有此类型\n"
-            "不要使用 string.ToInt()，用 int.Parse() 或 Convert.ToInt32()\n"
-            "不要使用 algorithm.Delay()，用 SMA()/EMA() 等指标的窗口期参数\n"
-            "不要使用 EarningRatios.BasicEarningsPerShare，用 fundamental.EarningRatios.BasicEPS.Value\n"
-            "不要使用 class SymbolData 作为类名，改用 SoloQuantSymbolData 避免命名空间冲突\n"
+            "你必须严格按照以下已验证可编译运行的 LEAN A股策略模板编写代码。此模板已通过编译和smoke test验证，你的代码必须遵循完全相同的结构模式：\n"
+            + template_section
+            + "=== 关键约束 ===\n"
+            "不要使用 AddUniverse + CoarseFundamental/FineFundamental（A股没有基本面数据）\n"
+            "不要使用 Framework 模型（AlphaModel, PortfolioConstructionModel, RiskManagementModel, ExecutionModel）\n"
+            "不要使用 Securities.OnSecurityAdded（不存在此 API）\n"
+            "不要使用 SetSecurityInitializer（直接在 AddEquity 后对 Security 设置模型）\n"
+            "不要使用 new AShareStockBuyingPowerModel(security)（无参构造函数）\n"
+            "不要使用 (double)weight 在 PortfolioTarget 中（Quantity 是 decimal）\n"
+            "不要使用 DateTime.Parse(param)（用 DateTime.ParseExact(param, \"yyyyMMdd\", null)）\n"
+            "不要使用 \"000300.SS\" 基准（用 SetBenchmark(_ => 0m)）\n"
+            "不要使用 RSI 类名（LEAN 中是 RelativeStrengthIndex）\n"
+            "不要使用 class SymbolData（改用 SoloQuantSymbolData）\n"
+            "不要使用 string.ToInt()（用 int.Parse()）\n"
+            "不要使用 IndexConstituent 枚举\n"
+            "不要使用 algorithm.Delay()\n"
+            "不要使用 SetFeeModel()（直接设置 security.FeeModel）\n"
+            "PortfolioTarget 构造函数: new PortfolioTarget(symbol, decimalQuantity)\n"
+            "Insight.Price 签名: Insight.Price(Symbol, TimeSpan, InsightDirection, double? magnitude, double? confidence, object source)\n"
         )
         lang_label = "CSharp"
         code_desc = "full C# source code"
         lang_constraints = [
             "class_name 必须以 SoloQuantGenerated 开头并以 Algorithm 结尾",
             "namespace 必须是 QuantConnect.Algorithm.CSharp",
-            "必须包含以下 using 指令：using QuantConnect.Algorithm.Framework.Alphas; using QuantConnect.Algorithm.Framework.Execution; using QuantConnect.Algorithm.Framework.Portfolio; using QuantConnect.Algorithm.Framework.Risk; using QuantConnect.Algorithm.Framework.Selection; using QuantConnect.Data.UniverseSelection; using QuantConnect.Data.Market; using QuantConnect.Orders.Fees; using QuantConnect.Orders; using QuantConnect.Indicators; using QuantConnect.Securities;",
+            "必须包含以下 using 指令：using QuantConnect.Algorithm; using QuantConnect.Data; using QuantConnect.Data.Market; using QuantConnect.Orders.Fees; using QuantConnect.Orders.Fills; using QuantConnect.Orders; using QuantConnect.Indicators; using QuantConnect.Securities;",
+            "必须使用直接 OnData(Slice data) 方式实现交易逻辑，不要使用 Framework 模型（AlphaModel/PortfolioConstructionModel/RiskManagementModel/ExecutionModel）",
+            "必须使用 AddEquity(ticker, Resolution.Daily, Market.SSE/SZSE) 添加标的，ticker只用纯数字代码（如'600519'）不带.SSE/.SZSE后缀，不要使用 AddUniverse + FineFundamental",
+            "必须对每个 Security 设置 A-share 模型：FeeModel=AShareStockFeeModel, FillModel=AShareStockFillModel, BuyingPowerModel=AShareStockBuyingPowerModel(), SettlementModel=DelayedSettlementModel(1, TimeSpan.FromHours(9))（T+1结算）",
+            "SetAccountCurrency(Currencies.CNY) 必须在 SetCash() 之前",
+            "SetBenchmark(_ => 0m) 避免基准数据依赖",
+            "日期参数用 DateTime.ParseExact(param, \"yyyyMMdd\", null)",
+            "AShareStockBuyingPowerModel() 无构造函数参数",
             "不要使用 File.ReadAllText、StreamReader、File.Open、File.ReadAllLines",
-            "不要使用 string.ToInt() 扩展方法，使用 int.Parse() 或 Convert.ToInt32()",
             "不要使用 RSI 类名，LEAN 中是 RelativeStrengthIndex",
-            "不要使用 Symbol.Create() 设置基准，使用 SetBenchmark(string ticker) 或 SetBenchmark(Symbol.Create(ticker, SecurityType.Equity, Market.USA))",
-            "不要使用 SetFeeModel()，在 SetSecurityInitializer 中配置手续费，或对每个 Security 设置 security.FeeModel = new CustomFeeModel()",
-            "不要使用 IndexConstituent 枚举，LEAN 基本面数据中没有此类型",
-            "Insight.Price() 签名是 Insight.Price(Symbol, TimeSpan, InsightDirection, double? magnitude, double? confidence, object source)",
-            "IExecutionModel 必须实现 Execute(), OnSecuritiesChanged() 两个方法（不要 override OnOrderEvent）",
-            "FeeModel.GetOrderFee 参数类型是 OrderFeeParameters 不是 OrderParameters",
-            "PortfolioConstructionModel.CreateTargets 参数类型是 Insight[] 不是 List<Insight> 或 IEnumerable<Insight>",
-            "RiskManagementModel.ManageRisk 参数类型是 IPortfolioTarget[] 不是 List<IPortfolioTarget>",
-            "IExecutionModel.Execute 参数类型是 IPortfolioTarget[] 不是 List<IPortfolioTarget>",
-            "不要使用 class SymbolData 作为类名，改用 SoloQuantSymbolData 避免命名空间冲突",
+            "不要使用 class SymbolData 作为类名，改用 SoloQuantSymbolData",
+            "不要使用 Securities.OnSecurityAdded（不存在此 API）",
+            "不要使用 SetSecurityInitializer（直接在 AddEquity 后设置 Security 属性）",
+            "不要使用 (double)weight 在 PortfolioTarget 中（Quantity 是 decimal）",
+            "仓位计算: targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / security.Price / 100) * 100",
+            "下单: MarketOrder(symbol, delta) 或 Liquidate(symbol)",
+            "风控: 在 OnData 中检查 trailing stop / max drawdown",
         ]
 
     lean_module_constraints = [
-        "必须实现 Universe Selection：通过 AddUniverse 或 SetUniverseSelection 构建股票池",
-        "必须实现 Alpha Model：生成量化信号（动量、均值回归、因子等）",
-        "必须实现 Portfolio Construction：基于信号构建仓位，考虑 T+1 结算约束（A股不能当日买入当日卖出）",
-        "必须实现 Risk Management：包含止损逻辑和最大回撤控制",
-        "必须实现 Execution Model：A股手续费（万分之三）、印花税（千分之一卖出）、最小手数100股",
+        "必须使用 AddEquity(ticker, Resolution.Daily, Market.SSE/SZSE) 添加标的，不要使用 AddUniverse + FineFundamental（A股没有基本面数据）",
+        "必须使用直接 OnData(Slice data) 实现交易逻辑，不要使用 Framework 模型（AlphaModel/PortfolioConstructionModel/RiskManagementModel/ExecutionModel）",
+        "必须对每个 Security 设置 A-share 模型：FeeModel=AShareStockFeeModel, FillModel=AShareStockFillModel, BuyingPowerModel=AShareStockBuyingPowerModel(), SettlementModel=DelayedSettlementModel(1, TimeSpan.FromHours(9))（T+1结算）",
+        "风控：在 OnData 中实现 trailing stop 和 max drawdown 检查",
+        "执行：使用 MarketOrder(symbol, delta) 或 Liquidate(symbol)，仓位按100股取整",
         "不要复用 AShareLlmQuantLeanAlgorithm",
         "不要包含 API key、token、password、secret 或任何真实凭证",
         "不要发起 HTTP 请求，不要删除文件，不要启动进程",
         "优先读取 parameters 中的 universe、start-date、end-date、initial-capital",
         "只输出JSON",
+        "不要自定义 FeeModel/FillModel/BuyingPowerModel 类！使用已有的 A-share 模型：",
+        "  CSharp: security.FeeModel = new AShareStockFeeModel(); security.FillModel = new AShareStockFillModel(); security.BuyingPowerModel = new AShareStockBuyingPowerModel(); security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));",
+        "  Python: security.FeeModel = AShareStockFeeModel(); security.FillModel = AShareStockFillModel(); security.BuyingPowerModel = AShareStockBuyingPowerModel(); security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))",
+        "A股 Universe 示例：AddEquity('600519', Resolution.Daily, Market.SSE) 或 AddEquity('000001', Resolution.Daily, Market.SZSE)，ticker只用纯数字不带.SSE/.SZSE后缀",
+        "A股账户初始化：SetAccountCurrency(Currencies.CNY) 必须在 SetCash() 之前",
+        "基准：SetBenchmark(_ => 0m) 避免基准数据依赖",
+        "日期参数：DateTime.ParseExact(param, \"yyyyMMdd\", null)",
     ]
+
+    # Detect if the source strategy targets a non-A-share market and add conversion instructions
+    source_url = str(reproduction_summary.get("url") or "")
+    source_title = str(reproduction_summary.get("title") or "")
+    source_text = (source_url + " " + source_title).lower()
+    non_ashare_indicators = [
+        "sp500", "s&p", "spy", "qqq", "nasdaq", "nyse", "amex",
+        "us equity", "us stock", "u.s. stock", "us market",
+        "ftse", "nikkei", "dax", "cac", "euro stoxx",
+        "option chain", "options market", "volatility index", "vix",
+        "futures contract", "commodity", "crude oil", "gold futures",
+        "esg factor", "esg score", "esg investing",
+    ]
+    is_non_ashare = any(indicator in source_text for indicator in non_ashare_indicators)
+    if is_non_ashare:
+        lean_module_constraints.extend([
+            "原始策略面向非A股市场，必须转化为A股市场实现：",
+            "将美股标的（SPY/QQQ等）替换为A股对应标的：沪深300成分股、中证500成分股、创业板ETF等",
+            "将US market规则替换为A股规则：T+1结算、涨跌停限制（10%/20%）、最小交易单位100股",
+            "将US手续费替换为A股手续费：佣金万三、印花税千一（卖出）、过户费十万分之十五",
+            "将US基本面数据字段替换为A股可用字段：tushare daily_basic（PE/PB/换手率）、fina_indicator（ROE/营收增长）",
+            "将US期权/期货策略转化为A股对应：期权→50ETF期权/300ETF期权，期货→股指期货IF/IC/IM",
+            "使用 Market.CHINA (MarketCode = 'SHA'/'SZA') 而非 Market.USA",
+            "A股交易时间：9:30-11:30, 13:00-15:00（北京时间），非US交易时间",
+        ])
 
     user_payload: dict = {
         "task": "soloquant_generate_lean_strategy_code",
@@ -3074,6 +3451,128 @@ def postprocess_generated_csharp_code(code: str) -> str:
     code = re.sub(r"SetStartDate\s*\(\s*(\w+(?:\.\w+)*)\s*\)", lambda m: f"SetStartDate(DateTime.Parse({m.group(1)}))" if re.match(r'^[a-zA-Z]', m.group(1)) and "DateTime" not in m.group(1) and "new" not in m.group(1) else m.group(0), code)
     code = re.sub(r"SetEndDate\s*\(\s*(\w+(?:\.\w+)*)\s*\)", lambda m: f"SetEndDate(DateTime.Parse({m.group(1)}))" if re.match(r'^[a-zA-Z]', m.group(1)) and "DateTime" not in m.group(1) and "new" not in m.group(1) else m.group(0), code)
 
+    # Fix: AShareStockBuyingPowerModel(security) → AShareStockBuyingPowerModel() (no constructor args)
+    code = re.sub(r"new\s+AShareStockBuyingPowerModel\s*\([^)]*\)", "new AShareStockBuyingPowerModel()", code)
+
+    # Fix: Securities.OnSecurityAdded → SetSecurityInitializer pattern
+    if "Securities.OnSecurityAdded" in code:
+        code = re.sub(
+            r"Securities\.OnSecurityAdded\s*+=\s*\([^)]*\)\s*=>\s*\{([^}]+)\}",
+            lambda m: "SetSecurityInitializer(security => {\n" + m.group(1).replace("security.", "security.") + "\n});",
+            code,
+        )
+        code = code.replace("Securities.OnSecurityAdded += ", "// Removed: Securities.OnSecurityAdded → SetSecurityInitializer\nSetSecurityInitializer(")
+
+    # Fix: (double) cast on PortfolioTarget quantity → remove cast
+    code = re.sub(r"new\s+PortfolioTarget\s*\(\s*(\w+)\s*,\s*\(double\)\s*(\w+)\s*\)", r"new PortfolioTarget(\1, \2)", code)
+
+    # Fix: benchmark .SS → strip suffix entirely (LEAN uses plain ticker + Market param)
+    code = re.sub(r'"(\d+)\.SS"', r'"\1"', code)
+    code = re.sub(r'"(\d+)\.SSE"', r'"\1"', code)
+    code = re.sub(r'"(\d+)\.SZSE"', r'"\1"', code)
+    code = re.sub(r'"(\d+)\.SZ"', r'"\1"', code)
+
+    # Fix: missing using QuantConnect.Orders.Fills
+    if "AShareStockFillModel" in code and "using QuantConnect.Orders.Fills;" not in code:
+        if "using QuantConnect.Orders.Fees;" in code:
+            code = code.replace("using QuantConnect.Orders.Fees;", "using QuantConnect.Orders.Fees;\nusing QuantConnect.Orders.Fills;")
+
+    # Fix: SetAccountCurrency after SetCash → move SetAccountCurrency before SetCash
+    # This is a common ordering mistake that causes runtime errors
+    set_account_match = re.search(r"SetAccountCurrency\s*\([^)]+\)\s*;\s*\n\s*SetCash\s*\(", code)
+    if not set_account_match:
+        # Check if SetCash comes before SetAccountCurrency
+        set_cash_pos = code.find("SetCash(")
+        set_account_pos = code.find("SetAccountCurrency(")
+        if set_cash_pos > 0 and set_account_pos > 0 and set_cash_pos < set_account_pos:
+            # Swap the order
+            cash_line_match = re.search(r"SetCash\s*\([^)]+\)\s*;", code)
+            account_line_match = re.search(r"SetAccountCurrency\s*\([^)]+\)\s*;", code)
+            if cash_line_match and account_line_match:
+                cash_line = cash_line_match.group(0)
+                account_line = account_line_match.group(0)
+                code = code.replace(cash_line, account_line)
+                code = code.replace(account_line, cash_line)
+
+    # Fix: DateTime.Parse for yyyyMMdd format → DateTime.ParseExact
+    code = re.sub(
+        r"DateTime\.Parse\s*\(\s*GetParameter\s*\(\s*\"([^\"]+)\"\s*\)\s*\)",
+        r"DateTime.ParseExact(GetParameter(\"\\1\"), \"yyyyMMdd\", null)",
+        code,
+    )
+
+    return code
+
+
+def postprocess_generated_python_code(code: str) -> str:
+    """Fix common LEAN API issues in LLM-generated Python code."""
+    # Ensure AlgorithmImports is present
+    if "from AlgorithmImports import" not in code and "AlgorithmImports" not in code:
+        code = "from AlgorithmImports import *\n\n" + code
+
+    # Fix: RSI doesn't exist in LEAN Python, use RelativeStrengthIndex
+    code = re.sub(r"\bRSI\b", "RelativeStrengthIndex", code)
+
+    # Fix: SetFeeModel doesn't exist
+    code = re.sub(r"SetFeeModel\s*\(", "# TODO: use security.FeeModel = ... instead of SetFeeModel(", code)
+
+    # Fix: SetAlphaModel → SetAlpha
+    code = re.sub(r"\bSetAlphaModel\s*\(", "SetAlpha(", code)
+
+    # Fix: SecurityChanges.AddedSecurity → SecurityChanges.AddedSecurities
+    code = re.sub(r"\.AddedSecurity\b", ".AddedSecurities", code)
+    code = re.sub(r"\.RemovedSecurity\b", ".RemovedSecurities", code)
+
+    # Fix: IsReady() → IsReady (property not method)
+    code = re.sub(r"\.IsReady\s*\(\s*\)", ".IsReady", code)
+
+    # Fix: math.Floor → math.floor (Python uses lowercase, C# uses uppercase)
+    code = re.sub(r"math\.Floor\b", "math.floor", code)
+
+    # Fix: DataFrame truth value bug - 'if not history' → 'if history.empty'
+    code = re.sub(r"if\s+not\s+history\s+or\s+['\"]close['\"]\s+not\s+in\s+history\s*:", "if history.empty or 'close' not in history:", code)
+    code = re.sub(r"if\s+not\s+history\s+or\s+history\.empty\s*:", "if history.empty:", code)
+    code = re.sub(r"if\s+not\s+history\s*:", "if history.empty:", code)
+
+    # Fix: import requests / import subprocess / open() — remove these
+    code = re.sub(r"^import requests\s*$", "# REMOVED: import requests (forbidden)", code, flags=re.MULTILINE)
+    code = re.sub(r"^import subprocess\s*$", "# REMOVED: import subprocess (forbidden)", code, flags=re.MULTILINE)
+
+    # Fix: AddEquity without market parameter for A-share
+    # First strip .SSE/.SZSE/.SS/.SZ suffix from ticker, then infer market from first digit
+    code = re.sub(
+        r"self\.AddEquity\s*\(\s*['\"](\d{6})\.(?:SSE|SS)['\"],\s*Resolution\.Daily\s*\)",
+        r"self.AddEquity('\1', Resolution.Daily, Market.SSE)",
+        code,
+    )
+    code = re.sub(
+        r"self\.AddEquity\s*\(\s*['\"](\d{6})\.(?:SZSE|SZ)['\"],\s*Resolution\.Daily\s*\)",
+        r"self.AddEquity('\1', Resolution.Daily, Market.SZSE)",
+        code,
+    )
+    code = re.sub(
+        r"self\.AddEquity\s*\(\s*['\"](\d{6})['\"],\s*Resolution\.Daily\s*\)",
+        r"self.AddEquity('\1', Resolution.Daily, Market.SSE if '\1'[0] == '6' else Market.SZSE)",
+        code,
+    )
+
+    # Fix: SetAccountCurrency to CNY for A-share
+    if "SetAccountCurrency" not in code and ("Market.SSE" in code or "Market.SZSE" in code or "Market.CHINA" in code):
+        # Insert after class definition
+        init_match = re.search(r"(def Initialize\(self\):)", code)
+        if init_match:
+            insert_pos = code.index("\n", init_match.start()) + 1
+            code = code[:insert_pos] + "        self.SetAccountCurrency('CNY')\n" + code[insert_pos:]
+
+    # Fix: AShareStockBuyingPowerModel(security) → AShareStockBuyingPowerModel() (no constructor args)
+    code = re.sub(r"AShareStockBuyingPowerModel\s*\([^)]*\)", "AShareStockBuyingPowerModel()", code)
+
+    # Fix: benchmark .SS → strip suffix entirely (LEAN uses plain ticker + Market param)
+    code = re.sub(r"'(\d+)\.SS'", r"'\1'", code)
+    code = re.sub(r"'(\d+)\.SSE'", r"'\1'", code)
+    code = re.sub(r"'(\d+)\.SZSE'", r"'\1'", code)
+    code = re.sub(r"'(\d+)\.SZ'", r"'\1'", code)
+
     return code
 
 
@@ -3084,7 +3583,7 @@ def compile_validate_generated_code(
     dotnet_binary: str = "/usr/local/dotnet/dotnet",
     fix_client: Callable[[dict], dict | str] | None = None,
     max_retries: int = 2,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
 ) -> dict:
     """Validate generated C# code compiles. If not, retry with LLM-assisted fixes.
 
@@ -3133,7 +3632,7 @@ def compile_validate_generated_code(
                 },
             ],
             "temperature": 0.1,
-            "max_tokens": 8192,
+            "max_tokens": 4096,
         }
         try:
             fix_response = _normalize_generated_strategy_response(fix_client(fix_payload))
@@ -3147,6 +3646,96 @@ def compile_validate_generated_code(
         code_path.write_text(current_code, encoding="utf-8")
 
     return {"success": False, "code": current_code, "attempts": max_retries + 1, "errors": errors}
+
+
+def compile_validate_generated_python_code(
+    code: str,
+    class_name: str,
+    algorithm_root: Path | None = None,
+    fix_client: Callable[[dict], dict | str] | None = None,
+    max_retries: int = 2,
+    model: str = "glm-5.1",
+) -> dict:
+    """Validate generated Python code compiles and can be imported. If not, retry with LLM-assisted fixes."""
+    lean_root = Path(algorithm_root) if algorithm_root else resolve_generated_algorithm_root("Python")
+    strategy_dir = lean_root / safe_slug(class_name, fallback=class_name)
+    strategy_dir.mkdir(parents=True, exist_ok=True)
+    code_path = strategy_dir / f"{class_name}.py"
+    errors: list[str] = []
+    current_code = code
+
+    for attempt in range(1, max_retries + 2):
+        code_path.write_text(current_code, encoding="utf-8")
+        # Step 1: Syntax check via compile()
+        try:
+            compile(current_code, str(code_path), "exec")
+        except SyntaxError as exc:
+            error_msg = f"SyntaxError at line {exc.lineno}: {exc.msg}"
+            errors.append(f"Attempt {attempt}: {error_msg}")
+            if fix_client is None or attempt > max_retries:
+                break
+            current_code = _python_fix_with_llm(current_code, class_name, error_msg, fix_client, model)
+            continue
+
+        # Step 2: AST parse check — verify the file parses as valid Python
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", f"import ast; ast.parse(open(r'{code_path}').read())"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                return {"success": True, "code": current_code, "attempts": attempt, "errors": []}
+            error_msg = result.stderr.strip()[:2000]
+        except Exception as exc:
+            error_msg = str(exc)[:2000]
+
+        errors.append(f"Attempt {attempt}: {error_msg}")
+        if fix_client is None or attempt > max_retries:
+            break
+        current_code = _python_fix_with_llm(current_code, class_name, error_msg, fix_client, model)
+
+    if not code_path.exists() or code_path.read_text(encoding="utf-8").strip() != current_code.strip():
+        code_path.write_text(current_code, encoding="utf-8")
+
+    return {"success": False, "code": current_code, "attempts": max_retries + 1, "errors": errors}
+
+
+def _python_fix_with_llm(
+    code: str, class_name: str, error_msg: str,
+    fix_client: Callable[[dict], dict | str], model: str,
+) -> str:
+    fix_payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是 LEAN Python 策略编译错误修复工程师。只输出修复后的完整 Python 代码，不要解释。"
+                    "必须保留 class 定义和原始类名。必须继承 QCAlgorithm。"
+                    "必须包含 from AlgorithmImports import *"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({
+                    "task": "fix_python_compilation_errors",
+                    "class_name": class_name,
+                    "code": code,
+                    "errors": error_msg[:4000],
+                }, ensure_ascii=False),
+            },
+        ],
+        "temperature": 0.1,
+        "max_tokens": 4096,
+    }
+    try:
+        fix_response = _normalize_generated_strategy_response(fix_client(fix_payload))
+        fixed_code = str(fix_response.get("code") or "")
+        if fixed_code and class_name in fixed_code:
+            return postprocess_generated_python_code(fixed_code)
+    except Exception:
+        pass
+    return code
 
 
 def parse_broken_cs_files(build_stderr: str, generated_root: Path | None = None) -> list[Path]:
@@ -3220,10 +3809,11 @@ def generate_strategy_implementation_package(
     generated_root: str | Path,
     algorithm_root: str | Path | None,
     llm_implementation_client: Callable[[dict], dict | str] | None = None,
-    model: str = "deepseek-v4-pro",
-    max_tokens: int = 8192,
+    model: str = "glm-5.1",
+    max_tokens: int = 4096,
     language: str = "CSharp",
     event_signal_context: dict | None = None,
+    config_or_none: dict | None = None,
 ) -> dict:
     client = llm_implementation_client
     if client is None:
@@ -3261,6 +3851,16 @@ def generate_strategy_implementation_package(
                         "code-file": existing_manifest.get("code_file", ""),
                         "skipped_existing": True,
                     }
+                # Code was previously generated but compile failed (.cs.broken exists)
+                # Clean up stale .cs.broken/.py.broken files before regenerating
+                for broken_file in output_root.glob("*.cs.broken"):
+                    broken_file.unlink(missing_ok=True)
+                for broken_file in output_root.glob("*.py.broken"):
+                    broken_file.unlink(missing_ok=True)
+                for broken_file in output_root.glob("*.cs.smoke-failed"):
+                    broken_file.unlink(missing_ok=True)
+                for broken_file in output_root.glob("*.py.smoke-failed"):
+                    broken_file.unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -3298,9 +3898,37 @@ def generate_strategy_implementation_package(
     manifest_path = output_root / "manifest.json"
     code_path.write_text(code, encoding="utf-8")
 
-    # Note: compile_validate_generated_code is available but not called here because
-    # the LLM-assisted fix retries are too slow for the pipeline timeout.
-    # The pipeline's compile_strategies step handles broken files by removing them.
+    # Compile-validate-retry: if code fails to compile, send errors back to LLM for fix
+    compile_result = None
+    if not is_python:
+        compile_result = compile_validate_generated_code(
+            code,
+            class_name,
+            algorithm_root=lean_algorithm_root,
+            dotnet_binary=str((config_or_none or {}).get("lean", {}).get("dotnet-binary") or "/usr/local/dotnet/dotnet") if config_or_none else "/usr/local/dotnet/dotnet",
+            fix_client=llm_implementation_client,
+            max_retries=2,
+            model=model,
+        )
+        if compile_result.get("success"):
+            code = compile_result["code"]
+            code_path.write_text(code, encoding="utf-8")
+        else:
+            # Compile failed after retries — mark as broken
+            broken_path = code_path.with_suffix(".cs.broken")
+            code_path.rename(broken_path)
+    else:
+        # Python: validate by attempting to compile the source
+        compile_result = compile_validate_generated_python_code(
+            code, class_name, algorithm_root=lean_algorithm_root,
+            fix_client=llm_implementation_client, max_retries=2, model=model,
+        )
+        if compile_result.get("success"):
+            code = compile_result["code"]
+            code_path.write_text(code, encoding="utf-8")
+        else:
+            broken_path = code_path.with_suffix(".py.broken")
+            code_path.rename(broken_path)
 
     manifest = {
         "strategy_id": strategy_id,
@@ -3315,11 +3943,34 @@ def generate_strategy_implementation_package(
         "data_requirements": response.get("data_requirements") if isinstance(response.get("data_requirements"), list) else [],
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    # Fast-implementation rule: unless >80% of data requirements are missing from
+    # tushare_data and open sources, the strategy should proceed to implementation.
+    # Check data availability and block only when coverage is critically low.
+    data_reqs = manifest.get("data_requirements") or []
+    if data_reqs and config_or_none:
+        field_mapping_path = (config_or_none.get("data") or {}).get("field-mapping-path")
+        missing_log_path = config_or_none.get("missing-data-log")
+        if field_mapping_path and missing_log_path:
+            resolved = resolve_data_requirements(data_reqs, field_mapping_path, missing_log_path)
+            available_count = len(resolved.get("available") or [])
+            supplemented_count = len(resolved.get("supplemented") or [])
+            missing_count = len(resolved.get("missing") or [])
+            total = available_count + supplemented_count + missing_count
+            if total > 0:
+                coverage = (available_count + supplemented_count) / total
+                manifest["data_coverage"] = round(coverage, 3)
+                if coverage < 0.20:  # <20% available means >80% missing → block
+                    manifest["blocked_reason"] = f"data_coverage={coverage:.1%} < 20% threshold (>80% missing from tushare/open sources)"
+                    broken_path = code_path.with_suffix(code_path.suffix + ".broken")
+                    if code_path.exists():
+                        code_path.rename(broken_path)
+                    manifest["algorithm_file"] = str(broken_path)
+                    manifest["code_file"] = str(broken_path)
     validate_no_inline_service_secrets(manifest)
     validate_no_secret_values(json.dumps(manifest, ensure_ascii=False), "generated_strategy.manifest")
     write_json_payload(audit_root / "manifest.json", manifest)
     write_json_payload(manifest_path, manifest)
-    return {
+    result = {
         "strategy-id": strategy_id,
         "class-name": class_name,
         "root": str(audit_root),
@@ -3328,6 +3979,12 @@ def generate_strategy_implementation_package(
         "algorithm-manifest-file": str(manifest_path),
         "code-file": str(code_path),
     }
+    if compile_result:
+        result["compile_success"] = compile_result.get("success", False)
+        result["compile_attempts"] = compile_result.get("attempts", 0)
+        if compile_result.get("errors"):
+            result["compile_errors"] = compile_result["errors"]
+    return result
 
 
 def generate_strategy_implementations(
@@ -3336,14 +3993,17 @@ def generate_strategy_implementations(
     algorithm_root: str | Path | None,
     llm_implementation_client: Callable[[dict], dict | str],
     run_date: str | None = None,
-    model: str = "deepseek-v4-pro",
+    model: str = "glm-5.1",
     max_items: int | None = None,
-    max_tokens: int = 8192,
+    max_tokens: int = 4096,
     language: str = "CSharp",
+    config_or_none: dict | None = None,
 ) -> dict:
     packages: list[dict] = []
     skipped_count = 0
     error_count = 0
+    compile_success_count = 0
+    compile_fail_count = 0
     for path in iter_reproduction_summary_files(artifact_root, run_date=run_date):
         if max_items is not None and len(packages) >= max(0, int(max_items)):
             break
@@ -3356,6 +4016,7 @@ def generate_strategy_implementations(
                 model=model,
                 max_tokens=max_tokens,
                 language=language,
+                config_or_none=config_or_none,
             )
         except Exception:
             error_count += 1
@@ -3364,10 +4025,16 @@ def generate_strategy_implementations(
             skipped_count += 1
         else:
             packages.append(package)
+            if package.get("compile_success"):
+                compile_success_count += 1
+            else:
+                compile_fail_count += 1
     return {
         "status": "ok",
         "run_date": str(run_date or utc_run_date()).replace("-", ""),
         "reproduced_count": len(packages),
+        "compile_success_count": compile_success_count,
+        "compile_fail_count": compile_fail_count,
         "skipped_count": skipped_count,
         "error_count": error_count,
         "packages": packages,
@@ -3378,13 +4045,10 @@ def iter_reproduction_summary_files(artifact_root: str | Path, run_date: str | N
     root = Path(artifact_root) / "reproduction" / "strategy"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
-    for path in sorted(root.glob("*/*.json")):
+    for path in sorted(root.glob("*.json")):
         if path.name == "index.json":
-            continue
-        if date_filter and path.parent.name != date_filter:
             continue
         # Deduplicate by URL/title to avoid generating code for the same paper multiple times
         try:
@@ -3783,10 +4447,7 @@ def iter_screened_artifact_files(artifact_root: str | Path, run_date: str | None
     root = Path(artifact_root) / "screened"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
-    for path in sorted(root.glob("*/*/valuable-items.json")):
-        if date_filter and path.parent.name != date_filter:
-            continue
+    for path in sorted(root.glob("*/valuable-items.json")):
         yield path
 
 
@@ -3825,8 +4486,8 @@ def collect_research_artifact_influx_lines(
     lines: list[str] = []
     for path in iter_screened_artifact_files(artifact_root, run_date=run_date):
         payload = load_json_payload(path)
-        category = normalize_category(payload.get("category") or path.parent.parent.name)
-        artifact_run_date = payload.get("run_date") or path.parent.name
+        category = normalize_category(payload.get("category") or path.parent.name)
+        artifact_run_date = payload.get("run_date") or ""
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
         for item in items:
             if isinstance(item, dict):
@@ -3838,10 +4499,7 @@ def iter_finance_event_graph_files(artifact_root: str | Path, run_date: str | No
     root = Path(artifact_root) / "event-graph" / "finance_intelligence"
     if not root.exists():
         return
-    date_filter = str(run_date).replace("-", "") if run_date else None
-    for path in sorted(root.glob("*/graph.json")):
-        if date_filter and path.parent.name != date_filter:
-            continue
+    for path in sorted(root.glob("graph.json")):
         yield path
 
 
@@ -4234,6 +4892,92 @@ def optimize_strategy_versions(
     }
 
 
+def smoke_test_generated_strategies(
+    config: dict,
+    runner: Callable[[Sequence[str], Path], int | tuple[int, object]] = default_subprocess_runner,
+) -> dict:
+    """Run a minimal 1-day backtest for each compiled generated strategy to verify it doesn't crash."""
+    dotnet_binary = str((config.get("lean") or {}).get("dotnet-binary") or "/usr/local/dotnet/dotnet")
+    passed: list[dict] = []
+    failed: list[dict] = []
+    skipped: list[dict] = []
+
+    for manifest_path in iter_generated_strategy_manifest_files():
+        try:
+            manifest = load_json_payload(manifest_path)
+        except Exception:
+            continue
+        class_name = str(manifest.get("class_name") or manifest.get("class-name") or "").strip()
+        algorithm_language = str(manifest.get("algorithm_language") or "CSharp").strip()
+        strategy_id = str(manifest.get("strategy_id") or manifest.get("strategy-id") or manifest_path.parent.name).strip()
+        is_python = algorithm_language.lower() in {"python", "py"}
+
+        # Check that the code file exists (not .broken)
+        code_file = str(manifest.get("code_file") or manifest.get("algorithm_file") or "")
+        if not code_file or not Path(code_file).exists():
+            # Check for .broken variant
+            ext = ".py" if is_python else ".cs"
+            broken_file = Path(code_file).with_suffix(f"{ext}.broken") if code_file else None
+            if broken_file and broken_file.exists():
+                skipped.append({"strategy_id": strategy_id, "class_name": class_name, "reason": "compile_failed"})
+            else:
+                skipped.append({"strategy_id": strategy_id, "class_name": class_name, "reason": "code_file_missing"})
+            continue
+
+        # Build a minimal 1-day backtest config
+        smoke_dir = manifest_path.parent / "smoke-test"
+        smoke_dir.mkdir(parents=True, exist_ok=True)
+        parameters = {
+            "universe": "000001.SZ,600000.SH",
+            "initial-capital": "100000",
+            "summary-file": str(smoke_dir / "summary.json"),
+        }
+        smoke_config = _base_lean_config(
+            class_name,
+            "backtesting",
+            start_date="20250102",
+            end_date="20250103",
+            parameters=parameters,
+            language=algorithm_language,
+        )
+        if is_python:
+            smoke_config["algorithm-language"] = "Python"
+            smoke_config["algorithm-location"] = code_file
+        # Disable influxdb for smoke test
+        smoke_config["influxdb-enabled"] = False
+        smoke_config_path = smoke_dir / "config-smoke.json"
+        write_json_payload(smoke_config_path, smoke_config)
+
+        command, cwd = build_lean_launcher_command(smoke_config_path, dotnet_binary=dotnet_binary)
+        try:
+            run_result = runner(command, cwd)
+            returncode = run_result[0] if isinstance(run_result, tuple) else int(run_result)
+        except Exception as exc:
+            failed.append({"strategy_id": strategy_id, "class_name": class_name, "returncode": -1, "error": str(exc)[:500]})
+            continue
+
+        if returncode == 0:
+            passed.append({"strategy_id": strategy_id, "class_name": class_name, "language": algorithm_language})
+        else:
+            # Mark as smoke-failed: rename code file to .smoke-failed
+            code_path = Path(code_file)
+            if code_path.exists():
+                ext = ".py" if is_python else ".cs"
+                smoke_failed_path = code_path.with_suffix(f"{ext}.smoke-failed")
+                code_path.rename(smoke_failed_path)
+            failed.append({"strategy_id": strategy_id, "class_name": class_name, "language": algorithm_language, "returncode": returncode})
+
+    return {
+        "status": "ok",
+        "passed_count": len(passed),
+        "failed_count": len(failed),
+        "skipped_count": len(skipped),
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
 def collect_strategy_progress_lines(config: dict) -> list[str]:
     """Collect per-strategy pipeline progress as InfluxDB line protocol lines."""
     artifact_root = Path(config.get("artifact-root", "Results/soloquant/artifacts"))
@@ -4353,6 +5097,20 @@ def collect_strategy_progress_lines(config: dict) -> list[str]:
     return lines
 
 
+def _latest_mtime_iso(paths: list[Path]) -> str:
+    """Return ISO-8601 UTC timestamp of the most recently modified file, or empty string."""
+    mtimes = []
+    for p in paths:
+        if p.exists():
+            try:
+                mtimes.append(p.stat().st_mtime)
+            except OSError:
+                pass
+    if not mtimes:
+        return ""
+    return datetime.fromtimestamp(max(mtimes), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def collect_pipeline_funnel_lines(config: dict) -> list[str]:
     """Collect pipeline funnel aggregate counts as InfluxDB line protocol lines."""
     artifact_root = Path(config.get("artifact-root", "Results/soloquant/artifacts"))
@@ -4360,28 +5118,59 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
     timestamp_ns = int(datetime.now(timezone.utc).timestamp() * 1_000_000_000)
     measurement = "soloquant_pipeline_funnel"
 
-    crawled_count = 0
+    crawled_urls: set[str] = set()
+    crawled_index_paths: list[Path] = []
     for crawl_category in ("strategy", "finance_intelligence"):
         crawled_dir = artifact_root / "crawled" / crawl_category
-        if crawled_dir.exists():
-            for index_path in sorted(crawled_dir.glob("*/index.json")):
-                try:
-                    index = load_json_payload(index_path)
-                    crawled_count += int(index.get("count") or 0)
-                except Exception:
-                    pass
-
-    summarized_count = 0
-    repro_dir = artifact_root / "reproduction" / "strategy"
-    if repro_dir.exists():
-        for index_path in sorted(repro_dir.glob("*/index.json")):
+        index_path = crawled_dir / "index.json"
+        crawled_index_paths.append(index_path)
+        if index_path.exists():
             try:
                 index = load_json_payload(index_path)
-                summarized_count += int(index.get("count") or 0)
+                for item in (index.get("items") or []):
+                    url = str(item.get("url") or "").strip()
+                    if url:
+                        crawled_urls.add(url)
             except Exception:
                 pass
+    crawled_count = len(crawled_urls)
+    crawled_last_updated = _latest_mtime_iso(crawled_index_paths)
 
-    reproduced_count = sum(1 for _ in iter_generated_strategy_manifest_files())
+    summarized_urls: set[str] = set()
+    repro_dir = artifact_root / "reproduction" / "strategy"
+    repro_index = repro_dir / "index.json"
+    if repro_index.exists():
+        try:
+            index = load_json_payload(repro_index)
+            for item in (index.get("items") or []):
+                url = str(item.get("url") or "").strip()
+                if url:
+                    summarized_urls.add(url)
+        except Exception:
+            pass
+    summarized_count = len(summarized_urls)
+    summarized_last_updated = _latest_mtime_iso([repro_index])
+
+    def _is_reproduced_strategy(manifest_path: str) -> bool:
+        """Check if a strategy has valid (non-broken, non-smoke-failed) code."""
+        try:
+            manifest = load_json_payload(Path(manifest_path))
+            code_file = str(manifest.get("code_file") or manifest.get("algorithm_file") or "")
+            if not code_file:
+                return False
+            path = Path(code_file)
+            if not path.exists():
+                return False
+            name = path.name
+            if name.endswith(".broken") or name.endswith(".smoke-failed"):
+                return False
+            return True
+        except Exception:
+            return False
+
+    manifest_files = list(iter_generated_strategy_manifest_files())
+    reproduced_count = sum(1 for m in manifest_files if _is_reproduced_strategy(m))
+    reproduced_last_updated = _latest_mtime_iso([Path(f) for f in manifest_files]) if manifest_files else ""
 
     registry_strategies: list[dict] = []
     if registry_path.exists():
@@ -4393,6 +5182,25 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
     serving_count = sum(1 for s in registry_strategies if str(s.get("status")) == "serving")
     retired_count = sum(1 for s in registry_strategies if str(s.get("status")) == "retired")
 
+    # Derive last-updated timestamps from registry strategy fields
+    backtested_last_updated = _latest_mtime_iso([registry_path])
+    live_paper_last_updated = ""
+    serving_last_updated = ""
+    retired_last_updated = ""
+    for s in registry_strategies:
+        if safe_float(s.get("live_score"), None) is not None:
+            t = str(s.get("lifecycle_updated_at_utc") or "")
+            if t and (not live_paper_last_updated or t > live_paper_last_updated):
+                live_paper_last_updated = t
+        if str(s.get("status")) == "serving":
+            t = str(s.get("serving_since_utc") or s.get("lifecycle_updated_at_utc") or "")
+            if t and (not serving_last_updated or t > serving_last_updated):
+                serving_last_updated = t
+        if str(s.get("status")) == "retired":
+            t = str(s.get("retired_at_utc") or s.get("lifecycle_updated_at_utc") or "")
+            if t and (not retired_last_updated or t > retired_last_updated):
+                retired_last_updated = t
+
     fields = {
         "crawled_count": format_influx_field_value(crawled_count),
         "summarized_count": format_influx_field_value(summarized_count),
@@ -4402,8 +5210,43 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
         "serving_count": format_influx_field_value(serving_count),
         "retired_count": format_influx_field_value(retired_count),
     }
+    # Add last-updated timestamps as string fields (not tags — InfluxQL SELECT works on fields only)
+    if crawled_last_updated:
+        fields["crawled_last_updated"] = f'"{crawled_last_updated}"'
+    if summarized_last_updated:
+        fields["summarized_last_updated"] = f'"{summarized_last_updated}"'
+    if reproduced_last_updated:
+        fields["reproduced_last_updated"] = f'"{reproduced_last_updated}"'
+    if backtested_last_updated:
+        fields["backtested_last_updated"] = f'"{backtested_last_updated}"'
+    if live_paper_last_updated:
+        fields["live_paper_last_updated"] = f'"{live_paper_last_updated}"'
+    if serving_last_updated:
+        fields["serving_last_updated"] = f'"{serving_last_updated}"'
+    if retired_last_updated:
+        fields["retired_last_updated"] = f'"{retired_last_updated}"'
+
     field_str = ",".join(f"{k}={v}" for k, v in fields.items())
-    return [f"{measurement} {field_str} {timestamp_ns}"]
+    # Per-stage rows for Grafana table display (7 rows x 3 columns: stage, count, last_updated)
+    stage_measurement = "soloquant_pipeline_funnel_stages"
+    stage_rows = [
+        ("已爬取", crawled_count, crawled_last_updated),
+        ("已提炼", summarized_count, summarized_last_updated),
+        ("已复现", reproduced_count, reproduced_last_updated),
+        ("已回测", backtested_count, backtested_last_updated),
+        ("Live Paper", live_paper_count, live_paper_last_updated),
+        ("服役中", serving_count, serving_last_updated),
+        ("已除役", retired_count, retired_last_updated),
+    ]
+    stage_lines = []
+    for stage_name, count, last_updated in stage_rows:
+        stage_fields = f"count={count}"
+        if last_updated:
+            stage_fields += f',last_updated="{last_updated}"'
+        escaped_stage = stage_name.replace(" ", r"\ ")
+        stage_lines.append(f'{stage_measurement},stage={escaped_stage} {stage_fields} {timestamp_ns}')
+
+    return [f"{measurement} {field_str} {timestamp_ns}"] + stage_lines
 
 
 def export_strategy_pipeline_progress(
@@ -4448,6 +5291,7 @@ def iter_strategy_manifest_files(strategy_root: str | Path):
 def optimize_strategy_packages(
     config: dict,
     runner: Callable[[Sequence[str], Path], int | tuple[int, object]] = default_subprocess_runner,
+    max_items: int | None = None,
 ) -> dict:
     strategy_root = config.get("strategy-root")
     if not strategy_root:
@@ -4459,15 +5303,20 @@ def optimize_strategy_packages(
     policy = config.get("strategy-policy") if isinstance(config.get("strategy-policy"), dict) else {}
     min_versions = max(3, safe_int(policy.get("min-versions"), 3))
     results: list[dict] = []
+    processed = 0
 
     for manifest_path in iter_strategy_manifest_files(strategy_root):
+        if max_items is not None and processed >= max(0, int(max_items)):
+            break
         manifest = load_json_payload(manifest_path)
         strategy_id = str(manifest.get("strategy-id") or manifest.get("strategy_id") or manifest_path.parent.name).strip()
         variants = manifest.get("variants") if isinstance(manifest.get("variants"), list) else []
         if len(variants) < min_versions:
-            raise ValueError(f"strategy {strategy_id} requires at least {min_versions} variants before optimization")
+            continue
 
+        # Skip strategies where all variants already have backtest summaries
         normalized_variants: list[dict] = []
+        all_have_summary = True
         for variant in variants:
             if not isinstance(variant, dict):
                 continue
@@ -4478,23 +5327,30 @@ def optimize_strategy_packages(
                     if not resolved.is_absolute():
                         resolved = (manifest_path.parent / resolved).resolve()
                     row[path_key] = str(resolved)
+            # Check if summary already exists for this variant
+            bt_config_path = Path(row.get("backtest-config") or "")
+            summary_path = bt_config_path.parent / "summary.json"
+            if not summary_path.exists():
+                all_have_summary = False
             normalized_variants.append(row)
+        if all_have_summary and normalized_variants:
+            continue
 
         optimization_result = optimize_strategy_versions(normalized_variants, runner=runner)
         best_version = optimization_result.get("best_version")
         best_variant = next((item for item in normalized_variants if str(item.get("version") or item.get("name")) == str(best_version)), None)
         live_config_path = (best_variant or {}).get("live-paper-config") or manifest.get("live-paper-config")
         if not live_config_path and not best_version:
-            # All variants failed backtest; skip this strategy
             results.append({
                 "strategy_id": strategy_id,
                 "manifest": str(manifest_path),
                 **optimization_result,
                 "status": "all_backtests_failed",
             })
+            processed += 1
             continue
         if not live_config_path:
-            raise ValueError(f"strategy {strategy_id} best variant has no live-paper-config")
+            continue
 
         update_strategy_registry(registry_file, strategy_id, optimization_result, live_config_path=live_config_path)
         results.append(
@@ -4505,6 +5361,7 @@ def optimize_strategy_packages(
                 "live-paper-config": str(live_config_path),
             }
         )
+        processed += 1
 
     return {
         "status": "ok",
@@ -4569,7 +5426,9 @@ def main() -> int:
     parser.add_argument("--language", choices=["CSharp", "Python"], default=None, help="Algorithm language for generated strategies (default: from config or CSharp)")
     parser.add_argument("--max-content-chars", type=int, default=0, help="0 means send full crawled content to GLM")
     parser.add_argument("--llm-max-tokens", type=int, default=0, help="0 means do not set an output token cap")
+    parser.add_argument("--ingest-local-strategies", action="store_true")
     parser.add_argument("--optimize-strategies", action="store_true")
+    parser.add_argument("--smoke-test-strategies", action="store_true")
     parser.add_argument("--run-live-paper", action="store_true")
     parser.add_argument("--strategy-id")
     parser.add_argument("--export-research-influx", action="store_true")
@@ -4587,6 +5446,11 @@ def main() -> int:
         return 0
 
     config = load_config(args.config)
+    if args.ingest_local_strategies:
+        local_dir = Path(config["workflow-root"]) / "local-strategies"
+        report = ingest_local_strategies(local_dir, config["artifact-root"], run_date=args.run_date)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
     if args.build_query_plan:
         print(json.dumps(build_research_query_plan(args.keyword), ensure_ascii=False, indent=2))
         return 0
@@ -4623,19 +5487,38 @@ def main() -> int:
 
     if args.generate_strategy_implementations:
         lang = args.language or str((config.get("strategy-policy") or {}).get("language") or "CSharp")
-        client = create_http_client_from_config(config)
-        report = generate_strategy_implementations(
-            artifact_root=config["artifact-root"],
-            generated_root=args.generated_root or (Path(config["workflow-root"]) / "generated-code"),
-            algorithm_root=resolve_generated_algorithm_root(lang),
-            llm_implementation_client=client.summarize_with_llm,
-            run_date=args.run_date,
-            model=config["llm"].get("model", "deepseek-v4-pro"),
-            max_items=args.max_items,
-            max_tokens=args.llm_max_tokens or 8192,
-            language=lang,
-        )
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        _raw_langs = (config.get("strategy-policy") or {}).get("languages")
+        if isinstance(_raw_langs, list) and _raw_langs:
+            languages = [str(l).strip() for l in _raw_langs if str(l).strip()]
+        elif args.language is None:
+            languages = str((config.get("strategy-policy") or {}).get("language") or "CSharp").split(",")
+            languages = [l.strip() for l in languages if l.strip()]
+        else:
+            languages = [lang]
+        # Use code-generation-llm (GLM 5.1) for strategy code, fallback to default llm
+        code_gen_llm = config.get("code-generation-llm") or config.get("llm") or {}
+        client = create_http_client_from_config(config, use_code_generation_llm=True)
+        code_gen_model = code_gen_llm.get("model", "glm-5.1")
+        combined_report: dict = {"status": "ok", "languages": [], "packages": []}
+        for lang_item in languages:
+            lang_item = lang_item.strip()
+            if not lang_item:
+                continue
+            report = generate_strategy_implementations(
+                artifact_root=config["artifact-root"],
+                generated_root=args.generated_root or (Path(config["workflow-root"]) / "generated-code"),
+                algorithm_root=resolve_generated_algorithm_root(lang_item),
+                llm_implementation_client=client.summarize_with_llm,
+                run_date=args.run_date,
+                model=code_gen_model,
+                max_items=args.max_items,
+                max_tokens=args.llm_max_tokens or 4096,
+                language=lang_item,
+                config_or_none=config,
+            )
+            combined_report["languages"].append({"language": lang_item, "report": report})
+            combined_report["packages"].extend(report.get("packages", []))
+        print(json.dumps(combined_report, ensure_ascii=False, indent=2))
         return 0
 
     if args.build_job_specs:
@@ -4643,7 +5526,12 @@ def main() -> int:
         return 0
 
     if args.optimize_strategies:
-        report = optimize_strategy_packages(config)
+        report = optimize_strategy_packages(config, max_items=args.max_items)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.smoke_test_strategies:
+        report = smoke_test_generated_strategies(config)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
 
@@ -4724,12 +5612,7 @@ def main() -> int:
 
     if args.build_event_signal_context:
         graph_dir = Path(config["artifact-root"]) / "event-graph" / "finance_intelligence"
-        date_str = str(args.run_date or utc_run_date()).replace("-", "")
-        graph_path = graph_dir / date_str / "graph.json"
-        if not graph_path.exists():
-            # Try latest available date
-            available = sorted(graph_dir.glob("*/graph.json")) if graph_dir.exists() else []
-            graph_path = available[-1] if available else graph_path
+        graph_path = graph_dir / "graph.json"
         graph = load_json_payload(graph_path) if graph_path.exists() else {"nodes": [], "edges": []}
         report = build_event_signal_context(graph, artifact_root=config["artifact-root"], run_date=args.run_date)
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -4759,6 +5642,74 @@ def main() -> int:
 
     print(json.dumps(config, ensure_ascii=False, indent=2))
     return 0
+
+
+def migrate_date_dirs_to_flat(artifact_root: str | Path) -> dict:
+    """One-time migration: move files from date-based subdirectories to flat structure."""
+    root = Path(artifact_root)
+    moved = 0
+    merged_indexes = 0
+    cleaned = 0
+
+    # Patterns: {parent_glob} contains 8-digit date directories
+    date_dir_patterns = [
+        ("crawled/strategy", "strategy"),
+        ("crawled/finance_intelligence", "finance_intelligence"),
+        ("screened/strategy", "strategy"),
+        ("screened/finance_intelligence", "finance_intelligence"),
+        ("reproduction/strategy", "strategy"),
+        ("intelligence-analysis/finance_intelligence", "finance_intelligence"),
+        ("event-graph/finance_intelligence", "finance_intelligence"),
+        ("event-signals", "event-signals"),
+        ("pdf/strategy", "strategy"),
+    ]
+
+    for rel_path, label in date_dir_patterns:
+        parent = root / rel_path
+        if not parent.exists():
+            continue
+        for date_dir in sorted(parent.iterdir()):
+            if not date_dir.is_dir():
+                continue
+            if not (date_dir.name.isdigit() and len(date_dir.name) == 8):
+                continue
+            # Move files from date dir to parent
+            for f in date_dir.iterdir():
+                dest = parent / f.name
+                if f.name == "index.json":
+                    # Merge index items
+                    src_items = []
+                    try:
+                        src_data = load_json_payload(f)
+                        src_items = src_data.get("items") or []
+                    except Exception:
+                        pass
+                    if dest.exists():
+                        try:
+                            dst_data = load_json_payload(dest)
+                            dst_items = dst_data.get("items") or []
+                            dst_urls = {str(r.get("url") or "").strip() for r in dst_items}
+                            merged = dst_items + [r for r in src_items if str(r.get("url") or "").strip() not in dst_urls]
+                            write_json_payload(dest, {"category": dst_data.get("category", ""), "count": len(merged), "items": merged})
+                            merged_indexes += 1
+                        except Exception:
+                            f.rename(dest)
+                            moved += 1
+                    else:
+                        f.rename(dest)
+                        moved += 1
+                elif not dest.exists():
+                    f.rename(dest)
+                    moved += 1
+            # Remove empty date dir
+            try:
+                if date_dir.exists() and not any(date_dir.iterdir()):
+                    date_dir.rmdir()
+                    cleaned += 1
+            except Exception:
+                pass
+
+    return {"moved": moved, "merged_indexes": merged_indexes, "cleaned": cleaned}
 
 
 if __name__ == "__main__":
