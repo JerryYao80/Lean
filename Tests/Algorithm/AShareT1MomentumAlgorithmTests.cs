@@ -39,5 +39,13 @@ namespace QuantConnect.Tests.Algorithm
             Assert.IsTrue(AShareT1MomentumAlgorithm.ShouldExit(-0.02m, 0.0m, 1));
             Assert.IsFalse(AShareT1MomentumAlgorithm.ShouldExit(0.01m, 0.0m, 2));
         }
+
+        [Test]
+        public void SelectAdvisoryPriceUsesLastVisibleHistoryClose()
+        {
+            var price = AShareT1MomentumAlgorithm.SelectAdvisoryPrice(new List<decimal> { 10m, 10.5m, 11m }, 99m);
+
+            Assert.AreEqual(11m, price);
+        }
     }
 }

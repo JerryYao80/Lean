@@ -23,18 +23,6 @@
   ],
   "panels": [
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "id": 100,
-      "title": "管道漏斗",
-      "type": "row"
-    },
-    {
       "datasource": {
         "type": "influxdb",
         "uid": "lean-influxdb"
@@ -54,7 +42,9 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -74,10 +64,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "已爬取",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -89,7 +79,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "已爬取",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -111,7 +103,9 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -131,10 +125,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "已提炼",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -146,7 +140,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "已提炼",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -168,7 +164,9 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -188,10 +186,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "已复现",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -203,7 +201,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "已复现",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -225,13 +225,15 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
+        "w": 3,
         "x": 9,
         "y": 1
       },
@@ -245,10 +247,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "已回测",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -260,7 +262,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "已回测",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -282,14 +286,16 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 13,
+        "w": 3,
+        "x": 12,
         "y": 1
       },
       "id": 5,
@@ -302,10 +308,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "Live Paper",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -317,7 +323,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "Live Paper",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -339,14 +347,16 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 17,
+        "w": 3,
+        "x": 15,
         "y": 1
       },
       "id": 6,
@@ -359,10 +369,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "运行中",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -374,7 +384,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "服役中",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -396,14 +408,16 @@
                 "value": null
               }
             ]
-          }
+          },
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
       "gridPos": {
         "h": 3,
         "w": 3,
-        "x": 21,
+        "x": 18,
         "y": 1
       },
       "id": 7,
@@ -416,10 +430,10 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "textMode": "value",
+        "wideLayout": true
       },
-      "title": "已下架",
-      "type": "stat",
       "targets": [
         {
           "datasource": {
@@ -431,7 +445,9 @@
           "queryType": "influxql",
           "rawQuery": true
         }
-      ]
+      ],
+      "title": "已除役",
+      "type": "stat"
     },
     {
       "collapsed": false,
@@ -439,7 +455,19 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 4
+        "y": 0
+      },
+      "id": 100,
+      "title": "管道漏斗",
+      "type": "row"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
       },
       "id": 101,
       "title": "策略列表",
@@ -508,12 +536,12 @@
                         "index": 3
                       },
                       "serving": {
-                        "text": "运行中",
+                        "text": "服役中",
                         "color": "green",
                         "index": 4
                       },
                       "retired": {
-                        "text": "已下架",
+                        "text": "已除役",
                         "color": "red",
                         "index": 5
                       }
@@ -831,7 +859,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 26
       },
       "id": 10,
       "options": {
@@ -870,7 +898,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 38
       },
       "id": 102,
       "title": "策略版本回测结果",
@@ -979,7 +1007,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 39
       },
       "id": 20,
       "options": {
@@ -1013,7 +1041,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 47
       },
       "id": 103,
       "title": "策略收益趋势",
@@ -1045,7 +1073,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 48
       },
       "id": 30,
       "options": {
@@ -1084,7 +1112,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 56
       },
       "id": 104,
       "title": "管道漏斗趋势",
@@ -1115,7 +1143,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 57
       },
       "id": 40,
       "options": {

@@ -130,6 +130,9 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
             report_path = root / "live_bridge_report.json"
             snapshot_path = root / "live_price_snapshot.json"
             archive_root = root / "daily_quote_archive"
+            shared_snapshot_path = root / "shared_live_price_snapshot.json"
+            shared_report_path = root / "shared_live_market_report.json"
+            shared_archive_root = root / "shared_daily_quote_archive"
 
             self.write_parquet(tushare_root / "stock_basic" / "data.parquet", [
                 {"ts_code": "600000.SH", "name": "浦发银行", "list_status": "L", "market": "主板", "list_date": "19991110"},
@@ -162,7 +165,7 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
             class FakeQuoteClient:
                 def fetch_quotes(self, ts_codes, trade_date=None):
                     requested = set(ts_codes)
-                    assert requested == {"600000.SH", "000001.SZ"}
+                    assert requested == {"600000.SH", "000001.SZ", "300750.SZ"}
                     return pd.DataFrame([
                         {
                             "ts_code": "600000.SH",
@@ -196,6 +199,9 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
                 "live-factor-report-file": str(report_path),
                 "live-price-snapshot-file": str(snapshot_path),
                 "daily-quote-archive-path": str(archive_root),
+                "shared-live-market-snapshot-file": str(shared_snapshot_path),
+                "shared-live-market-report-file": str(shared_report_path),
+                "shared-live-market-archive-path": str(shared_archive_root),
                 "factor-source-mode": "random",
                 "random-factor-seed": 17,
                 "universe": "csi300",
@@ -221,6 +227,8 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
             self.assertFalse((output_root / "szse" / "daily" / "300750.csv").exists())
             self.assertTrue(snapshot_path.exists())
             self.assertTrue((archive_root / "date=20260312" / "quotes.parquet").exists())
+            self.assertTrue(shared_snapshot_path.exists())
+            self.assertTrue((shared_archive_root / "date=20260312" / "quotes.parquet").exists())
 
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["trade_date"], "20260312")
@@ -250,6 +258,9 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
             report_path = root / "live_bridge_report.json"
             snapshot_path = root / "live_price_snapshot.json"
             archive_root = root / "daily_quote_archive"
+            shared_snapshot_path = root / "shared_live_price_snapshot.json"
+            shared_report_path = root / "shared_live_market_report.json"
+            shared_archive_root = root / "shared_daily_quote_archive"
 
             self.write_parquet(tushare_root / "stock_basic" / "data.parquet", [
                 {"ts_code": "600000.SH", "name": "浦发银行", "list_status": "L", "market": "主板", "list_date": "19991110"},
@@ -344,6 +355,9 @@ class BarraCNE5LiveBridgeTests(unittest.TestCase):
                 "live-factor-report-file": str(report_path),
                 "live-price-snapshot-file": str(snapshot_path),
                 "daily-quote-archive-path": str(archive_root),
+                "shared-live-market-snapshot-file": str(shared_snapshot_path),
+                "shared-live-market-report-file": str(shared_report_path),
+                "shared-live-market-archive-path": str(shared_archive_root),
                 "factor-source-mode": "auto",
                 "universe": "csi300",
                 "index-code": "000300.SH",

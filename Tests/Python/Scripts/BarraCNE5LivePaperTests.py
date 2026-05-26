@@ -68,6 +68,7 @@ class BarraCNE5LivePaperTests(unittest.TestCase):
             self.assertEqual(runtime_config["bridge-ready-timeout-seconds"], 600)
             self.assertEqual(runtime_config["live-price-max-requests-per-minute"], "50")
             self.assertEqual(runtime_config["initial-cash"], "100000")
+            self.assertEqual(runtime_config["console-output-mode"], "native")
             self.assertEqual(
                 runtime_config["portfolio-state-file"],
                 (root / "Results" / "barra-cne5-live-state.json").resolve(),
@@ -213,6 +214,19 @@ class BarraCNE5LivePaperTests(unittest.TestCase):
         self.assertEqual(stats, "[lean] [stats] Net Profit 12.34%")
         self.assertIsNone(data)
         self.assertEqual(refresh, "[lean] [data] TushareDataQueue.Refresh(): cycle=2 reason=timer subscribed=300 published=40 missing=0 unchanged=260")
+
+    def test_normalize_process_output_line_preserves_native_lean_stdout(self):
+        module = load_module()
+        raw_line = "20260313 10:00:00 TRACE:: Log: 2026-03-13 Execution mode: synthetic-only"
+        stats_line = "STATISTICS:: Net Profit 12.34%"
+        self.assertEqual(
+            module.normalize_process_output_line("lean", raw_line, console_output_mode="native"),
+            raw_line,
+        )
+        self.assertEqual(
+            module.normalize_process_output_line("lean", stats_line, console_output_mode="native"),
+            stats_line,
+        )
 
     def test_build_market_preview_line_includes_fetch_progress(self):
         module = load_module()
@@ -427,6 +441,25 @@ class BarraCNE5LivePaperTests(unittest.TestCase):
                 poll_interval_seconds=0.05,
             )
             self.assertFalse(ready)
+
+    def test_wait_for_process_with_status_native_mode_skips_custom_runtime_status(self):
+        module = load_module()
+
+        class FinishedProcess:
+            def wait(self):
+                return 0
+
+        original_print_runtime_status = module.print_runtime_status
+        module.print_runtime_status = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected custom status"))
+        try:
+            return_code = module.wait_for_process_with_status(
+                FinishedProcess(),
+                {"live-price-poll-interval-seconds": "60", "console-output-mode": "native"},
+            )
+        finally:
+            module.print_runtime_status = original_print_runtime_status
+
+        self.assertEqual(return_code, 0)
 
     def test_wait_for_bridge_ready_accepts_fresh_full_bridge_outputs(self):
         module = load_module()

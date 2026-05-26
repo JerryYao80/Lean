@@ -85,6 +85,10 @@ class TushareLeanExportTests(unittest.TestCase):
 
             (lean_root / "equity" / "sse" / "daily").mkdir(parents=True, exist_ok=True)
             (lean_root / "equity" / "sse" / "daily" / "510300.zip").write_bytes(b"placeholder")
+            (lean_root / "equity" / "sse" / "map_files").mkdir(parents=True, exist_ok=True)
+            (lean_root / "equity" / "sse" / "map_files" / "510300.csv").write_text("19980101,510300,510300,sse\n", encoding="utf-8")
+            (lean_root / "equity" / "sse" / "factor_files").mkdir(parents=True, exist_ok=True)
+            (lean_root / "equity" / "sse" / "factor_files" / "510300.csv").write_text("19980101,1.0,0.0\n", encoding="utf-8")
 
             report = module.collect_coverage_report(
                 registry_file=registry,
@@ -137,12 +141,16 @@ class TushareLeanExportTests(unittest.TestCase):
             report = module.export_registry_universe(module.load_pipeline_config(config_path))
 
             zip_rows = self.read_zip_rows(lean_root / "equity" / "sse" / "daily" / "510300.zip")
+            map_row = (lean_root / "equity" / "sse" / "map_files" / "510300.csv").read_text(encoding="utf-8").strip()
+            factor_row = (lean_root / "equity" / "sse" / "factor_files" / "510300.csv").read_text(encoding="utf-8").strip()
             report_from_disk = json.loads(report_path.read_text(encoding="utf-8"))
 
         self.assertEqual(zip_rows, [
             "20240102 00:00,10000,11000,9000,10500,350",
             "20240103 00:00,11000,12000,10000,11500,450",
         ])
+        self.assertEqual(map_row, "19980101,510300,510300,sse")
+        self.assertEqual(factor_row, "19980101,1.0,0.0")
         self.assertEqual(report["missing_parquet_symbols"], [])
         self.assertEqual(report["missing_lean_export_symbols"], [])
         self.assertEqual(report_from_disk["lean_export_count"], 3)

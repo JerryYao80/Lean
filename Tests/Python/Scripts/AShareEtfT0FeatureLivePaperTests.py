@@ -78,9 +78,10 @@ class AShareEtfT0FeatureLivePaperTests(unittest.TestCase):
 
         command, workdir = module.build_launcher_command()
 
-        self.assertTrue(command[0].endswith('Launcher/bin/Debug/QuantConnect.Lean.Launcher'))
-        self.assertEqual(command[1], '--config')
-        self.assertTrue(command[2].endswith('Launcher/config/config-ashare-etf-t0-feature-live-paper.json'))
+        self.assertEqual(command[0], '/usr/local/dotnet/dotnet')
+        self.assertTrue(command[1].endswith('Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll'))
+        self.assertEqual(command[2], '--config')
+        self.assertTrue(command[3].endswith('Launcher/config/config-ashare-etf-t0-feature-live-paper.json'))
         self.assertTrue(str(workdir).endswith('Launcher/bin/Debug'))
 
     def test_build_launcher_command_preserves_custom_config_path(self):
@@ -89,7 +90,7 @@ class AShareEtfT0FeatureLivePaperTests(unittest.TestCase):
         custom_config = Path('/tmp/config-ashare-etf-t0-feature-live-paper.json')
         command, _ = module.build_launcher_command(custom_config)
 
-        self.assertEqual(command[2], str(custom_config.resolve()))
+        self.assertEqual(command[3], str(custom_config.resolve()))
 
 
 if __name__ == '__main__':

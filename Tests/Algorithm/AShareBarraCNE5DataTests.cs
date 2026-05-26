@@ -131,9 +131,9 @@ namespace QuantConnect.Tests.Algorithm
             };
             var factors = new Dictionary<Symbol, AShareBarraCNE5FactorData>
             {
-                [symbolA] = new AShareBarraCNE5FactorData { TotalMv = 5000m, ResidualVolatility = -0.2m, Beta = 0.4m, PresentFactorCount = 10 },
-                [symbolB] = new AShareBarraCNE5FactorData { TotalMv = 3000m, ResidualVolatility = 0.1m, Beta = 0.7m, PresentFactorCount = 10 },
-                [symbolC] = new AShareBarraCNE5FactorData { TotalMv = 2000m, ResidualVolatility = 0.5m, Beta = 1.1m, PresentFactorCount = 10 }
+                [symbolA] = new AShareBarraCNE5FactorData { TotalMv = 5000m, ResidualVolatility = -0.2m, Beta = 0.4m },
+                [symbolB] = new AShareBarraCNE5FactorData { TotalMv = 3000m, ResidualVolatility = 0.1m, Beta = 0.7m },
+                [symbolC] = new AShareBarraCNE5FactorData { TotalMv = 2000m, ResidualVolatility = 0.5m, Beta = 1.1m }
             };
 
             var targets = AShareBarraCNE5SignalModel.SelectPortfolio(
