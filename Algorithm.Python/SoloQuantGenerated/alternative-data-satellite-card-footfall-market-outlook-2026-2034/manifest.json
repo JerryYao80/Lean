@@ -1,0 +1,47 @@
+{
+  "strategy_id": "alternative-data-satellite-card-footfall-market-outlook-2026-2034",
+  "class_name": "SoloQuantGeneratedAltDataAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/alternative-data-satellite-card-footfall-market-outlook-2026-2034/SoloQuantGeneratedAltDataAlgorithm.py.broken",
+  "description": "A股多因子另类数据策略草案。利用卫星图像、信用卡交易和客流数据（模拟）生成综合信号，进行月度调仓。包含A股特有的T+1结算、最小交易单位100股及涨跌停限制逻辑。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/alternative-data-satellite-card-footfall-market-outlook-2026-2034/SoloQuantGeneratedAltDataAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-77692dc150f89480.json",
+  "parameters": {
+    "start_date": "2017-01-01",
+    "end_date": "2023-12-31",
+    "initial_capital": "100000 CNY",
+    "rebalance_frequency": "Monthly",
+    "universe": "['600519.SSE', '000858.SZSE', '002594.SZSE', '600887.SSE', '000001.SZSE', '600036.SSE', '002415.SZSE']"
+  },
+  "risk_controls": [
+    "Stop Loss: 5% trailing stop based on entry price",
+    "Position Sizing: Equal weight long/short, rounded to nearest 100 shares",
+    "Liquidity Filter: Handled by selecting large-cap A-shares",
+    "Settlement: T+1 enforced via DelayedSettlementModel"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Satellite Imagery Analytics",
+      "field": "Parking lot occupancy, container counts (Simulated via momentum)",
+      "reason": "Generate satellite activity signal"
+    },
+    {
+      "dataset": "Card Transaction Aggregations",
+      "field": "Merchant spend growth (Simulated via volume change)",
+      "reason": "Construct card spending signal"
+    },
+    {
+      "dataset": "Footfall/Mobility Data",
+      "field": "Store-level visit counts (Simulated via RSI reversal)",
+      "reason": "Footfall traffic signal"
+    },
+    {
+      "dataset": "Stock Price and Volume",
+      "field": "Daily OHLCV",
+      "reason": "Execution and backtesting"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T12:16:29.049198+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

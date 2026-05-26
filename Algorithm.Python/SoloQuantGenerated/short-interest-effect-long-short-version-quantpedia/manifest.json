@@ -1,0 +1,35 @@
+{
+  "strategy_id": "short-interest-effect-long-short-version-quantpedia",
+  "class_name": "SoloQuantGeneratedShortInterestAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/short-interest-effect-long-short-version-quantpedia/SoloQuantGeneratedShortInterestAlgorithm.py",
+  "description": "A Long-Short strategy based on the Short Interest Effect adapted for the A-Share market. The strategy identifies stocks with potentially high (short) and low (long) short interest ratios, rebalancing monthly. Uses A-Share specific models for fees, settlement (T+1), and buying power.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/short-interest-effect-long-short-version-quantpedia/SoloQuantGeneratedShortInterestAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-090a5f6b2735181a.json",
+  "parameters": {
+    "initial_capital": "1000000",
+    "start_date": "2015-01-01",
+    "end_date": "2023-12-31",
+    "long_leg_count": "5",
+    "short_leg_count": "5"
+  },
+  "risk_controls": [
+    "Trailing Stop: 5% pullback from peak price for longs, 5% rally from trough for shorts.",
+    "Max Drawdown: 20% portfolio level drawdown triggers full liquidation.",
+    "Position Sizing: Orders rounded to nearest 100 shares (A-Share lot size)."
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Price Data",
+      "field": "Close",
+      "reason": "Required for valuation, return calculation, and executing orders."
+    },
+    {
+      "dataset": "Short Interest / Margin Trading Data (Proxy)",
+      "field": "Margin Balance / Short Volume",
+      "reason": "Core signal for ranking stocks (High vs Low Short Interest). Note: Simulated via proxy in this draft due to standard data constraints."
+    }
+  ],
+  "generated_at_utc": "2026-05-21T03:28:41.890853+00:00",
+  "data_coverage": 0.5
+}

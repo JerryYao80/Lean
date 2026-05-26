@@ -1,0 +1,141 @@
+from AlgorithmImports import *
+import math
+import datetime
+
+class SoloQuantGeneratedInsiderFirmDirectionAlgorithm(QCAlgorithm):
+    
+    def Initialize(self):
+        # 1. Set Account Currency and Cash
+        self.SetAccountCurrency('CNY')
+        self.SetCash(1000000)
+        
+        # 2. Set Benchmark to avoid data dependency
+        self.SetBenchmark(lambda x: 0)
+        
+        # 3. Set Timezone and Backtest Period
+        self.SetTimeZone('Asia/Shanghai')
+        self.SetStartDate(2018, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+        
+        # 4. Parameters
+        self.short_lookback = 20  # Proxy for insider trading direction
+        self.long_lookback = 120 # Proxy for firm trading direction
+        self.universe_tickers = ['600519.SSE', '000858.SZSE', '600036.SSE', '000001.SZSE', '601318.SSE']
+        self.symbols = []
+        
+        # 5. Add Equities and Configure A-Share Models
+        for ticker in self.universe_tickers:
+            market = Market.SSE if ticker.endswith('.SSE') else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            symbol = equity.Symbol
+            self.symbols.append(symbol)
+            
+            # A-Share Specific Models
+            security = self.Securities[symbol]
+            security.FeeModel = AShareStockFeeModel()
+            security.FillModel = AShareStockFillModel()
+            security.BuyingPowerModel = AShareStockBuyingPowerModel()
+            security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+            
+            # Warmup for Momentum
+            self.WarmUpIndicator(symbol, self.MOM(symbol, self.long_lookback, Resolution.Daily))
+            
+        # 6. Risk Management State
+        self.max_portfolio_value = self.Portfolio.TotalPortfolioValue
+        self.high_watermark = self.Portfolio.TotalPortfolioValue
+        self.entry_prices = {}
+        self.highest_prices = {}
+        
+        # 7. Schedule Rebalancing (Monthly Start)
+        self.Schedule.On(self.DateRules.MonthStart(self.symbols[0]), self.TimeRules.At(9, 30), self.Rebalance)
+        
+    def OnData(self, slice):
+        # 1. Risk Management: Max Drawdown Check (20%)
+        current_value = self.Portfolio.TotalPortfolioValue
+        if current_value > self.max_portfolio_value:
+            self.max_portfolio_value = current_value
+            
+        drawdown = (self.max_portfolio_value - current_value) / self.max_portfolio_value
+        if drawdown > 0.20:
+            self.Liquidate()
+            return
+            
+        # 2. Risk Management: Trailing Stop (5%) for existing holdings
+        for symbol in self.Portfolio.Keys:
+            if self.Portfolio[symbol].Invested and slice.ContainsKey(symbol):
+                current_price = slice[symbol].Price
+                if symbol not in self.highest_prices:
+                    self.highest_prices[symbol] = current_price
+                    self.entry_prices[symbol] = current_price
+                else:
+                    if current_price > self.highest_prices[symbol]:
+                        self.highest_prices[symbol] = current_price
+                        
+                if current_price < self.highest_prices[symbol] * 0.95:
+                    self.Liquidate(symbol)
+                    self.highest_prices.pop(symbol, None)
+                    self.entry_prices.pop(symbol, None)
+
+    def Rebalance(self):
+        # 1. Calculate Proxy Momentum for all symbols
+        long_symbols = []
+        
+        for symbol in self.symbols:
+            # Ensure we have enough history
+            history = self.History(symbol, self.long_lookback + 1, Resolution.Daily)
+            if history.empty or 'close' not in history.columns:
+                continue
+                
+            closes = history['close']
+            if len(closes) < self.long_lookback + 1:
+                continue
+                
+            # Calculate Short-term Return (Proxy: Insider Direction)
+            short_start_price = closes.iloc[-(self.short_lookback + 1)]
+            short_end_price = closes.iloc[-1]
+            
+            if short_start_price == 0: continue
+            short_return = (short_end_price - short_start_price) / short_start_price
+            
+            # Calculate Long-term Return (Proxy: Firm Direction)
+            long_start_price = closes.iloc[0]
+            long_end_price = closes.iloc[-1]
+            
+            if long_start_price == 0: continue
+            long_return = (long_end_price - long_start_price) / long_start_price
+            
+            # Signal: Direction Consistency (Both Positive)
+            if short_return > 0 and long_return > 0:
+                long_symbols.append(symbol)
+            else:
+                # If direction diverges, liquidate
+                if self.Portfolio[symbol].Invested:
+                    self.Liquidate(symbol)
+                    self.highest_prices.pop(symbol, None)
+                    self.entry_prices.pop(symbol, None)
+        
+        # 2. Portfolio Construction (Equal Weight)
+        if not long_symbols:
+            return
+            
+        count = len(long_symbols)
+        target_percent_per_stock = 0.95 / count # Keep 5% cash
+        
+        for symbol in long_symbols:
+            if not self.Portfolio[symbol].Invested:
+                # Calculate quantity rounded to 100 shares
+                price = self.Securities[symbol].Price
+                if price == 0: continue
+                
+                total_value = self.Portfolio.TotalPortfolioValue
+                target_value = total_value * target_percent_per_stock
+                raw_quantity = target_value / price
+                quantity = int(math.Floor(raw_quantity / 100) * 100)
+                
+                if quantity > 0:
+                    self.MarketOrder(symbol, quantity)
+                    self.entry_prices[symbol] = price
+                    self.highest_prices[symbol] = price
+            else:
+                # Rebalance existing position to target weight
+                self.SetHoldings(symbol, target_percent_per_stock)

@@ -1,0 +1,26 @@
+{
+  "strategy_id": "arxiv-2602-07085v1-q-fin-st-6-feb-2026",
+  "class_name": "SoloQuantGeneratedQuantaAlphaAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/arxiv-2602-07085v1-q-fin-st-6-feb-2026/SoloQuantGeneratedQuantaAlphaAlgorithm.cs",
+  "description": "复现 QuantaAlpha 核心因子 RegimeFiltered_Reversal_5D 在沪深 300 上的多空组合（只做多高因子组）日度调仓策略。实现因子计算流水线、T+1 结算、A 股手续费与印花税、最大回撤止损控制。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/arxiv-2602-07085v1-q-fin-st-6-feb-2026/SoloQuantGeneratedQuantaAlphaAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/ssrn-6f521fea881ab2f3.json",
+  "parameters": {
+    "universe": "000300.SH",
+    "start-date": "2022-01-01",
+    "end-date": "2025-12-26",
+    "initial-capital": "1000000"
+  },
+  "risk_controls": [
+    "最大回撤止损：当组合权益从高点回落超过 15% 时强制清仓",
+    "因子值计算中使用 NaN 处理与窗口充分性检查"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A 股日线行情",
+      "field": "close, volume, amount"
+    }
+  ],
+  "generated_at_utc": "2026-05-19T02:20:39.777176+00:00"
+}

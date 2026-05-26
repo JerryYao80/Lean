@@ -1,0 +1,30 @@
+{
+  "strategy_id": "do-insiders-and-firms-trade-in-the-same-direction-sciencedirect",
+  "class_name": "SoloQuantGeneratedInsiderFirmDirectionAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/do-insiders-and-firms-trade-in-the-same-direction-sciencedirect/SoloQuantGeneratedInsiderFirmDirectionAlgorithm.py.broken",
+  "description": "基于内部人与公司交易方向一致性逻辑的代理策略。由于缺乏原始论文数据，使用短期动量（20日）作为内部人交易方向代理，长期动量（120日）作为公司交易方向代理。当两者方向一致（均为正）时做多，否则平仓。包含最大回撤和移动止损风控。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/do-insiders-and-firms-trade-in-the-same-direction-sciencedirect/SoloQuantGeneratedInsiderFirmDirectionAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-8ea19ae6c0366857.json",
+  "parameters": {
+    "short_lookback": "20",
+    "long_lookback": "120",
+    "max_drawdown": "0.20",
+    "trailing_stop": "0.05",
+    "cash_buffer": "0.05"
+  },
+  "risk_controls": [
+    "最大回撤止损20%",
+    "个股移动止损5%",
+    "保留5%现金缓冲"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A股日线行情",
+      "field": "收盘价"
+    }
+  ],
+  "generated_at_utc": "2026-05-23T01:45:18.516299+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

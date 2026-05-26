@@ -1,0 +1,33 @@
+{
+  "strategy_id": "statistical-arbitrage-with-pairs-trading-and-backtesting-medium",
+  "class_name": "SoloQuantGeneratedPairsTradingAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/statistical-arbitrage-with-pairs-trading-and-backtesting-medium/SoloQuantGeneratedPairsTradingAlgorithm.py",
+  "description": "Pairs trading strategy for A-share financial stocks based on z-score of price ratio mean reversion.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/statistical-arbitrage-with-pairs-trading-and-backtesting-medium/SoloQuantGeneratedPairsTradingAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-599a3965347439fa.json",
+  "parameters": {
+    "start_date": "20100101",
+    "end_date": "20200615",
+    "initial_capital": "100000",
+    "symbol1": "601398.SSE",
+    "symbol2": "601939.SSE",
+    "lookback": "30",
+    "entry_threshold": "1.0",
+    "exit_threshold": "0.5",
+    "max_drawdown_pct": "0.20",
+    "trailing_stop_pct": "0.05"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20%",
+    "Trailing Stop: 5%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "Close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T09:17:46.480030+00:00",
+  "data_coverage": 1.0
+}

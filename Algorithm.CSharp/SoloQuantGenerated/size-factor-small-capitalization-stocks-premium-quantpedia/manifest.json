@@ -1,0 +1,27 @@
+{
+  "strategy_id": "size-factor-small-capitalization-stocks-premium-quantpedia",
+  "class_name": "SoloQuantGeneratedSmallCapPremiumAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/size-factor-small-capitalization-stocks-premium-quantpedia/SoloQuantGeneratedSmallCapPremiumAlgorithm.cs",
+  "description": "Implements the small-capitalization premium anomaly from Quantpedia by going long the lowest market-cap decile of A-share stocks annually, with risk management and realistic A-share execution costs.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/size-factor-small-capitalization-stocks-premium-quantpedia/SoloQuantGeneratedSmallCapPremiumAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-e6e4040e786b41ac.json",
+  "parameters": {
+    "universe": "all",
+    "start-date": "2014-01-01",
+    "end-date": "2024-12-31",
+    "initial-capital": "1000000"
+  },
+  "risk_controls": [
+    "20% trailing stop loss per position from entry price",
+    "25% maximum portfolio drawdown triggers reduction to 50% of intended positions",
+    "A-share execution with commission (0.03%) and stamp duty (0.1% sell)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "FineFundamental",
+      "field": "MarketCap"
+    }
+  ],
+  "generated_at_utc": "2026-05-19T08:45:46.256707+00:00"
+}

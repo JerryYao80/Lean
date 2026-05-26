@@ -1,0 +1,143 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedCrossSectionalMomentumAlgorithm : QCAlgorithm {
+    // Parameters (would be passed in normally)
+    private string _startDateStr = "20200101";
+    private string _endDateStr = "20241231";
+    private decimal _initialCapital = 1000000;
+    
+    // State
+    private List<SoloQuantSymbolData> _symbolDataList = new List<SoloQuantSymbolData>();
+    private DateTime _lastRebalanceTime = DateTime.MinValue;
+    private decimal _highWaterMark = 0m;
+    private const decimal MaxDrawdownLimit = 0.15m; // 15% Max Drawdown
+    private const int LookbackPeriod = 252; // ~1 year trading days
+    private const int TopN = 2; // Select top 2 stocks
+
+    public override void Initialize() {
+      // 1. Account Currency (Must be before SetCash)
+      SetAccountCurrency(Currencies.CNY);
+      
+      // 2. Cash
+      SetCash(_initialCapital);
+
+      // 3. Date Settings
+      SetStartDate(DateTime.ParseExact(_startDateStr, "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact(_endDateStr, "yyyyMMdd", null));
+      SetTimeZone(TimeZones.Shanghai);
+
+      // 4. Benchmark
+      SetBenchmark(_ => 0m);
+
+      // 5. Universe (Fixed A-share tickers to simulate the paper's bucket logic without AddUniverse)
+      string[] tickers = { "600519.SSE", "000858.SZSE", "600036.SSE", "002594.SZSE", "601318.SSE", "000001.SZSE" };
+
+      foreach (var ticker in tickers) {
+        // Determine Market based on ticker prefix (Simplified logic)
+        var market = ticker.StartsWith("6") ? Market.SSE : Market.SZSE;
+        var symbol = AddEquity(ticker, Resolution.Daily, market).Symbol;
+        var security = Securities[symbol];
+
+        // 6. A-Share Models (Must use specific non-arg constructors for BuyingPower)
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9)); // T+1
+
+        // 7. Indicators (Rate of Change for Momentum)
+        var roc = ROC(symbol, LookbackPeriod, Resolution.Daily);
+        _symbolDataList.Add(new SoloQuantSymbolData(symbol, roc));
+      }
+
+      // Warm up to ensure indicators are ready
+      SetWarmUp(LookbackPeriod);
+    }
+
+    public override void OnData(Slice data) {
+      // 8. Risk Control: Max Drawdown Check
+      if (Portfolio.TotalPortfolioValue > _highWaterMark) {
+        _highWaterMark = Portfolio.TotalPortfolioValue;
+      }
+      
+      if (Portfolio.TotalPortfolioValue < _highWaterMark * (1 - MaxDrawdownLimit)) {
+        Liquidate();
+        Error("Max Drawdown Limit Reached. Liquidating Portfolio.");
+        return;
+      }
+
+      // Wait for warm-up
+      if (IsWarmingUp) return;
+
+      // 9. Rebalance Logic: Monthly
+      // Check if we are at the start of a new month
+      if (_lastRebalanceTime.Month != Time.Month) {
+        _lastRebalanceTime = Time;
+
+        // Filter ready data
+        var activeData = _symbolDataList.Where(x => x.ROC.IsReady).ToList();
+        if (activeData.Count == 0) return;
+
+        // Sort by Momentum (Descending)
+        var sortedData = activeData.OrderByDescending(x => x.ROC.Current.Value).ToList();
+
+        // Select Top N
+        var selectedSymbols = sortedData.Take(TopN).ToList();
+        var weight = 1m / TopN;
+
+        // Liquidate others
+        foreach (var data in sortedData.Skip(TopN)) {
+          if (Securities[data.Symbol].Invested) {
+            Liquidate(data.Symbol);
+          }
+        }
+
+        // Rebalance Top N
+        foreach (var data in selectedSymbols) {
+          var security = Securities[data.Symbol];
+          if (security.Price == 0) continue;
+
+          // 10. Position Sizing (Lot size 100)
+          decimal targetValue = Portfolio.TotalPortfolioValue * weight;
+          // Round down to nearest 100 shares
+          int targetQuantity = (int)(targetValue / security.Price / 100) * 100;
+
+          int currentQuantity = security.Holdings.Quantity;
+          int delta = targetQuantity - currentQuantity;
+
+          if (delta != 0) {
+             MarketOrder(data.Symbol, delta);
+          }
+        }
+      }
+    }
+  }
+
+  // 11. Custom Symbol Data Class (renamed from SymbolData per constraints)
+  public class SoloQuantSymbolData {
+    public Symbol Symbol;
+    public RateOfChange ROC;
+
+    public SoloQuantSymbolData(Symbol symbol, RateOfChange roc) {
+      Symbol = symbol;
+      ROC = roc;
+    }
+  }
+}

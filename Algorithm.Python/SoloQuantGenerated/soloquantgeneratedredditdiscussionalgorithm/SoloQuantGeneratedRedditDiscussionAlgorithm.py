@@ -1,0 +1,65 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedRedditDiscussionAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency("CNY")
+        self.SetCash(100000)
+        self.SetStartDate(2023, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+        self.SetBenchmark(lambda x: 0)
+
+        # 添加标的（示例：贵州茅台）
+        self.symbol = self.AddEquity("600519", Resolution.Daily, Market.SSE).Symbol
+
+        # 配置 A 股特定模型
+        security = self.Securities[self.symbol]
+        security.FeeModel = AShareStockFeeModel()
+        security.FillModel = AShareStockFillModel()
+        security.BuyingPowerModel = AShareStockBuyingPowerModel()
+        security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+
+        # 指标（占位符逻辑，因为源文本未提供具体策略）
+        self.fast_sma = self.SMA(self.symbol, 10, Resolution.Daily)
+        self.slow_sma = self.SMA(self.symbol, 30, Resolution.Daily)
+        self.SetWarmUp(30)
+
+        # 风控参数
+        self.trailing_stop_pct = 0.05
+        self.max_drawdown_pct = 0.10
+        self.highest_price = 0
+        self.starting_cash = self.Portfolio.TotalPortfolioValue
+
+    def OnData(self, slice):
+        if self.IsWarmingUp or not self.symbol in slice:
+            return
+
+        # 风控：Max Drawdown
+        if self.Portfolio.TotalPortfolioValue < self.starting_cash * (1 - self.max_drawdown_pct):
+            self.Liquidate()
+            return
+
+        holdings = self.Portfolio[self.symbol]
+        price = slice[self.symbol].Price
+
+        # 风控：Trailing Stop
+        if holdings.Invested:
+            if price > self.highest_price:
+                self.highest_price = price
+            
+            if price < self.highest_price * (1 - self.trailing_stop_pct):
+                self.Liquidate(self.symbol)
+                self.highest_price = 0
+                return
+
+        # 占位符策略逻辑（SMA 交叉）
+        if self.fast_sma.Current.Value > self.slow_sma.Current.Value:
+            if not holdings.Invested:
+                # 计算数量（100 股取整）
+                cash = self.Portfolio.Cash
+                quantity = int((cash * 0.9) / price / 100) * 100
+                if quantity > 0:
+                    self.MarketOrder(self.symbol, quantity)
+        elif self.fast_sma.Current.Value < self.slow_sma.Current.Value:
+            if holdings.Invested:
+                self.Liquidate(self.symbol)
+                self.highest_price = 0

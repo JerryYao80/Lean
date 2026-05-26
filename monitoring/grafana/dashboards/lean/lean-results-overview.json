@@ -1,0 +1,1430 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"total_portfolio_value\"), last(\"cash\"), last(\"total_holdings_value\") FROM \"lean_portfolio\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" = '${run_id}' AND (\"mode\" = 'backtesting' OR \"run_id\" = '${run_id}') GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Portfolio / Cash / Holdings",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"total_unrealized_profit\"), last(\"total_net_profit\"), last(\"total_fees\"), last(\"margin_remaining\") FROM \"lean_portfolio\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" = '${run_id}' AND (\"mode\" = 'backtesting' OR \"run_id\" = '${run_id}') GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "P&L / Fees / Margin",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\"), last(\"text_value\") FROM \"lean_metric\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" = '${run_id}' AND \"category\" = 'runtime' AND \"metric\" = '${runtime_metric}' AND (\"mode\" = 'backtesting' OR \"run_id\" = '${run_id}') GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Runtime Metric Explorer",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"value\"), last(\"close\") FROM \"lean_chart\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" = '${run_id}' AND \"chart\" = '${chart_name}' AND \"series\" = '${series_name}' AND (\"mode\" = 'backtesting' OR \"run_id\" = '${run_id}') GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Chart Explorer",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 16
+      },
+      "id": 20,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Net Profit' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Net Profit",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 16
+      },
+      "id": 21,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Sharpe Ratio' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Sharpe",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 16
+      },
+      "id": 22,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Drawdown' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Drawdown",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 16
+      },
+      "id": 23,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Win Rate' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Win Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 70
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 16
+      },
+      "id": 24,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Probabilistic Sharpe Ratio' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest PSR",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 16
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"metric\" = 'Monte Carlo Trials' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Monte Carlo Trials",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      },
+      "id": 26,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"source\" = 'algorithm_monte_carlo' AND \"scenario\" = 'baseline' AND \"metric\" = 'lossProbability' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "MC Baseline Loss Probability",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 70
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      },
+      "id": 27,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"source\" = 'algorithm_monte_carlo' AND \"scenario\" = 'combinedStress' AND \"metric\" = 'lossProbability' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "MC Combined Loss Probability",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 0,
+          "min": -20,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": -5
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "id": 28,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"source\" = 'algorithm_monte_carlo' AND \"scenario\" = 'combinedStress' AND \"metric\" = 'medianTotalReturn' AND \"run_id\" != ''",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "MC Combined Median Return",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "id": 29,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"value\"), last(\"close\") FROM \"lean_chart\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"chart\" = 'Strategy Equity' AND \"series\" = 'Equity' GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Equity Curve",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"value\") FROM \"lean_chart\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"chart\" = 'Drawdown' AND \"series\" = 'Equity Drawdown' GROUP BY time($interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Drawdown Curve",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 31,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"source\" = 'pipeline_monte_carlo' AND \"metric\" = 'median_annual_return' AND \"run_id\" != '' GROUP BY \"scenario\", \"metric\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Monte Carlo Scenario Summary",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 32,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"text_value\"), last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"category\" = 'statistics' AND \"run_id\" != '' GROUP BY \"metric\", \"unit\", \"_field\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Backtest Statistics Dictionary",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "id": 10,
+      "options": {
+        "candleStyle": "candles",
+        "colorStrategy": "open-close",
+        "colors": {
+          "down": "red",
+          "flat": "gray",
+          "up": "green"
+        },
+        "fields": {
+          "close": "close",
+          "high": "high",
+          "low": "low",
+          "open": "open",
+          "volume": "volume"
+        },
+        "includeAllFields": false,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mode": "candles+volume",
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT \"open\", \"high\", \"low\", \"close\", \"volume\" FROM \"lean_price_ohlc\" WHERE $timeFilter AND \"symbol\" = '${price_symbol}' AND \"source\" = '${price_source}'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Price Daily Candlestick",
+      "type": "candlestick"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 61
+      },
+      "id": 5,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT \"quantity\", \"holdings_value\", \"unrealized_profit\", \"unrealized_profit_percent\" FROM \"lean_holding\" WHERE time > now() -15m AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" != '' AND \"quantity\" != '' GROUP BY \"symbol\" ORDER BY time DESC LIMIT 1",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Holdings Snapshot",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 61
+      },
+      "id": 6,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT \"message\" FROM \"lean_message\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"level\" = 'log' AND \"run_id\" != '' ORDER BY time DESC",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Synthetic Order Events",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 61
+      },
+      "id": 7,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT \"quantity\", \"average_price\", \"market_price\", \"holdings_value\", \"unrealized_profit\", \"unrealized_profit_percent\" FROM \"lean_holding\" WHERE time > now() -15m AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" != '' AND \"quantity\" != '' GROUP BY \"symbol\" ORDER BY time DESC LIMIT 1",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Live Holdings Detail",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "id": 8,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"text_value\"), last(\"numeric_value\") FROM \"lean_metric\" WHERE time > now() -5y AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" = '${run_id}' AND (\"mode\" = 'backtesting' OR \"run_id\" = '${run_id}') GROUP BY \"category\", \"metric\", \"_field\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Metrics Snapshot",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "id": 9,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT \"message\", \"detail\" FROM \"lean_message\" WHERE $timeFilter AND \"algorithm_id\" = '${algorithm}' AND \"mode\" = '${mode}' AND \"run_id\" != '' ORDER BY time DESC",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Message Stream",
+      "type": "table"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "lean",
+    "grafana",
+    "influxdb"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "AShareBarraCNE5Algorithm",
+          "value": "AShareBarraCNE5Algorithm"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"algorithm_id\" WHERE time > now() -5y",
+        "includeAll": false,
+        "label": "Algorithm",
+        "multi": false,
+        "name": "algorithm",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"algorithm_id\" WHERE time > now() -5y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "backtesting",
+          "value": "backtesting"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"mode\" WHERE time > now() -5y",
+        "includeAll": false,
+        "label": "Mode",
+        "multi": false,
+        "name": "mode",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"mode\" WHERE time > now() -5y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "local",
+          "value": "local"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"run_id\" WHERE time > now() - 30d",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Run",
+        "multi": false,
+        "name": "run_id",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_portfolio\" WITH KEY = \"run_id\" WHERE time > now() - 30d",
+        "refresh": 2,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "Equity",
+          "value": "Equity"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_metric\" WITH KEY = \"metric\" WHERE time > now() -5y",
+        "includeAll": false,
+        "label": "Runtime Metric",
+        "multi": false,
+        "name": "runtime_metric",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_metric\" WITH KEY = \"metric\" WHERE time > now() -5y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "Strategy Equity",
+          "value": "Strategy Equity"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"chart\" WHERE time > now() -5y",
+        "includeAll": false,
+        "label": "Chart",
+        "multi": false,
+        "name": "chart_name",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"chart\" WHERE time > now() -5y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "Equity",
+          "value": "Equity"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"series\" WHERE time > now() -5y",
+        "includeAll": false,
+        "label": "Series",
+        "multi": false,
+        "name": "series_name",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"series\" WHERE time > now() -5y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "000001.SZ",
+          "value": "000001.SZ"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_price_ohlc\" WITH KEY = \"symbol\" WHERE time > now() -10y",
+        "includeAll": false,
+        "label": "Price Symbol",
+        "multi": false,
+        "name": "price_symbol",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_price_ohlc\" WITH KEY = \"symbol\" WHERE time > now() -10y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "tushare_daily",
+          "value": "tushare_daily"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"lean_price_ohlc\" WITH KEY = \"source\" WHERE time > now() -10y",
+        "includeAll": false,
+        "label": "Price Source",
+        "multi": false,
+        "name": "price_source",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_price_ohlc\" WITH KEY = \"source\" WHERE time > now() -10y",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-5y",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "LEAN Results Overview",
+  "uid": "lean-results-overview",
+  "version": 14,
+  "weekStart": ""
+}

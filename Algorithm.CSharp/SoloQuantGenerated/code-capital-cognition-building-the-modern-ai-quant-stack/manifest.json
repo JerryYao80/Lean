@@ -1,0 +1,32 @@
+{
+  "strategy_id": "code-capital-cognition-building-the-modern-ai-quant-stack",
+  "class_name": "SoloQuantGeneratedModernAiQuantStackAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/code-capital-cognition-building-the-modern-ai-quant-stack/SoloQuantGeneratedModernAiQuantStackAlgorithm.cs",
+  "description": "基于文章《Code, Capital & Cognition — Building the Modern AI Quant Stack》的复现草案。该文章为概念性概述，未提供具体可交易的量化策略、信号或参数。本策略实现一个简单的等权买入持有组合作为占位，配合基础的风控机制（trailing stop与最大回撤检查），以验证LEAN框架在A股市场的运行流程。由于原文无策略细节，此代码仅作为框架模板，不构成投资建议。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/code-capital-cognition-building-the-modern-ai-quant-stack/SoloQuantGeneratedModernAiQuantStackAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-6fff0f617345a5a3.json",
+  "parameters": {
+    "universe": "600519.SSE,000858.SZSE,601318.SSE,000333.SZSE,600036.SSE",
+    "start-date": "20200101",
+    "end-date": "20231231",
+    "initial-capital": "1000000",
+    "trailing-stop-pct": "0.10",
+    "max-drawdown-pct": "0.15"
+  },
+  "risk_controls": [
+    "Trailing stop: 个股从持仓期间最高价回撤超过10%时清仓",
+    "Max drawdown: 组合从峰值回撤超过15%时全部清仓",
+    "T+1结算: 使用DelayedSettlementModel(1, TimeSpan.FromHours(9))",
+    "A股交易费用: 使用AShareStockFeeModel/AShareStockFillModel/AShareStockBuyingPowerModel"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A股日线行情",
+      "field": "Close",
+      "reason": "原文无具体数据需求；使用日线收盘价进行等权配置和trailing stop计算"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T13:27:24.963193+00:00",
+  "data_coverage": 1.0
+}

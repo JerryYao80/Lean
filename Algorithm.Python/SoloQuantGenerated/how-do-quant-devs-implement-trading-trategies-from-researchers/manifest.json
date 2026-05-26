@@ -1,0 +1,28 @@
+{
+  "strategy_id": "how-do-quant-devs-implement-trading-trategies-from-researchers",
+  "class_name": "SoloQuantGeneratedRedditDiscussionAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/how-do-quant-devs-implement-trading-trategies-from-researchers/SoloQuantGeneratedRedditDiscussionAlgorithm.py.broken",
+  "description": "基于 Reddit 讨论关于实施策略的 A 股骨架策略，使用占位符 SMA 逻辑演示 LEAN A 股设置、T+1 结算、100 股交易单位及 OnData 内置风控。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/how-do-quant-devs-implement-trading-trategies-from-researchers/SoloQuantGeneratedRedditDiscussionAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-6fb8140e9a3b8b4f.json",
+  "parameters": {
+    "start_date": "20230101",
+    "end_date": "20231231",
+    "initial_capital": "100000",
+    "symbol": "600519.SSE"
+  },
+  "risk_controls": [
+    "Trailing Stop: 5%",
+    "Max Drawdown: 10%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "TradeBar"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T00:07:02.794513+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

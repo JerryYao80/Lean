@@ -1,0 +1,30 @@
+{
+  "strategy_id": "momentum-investing-strategy-backtested-over-150-years",
+  "class_name": "SoloQuantGeneratedMomentumAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/momentum-investing-strategy-backtested-over-150-years/SoloQuantGeneratedMomentumAlgorithm.py",
+  "description": "A-share Momentum 12-1 Strategy: Long top quintile based on 12-month minus 1-month return, rebalanced monthly.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/momentum-investing-strategy-backtested-over-150-years/SoloQuantGeneratedMomentumAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-3e5b87047626912a.json",
+  "parameters": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "initial_capital": "1000000",
+    "lookback_days": "252",
+    "skip_days": "21",
+    "trailing_stop_pct": "0.10",
+    "max_drawdown_pct": "0.20"
+  },
+  "risk_controls": [
+    "Trailing Stop: 10% from highest price since entry",
+    "Max Drawdown: 20% portfolio level stop loss"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Daily Equity Prices",
+      "field": "close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T07:39:56.055889+00:00",
+  "data_coverage": 1.0
+}

@@ -1,0 +1,27 @@
+{
+  "strategy_id": "2603-20319-implementation-risk-in-portfolio-backtesting-arxiv",
+  "class_name": "SoloQuantGeneratedSmaMomentumAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2603-20319-implementation-risk-in-portfolio-backtesting-arxiv/SoloQuantGeneratedSmaMomentumAlgorithm.cs",
+  "description": "Implementation of BM01 (SMA Momentum) from the Implementation Risk paper, adapted for A-share market constraints using direct OnData logic.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2603-20319-implementation-risk-in-portfolio-backtesting-arxiv/SoloQuantGeneratedSmaMomentumAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-03b9fbde7acbabcb.json",
+  "parameters": {
+    "start-date": "20200101",
+    "end-date": "20241231",
+    "initial-capital": "1000000",
+    "universe": "600519.SSE,000858.SZSE,600036.SSE,000001.SZSE,601318.SSE"
+  },
+  "risk_controls": [
+    "Stop Loss: Liquidate if UnrealizedProfitPercent < -10%",
+    "Max Drawdown: Implicitly managed by Stop Loss"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "Close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T12:10:21.600376+00:00",
+  "data_coverage": 1.0
+}

@@ -1,0 +1,173 @@
+from AlgorithmImports import *
+import numpy as np
+
+class SoloQuantGeneratedAltDataAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # 1. 设置账户和现金
+        self.SetAccountCurrency('CNY')
+        self.SetCash(100000)
+        
+        # 2. 设置回测时间
+        self.SetStartDate(2017, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+        
+        # 3. 设置基准 (避免数据依赖)
+        self.SetBenchmark(lambda x: 0)
+        
+        # 4. 设置标的 (A股消费及行业代表)
+        # 使用 AddEquity 添加股票，不使用 AddUniverse + FineFundamental
+        self.tickers = ['600519', '000858', '002594', '600887', '000001', '600036', '002415']
+        for ticker in self.tickers:
+            market = Market.SSE if ticker[0] == '6' else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            
+            # 5. 设置A股特定模型
+            equity.FeeModel = AShareStockFeeModel()
+            equity.FillModel = AShareStockFillModel()
+            equity.BuyingPowerModel = AShareStockBuyingPowerModel()
+            equity.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9)) # T+1
+        
+        # 6. 策略参数
+        self.rebalance_frequency = 30 # 约30天调仓一次
+        self.last_rebalance_time = self.Time - timedelta(days=self.rebalance_frequency)
+        self.entry_prices = {} # 记录入场价格用于止损
+        self.stop_loss_pct = 0.05 # 5% 止损
+        
+        # 7. 指标初始化 (用于模拟信号生成)
+        self.rsi = self.RSI(self.Symbol('600519'), 14) # 示例，实际不用于交易逻辑
+
+    def OnData(self, slice):
+        """主要交易逻辑"""
+        
+        # 1. 风控检查：每日检查止损
+        self.RiskManagement(slice)
+        
+        # 2. 调仓逻辑
+        if self.Time - self.last_rebalance_time >= timedelta(days=self.rebalance_frequency):
+            self.Rebalance(slice)
+            self.last_rebalance_time = self.Time
+
+    def Rebalance(self, slice):
+        """生成信号并执行交易"""
+        insights = []
+        
+        for ticker in self.tickers:
+            symbol = self.Symbol(ticker)
+            if not slice.ContainsKey(symbol) or slice[symbol] is None:
+                continue
+            
+            price = slice[symbol].Price
+            
+            # --- 模拟另类数据信号 ---
+            # 实际生产环境中，这里应接入卫星、信用卡、客流数据API
+            # 此处使用随机数和价格动量作为代理进行演示
+            sat_signal = self.GetSatelliteSignal(symbol, price) # 卫星信号
+            card_signal = self.GetCardSignal(symbol, price)     # 信用卡信号
+            foot_signal = self.GetFootfallSignal(symbol, price) # 客流信号
+            
+            # 综合得分 (简单平均)
+            composite_score = (sat_signal + card_signal + foot_signal) / 3.0
+            insights.append({'symbol': symbol, 'score': composite_score})
+        
+        # 按得分排序
+        insights.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 分组：做多前50%，做空后50%
+        n = len(insights)
+        if n == 0: return
+        
+        long_symbols = [x['symbol'] for x in insights[:n//2]]
+        short_symbols = [x['symbol'] for x in insights[n//2:]]
+        
+        # 执行交易
+        self.ExecuteTrades(long_symbols, short_symbols)
+
+    def ExecuteTrades(self, longs, shorts):
+        """执行订单，处理100股整数限制"""
+        total_portfolio_value = self.Portfolio.TotalPortfolioValue
+        
+        # 平仓不在目标列表中的持仓
+        for invested in self.Portfolio.Invested:
+            if invested.Key not in longs and invested.Key not in shorts:
+                self.Liquidate(invested.Key)
+                if invested.Key in self.entry_prices:
+                    del self.entry_prices[invested.Key]
+        
+        # 计算目标权重 (做多90%，做空90%)
+        long_weight = 0.9 / len(longs) if longs else 0
+        short_weight = -0.9 / len(shorts) if shorts else 0
+        
+        # 执行做多
+        for symbol in longs:
+            target_value = total_portfolio_value * long_weight
+            current_price = self.Securities[symbol].Price
+            raw_quantity = target_value / current_price
+            # A股最小交易单位100股
+            quantity = int(np.floor(raw_quantity / 100)) * 100
+            
+            if quantity > 0:
+                self.MarketOrder(symbol, quantity)
+                self.entry_prices[symbol] = current_price
+            else:
+                self.Liquidate(symbol)
+
+        # 执行做空
+        for symbol in shorts:
+            target_value = total_portfolioValue * short_weight
+            current_price = self.Securities[symbol].Price
+            raw_quantity = abs(target_value) / current_price
+            quantity = int(np.floor(raw_quantity / 100)) * 100
+            
+            if quantity > 0:
+                self.MarketOrder(symbol, -quantity)
+                self.entry_prices[symbol] = current_price
+            else:
+                self.Liquidate(symbol)
+
+    def RiskManagement(self, slice):
+        """风控：止损检查"""
+        for symbol, entry_price in list(self.entry_prices.items()):
+            if not self.Portfolio[symbol].Invested:
+                continue
+                
+            if not slice.ContainsKey(symbol) or slice[symbol] is None:
+                continue
+            
+            current_price = slice[symbol].Price
+            holding = self.Portfolio[symbol]
+            
+            # 多头止损：跌破 5%
+            if holding.IsLong and current_price < entry_price * (1 - self.stop_loss_pct):
+                self.Liquidate(symbol)
+                del self.entry_prices[symbol]
+                self.Debug(f"Stop Loss triggered (Long) for {symbol.Value} at {current_price}")
+            
+            # 空头止损：涨破 5%
+            elif holding.IsShort and current_price > entry_price * (1 + self.stop_loss_pct):
+                self.Liquidate(symbol)
+                del self.entry_prices[symbol]
+                self.Debug(f"Stop Loss triggered (Short) for {symbol.Value} at {current_price}")
+
+    # --- 模拟信号生成方法 (替代真实数据源) ---
+    def GetSatelliteSignal(self, symbol, price):
+        # 模拟：基于过去20日价格动量 + 随机扰动
+        history = self.History(symbol, 20, Resolution.Daily)
+        if history.empty: return 0
+        momentum = (price - history['close'].iloc[0]) / history['close'].iloc[0]
+        return momentum + (self.Random.NextDouble() - 0.5) * 0.1
+
+    def GetCardSignal(self, symbol, price):
+        # 模拟：基于成交量变化 + 随机扰动
+        history = self.History(symbol, 10, Resolution.Daily)
+        if history.empty: return 0
+        vol_change = (history['volume'].iloc[-1] - history['volume'].mean()) / history['volume'].mean()
+        return vol_change + (self.Random.NextDouble() - 0.5) * 0.1
+
+    def GetFootfallSignal(self, symbol, price):
+        # 模拟：基于RSI反转 + 随机扰动
+        rsi = self.RSI(symbol, 14)
+        if not rsi.IsReady: return 0
+        val = rsi.Current.Value
+        # RSI低于30超卖(信号正)，高于70超买(信号负)
+        signal = (30 - val) / 100.0 if val < 30 else ((70 - val) / 100.0 if val > 70 else 0)
+        return signal + (self.Random.NextDouble() - 0.5) * 0.05

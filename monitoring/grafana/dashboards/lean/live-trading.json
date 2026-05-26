@@ -1,0 +1,640 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT \"value\" FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"chart\" = 'Strategy Equity' AND \"series\" = 'Equity'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Live Equity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"value\") FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"chart\" = 'Strategy Equity' AND \"series\" = 'Equity'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Current Equity",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(*) FROM \"lean_holding\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Current Positions",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT * FROM \"lean_order\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 20",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Order Flow",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(*) FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"category\" = 'runtime'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Runtime Statistics",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50000
+              },
+              {
+                "color": "red",
+                "value": 100000
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"cash\") FROM \"lean_portfolio\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Cash Balance",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"total_holdings_value\") FROM \"lean_portfolio\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Position Value",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT \"numeric_value\" FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Unrealized'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "Unrealized P&L",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "lean",
+    "live",
+    "paper"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "live-algo-001",
+          "value": "live-algo-001"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Algorithm",
+        "multi": false,
+        "name": "algorithm_id",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE time > 0",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Live Paper Trading",
+  "uid": "lean-live-trading",
+  "version": 1,
+  "weekStart": ""
+}

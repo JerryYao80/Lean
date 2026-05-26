@@ -1,0 +1,28 @@
+{
+  "strategy_id": "pdf-online-quantitative-trading-strategies-nyu-stern",
+  "class_name": "SoloQuantGeneratedOnlinePortfolioAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-online-quantitative-trading-strategies-nyu-stern/SoloQuantGeneratedOnlinePortfolioAlgorithm.py",
+  "description": "基于在线投资组合选择（Online Portfolio Selection）策略的A股实现，采用被动均值回归（PAMR）算法动态调整权重。策略根据日度价格相对向量更新投资组合权重，旨在通过均值回归逻辑捕捉超额收益，并严格遵循A股T+1交易规则及最小交易单位限制。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-online-quantitative-trading-strategies-nyu-stern/SoloQuantGeneratedOnlinePortfolioAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-f3107fa4e1df143a.json",
+  "parameters": {
+    "start_date": "20100101",
+    "end_date": "20200101",
+    "initial_capital": "1000000",
+    "universe": "600519.SZSE,000001.SZSE,600036.SZSE,000002.SZSE,600000.SZSE"
+  },
+  "risk_controls": [
+    "Max Drawdown Limit: 20% (Liquidate all if portfolio drawdown exceeds threshold)",
+    "Trailing Stop: 10% (Liquidate individual security if price drops 10% from entry/average price)",
+    "Position Sizing: Minimum 100 shares (A-share lot size)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Data",
+      "field": "close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T02:45:49.623749+00:00",
+  "data_coverage": 1.0
+}

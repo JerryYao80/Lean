@@ -1,0 +1,35 @@
+{
+  "strategy_id": "2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha",
+  "class_name": "SoloQuantGeneratedTimingExcessReturnsAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.cs",
+  "description": "基于时间序列动量的跨资产Alpha策略A股实现。每月计算过去12个月收益率（跳过最近1个月），选取动量最强的股票等权配置，并设置15%跟踪止损和最大个股仓位限制。使用沪深300成分股为基准，动态Coarse/Fine选股。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-3bcafaf496440dd4.json",
+  "parameters": {
+    "start-date": "回测开始日期，格式 yyyy-MM-dd，默认 2015-01-01",
+    "end-date": "回测结束日期，格式 yyyy-MM-dd，默认 2023-12-31",
+    "initial-capital": "初始资金，默认 1000000"
+  },
+  "risk_controls": [
+    "跟踪止损：持仓从最高价回撤超过15%时平仓",
+    "个股最大权重上限：10%",
+    "每月调仓，避免过度交易",
+    "通过 Universe 粗筛确保流动性和基本面数据"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "TradeBar",
+      "field": "Close (每日收盘价)"
+    },
+    {
+      "dataset": "CoarseFundamental",
+      "field": "HasFundamentalData, Price, Volume, DollarVolume"
+    },
+    {
+      "dataset": "FineFundamental",
+      "field": "MarketCap"
+    }
+  ],
+  "generated_at_utc": "2026-05-20T01:44:56.633027+00:00"
+}

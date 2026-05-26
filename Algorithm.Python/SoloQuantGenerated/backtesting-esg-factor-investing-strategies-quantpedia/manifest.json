@@ -1,0 +1,35 @@
+{
+  "strategy_id": "backtesting-esg-factor-investing-strategies-quantpedia",
+  "class_name": "SoloQuantGeneratedEsgFactorAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/backtesting-esg-factor-investing-strategies-quantpedia/SoloQuantGeneratedEsgFactorAlgorithm.py.broken",
+  "description": "A股ESG因子动量策略复现草案。使用ROC（12个月变化率）作为ESG评分变化的代理指标，每月调仓，做多动量最强组，做空动量最弱组，采用市值加权。包含A股T+1结算、涨跌停限制及特定手续费模型。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/backtesting-esg-factor-investing-strategies-quantpedia/SoloQuantGeneratedEsgFactorAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-ac305421118a0c86.json",
+  "parameters": {
+    "start-date": "20150101",
+    "end-date": "20231231",
+    "initial-capital": "1000000"
+  },
+  "risk_controls": [
+    "Trailing Stop: 5%",
+    "Max Drawdown: 20%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Price Data",
+      "field": "Daily Close Price (for ROC calculation)"
+    },
+    {
+      "dataset": "Volume Data",
+      "field": "Daily Volume (for value-weighting)"
+    },
+    {
+      "dataset": "ESG Score (Proxy)",
+      "field": "12-month Rate of Change (ROC) used as proxy for ESG Momentum"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T02:13:00.498288+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

@@ -1,0 +1,30 @@
+{
+  "strategy_id": "size-factor-hidden-premium-in-small-cap-stocks-youtube",
+  "class_name": "SoloQuantGeneratedSizeFactorAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/size-factor-hidden-premium-in-small-cap-stocks-youtube/SoloQuantGeneratedSizeFactorAlgorithm.py",
+  "description": "Exploits the size premium (small-cap effect) by selecting small-capitalization A-share stocks. The strategy ranks the equity universe by market capitalization (using volume*price as a proxy due to data constraints) and takes long positions in the smallest companies, rebalancing monthly.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/size-factor-hidden-premium-in-small-cap-stocks-youtube/SoloQuantGeneratedSizeFactorAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-317a93dc23ba9f59.json",
+  "parameters": {
+    "initial_capital": "1000000",
+    "start_date": "2015-01-01",
+    "end_date": "2023-12-31"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (Liquidate all)",
+    "Trailing Stop: 10% below Average Price per position"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Prices",
+      "field": "close"
+    },
+    {
+      "dataset": "Equity Volume",
+      "field": "volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T06:04:17.170172+00:00",
+  "data_coverage": 1.0
+}

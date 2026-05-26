@@ -1,0 +1,30 @@
+{
+  "strategy_id": "quantitative-finance-arxiv-org",
+  "class_name": "SoloQuantGeneratedAshareMomentumAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/quantitative-finance-arxiv-org/SoloQuantGeneratedAshareMomentumAlgorithm.cs",
+  "description": "A generic A-share momentum strategy implementing the full LEAN framework architecture. It selects stocks based on dollar volume and positive EPS, generates momentum signals, constructs equal-weighted portfolios, enforces T+1 settlement, applies A-share specific fees (0.03% commission, 0.1% stamp tax on sell), and enforces 100-share lot sizes, while managing downside risk through stop-loss and max drawdown limits.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/quantitative-finance-arxiv-org/SoloQuantGeneratedAshareMomentumAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/arxiv-q-fin-84665da939c0ed3d.json",
+  "parameters": {
+    "universe": "CSI500",
+    "start-date": "2020-01-01",
+    "end-date": "2023-01-01",
+    "initial-capital": "1000000"
+  },
+  "risk_controls": [
+    "5% per-security stop loss",
+    "10% maximum portfolio drawdown liquidation"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "CoarseFundamental",
+      "field": "DollarVolume"
+    },
+    {
+      "dataset": "FineFundamental",
+      "field": "EarningRatios.BasicEPS.Value"
+    }
+  ],
+  "generated_at_utc": "2026-05-16T23:03:34.721204+00:00"
+}

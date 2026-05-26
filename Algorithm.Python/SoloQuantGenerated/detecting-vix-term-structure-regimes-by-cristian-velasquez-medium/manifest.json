@@ -1,0 +1,29 @@
+{
+  "strategy_id": "detecting-vix-term-structure-regimes-by-cristian-velasquez-medium",
+  "class_name": "SoloQuantGeneratedVixTermStructureAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/detecting-vix-term-structure-regimes-by-cristian-velasquez-medium/SoloQuantGeneratedVixTermStructureAlgorithm.py.broken",
+  "description": "A股波动率期限结构策略。原策略使用PCA和HMM识别VIX期货期限结构状态（Contango/Backwardation）。本草案将其适配至A股市场，使用沪深300ETF(510300)的短期与长期实现波动率比值作为期限结构代理，模拟状态识别，并根据波动率结构变化进行多空切换。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/detecting-vix-term-structure-regimes-by-cristian-velasquez-medium/SoloQuantGeneratedVixTermStructureAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-46b3fba7adf0f289.json",
+  "parameters": {
+    "start-date": "2018-01-01",
+    "end-date": "2023-12-31",
+    "initial-capital": "100000",
+    "symbol": "510300.SH"
+  },
+  "risk_controls": [
+    "Trailing Stop: 价格从最高点回撤5%时止损",
+    "Max Drawdown: 组合回撤超过15%时清仓"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "OHLCV",
+      "ticker": "510300.SH"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T09:02:17.082591+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}
