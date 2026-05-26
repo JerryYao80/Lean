@@ -21,6 +21,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using QuantConnect.Brokerages;
 using QuantConnect.Configuration;
+using QuantConnect.Data;
 using QuantConnect.Interfaces;
 using QuantConnect.Logging;
 using QuantConnect.Orders;
@@ -394,6 +395,12 @@ namespace QuantConnect.Lean.Engine.Results
                 result.ProcessingTime = (endTime - StartTime).TotalSeconds;
                 result.DateFinished = DateTime.Now;
                 result.Progress = 1;
+
+                var provenanceTracker = DataProvenanceTracker.Current;
+                if (provenanceTracker != null)
+                {
+                    State["DataProvenance"] = provenanceTracker.ToJson();
+                }
 
                 StoreInsights();
 

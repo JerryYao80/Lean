@@ -5,7 +5,7 @@
   "algorithm-location": "/home/project/hope/Lean/Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
   "data-folder": "/home/project/hope/Lean/Data",
   "data-directory": "/home/project/hope/Lean/Data",
-  "history-provider": "TushareHistoryProvider",
+  "history-provider": "FallbackTushareHistoryProvider",
   "data-provider": "DefaultDataProvider",
   "results-destination-folder": "/home/project/hope/Lean/Results",
   "influxdb-enabled": true,

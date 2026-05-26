@@ -7,7 +7,7 @@
   "data-folder": "../../../Data",
   "data-directory": "../../../Data",
 
-  "history-provider": "TushareHistoryProvider",
+  "history-provider": "FallbackTushareHistoryProvider",
   "data-provider": "DefaultDataProvider",
 
   "results-destination-folder": "../../../Results",

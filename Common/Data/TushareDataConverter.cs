@@ -325,6 +325,17 @@ namespace QuantConnect.Data
             }
         }
 
+        /// <summary>
+        /// Clear cached data for a symbol so it will be re-read from disk on next access
+        /// </summary>
+        public void ClearCacheForSymbol(string tsCode)
+        {
+            lock (_dailyDataLock)
+            {
+                _dailyDataBySymbol.Remove(tsCode);
+            }
+        }
+
         private List<TradeBar> LoadDailyData(string tsCode)
         {
             var symbol = ConvertToSymbol(tsCode);
