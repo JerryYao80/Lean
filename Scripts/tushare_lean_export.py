@@ -139,11 +139,75 @@ def lean_daily_paths(lean_data_path: str | Path, ts_code: str) -> tuple[Path, Pa
     return directory / f"{ticker}.csv", directory / f"{ticker}.zip"
 
 
+def lean_auxiliary_paths(lean_data_path: str | Path, ts_code: str) -> tuple[Path, Path]:
+    ticker, market = ts_code_to_lean_parts(ts_code)
+    root = Path(lean_data_path) / "equity" / market
+    return root / "map_files" / f"{ticker}.csv", root / "factor_files" / f"{ticker}.csv"
+
+
 def load_rows_from_parquet(data_file: Path, start_date: str | None, end_date: str | None) -> list[str]:
     if not data_file.exists():
         return []
     frame = pd.read_parquet(data_file)
     return build_export_rows(frame, start_date=start_date, end_date=end_date)
+
+
+def build_map_file_rows(ts_code: str) -> list[str]:
+    ticker, market = ts_code_to_lean_parts(ts_code)
+    return [f"19980101,{ticker},{ticker},{market}"]
+
+
+def build_factor_file_rows() -> list[str]:
+    return ["19980101,1.0,0.0"]
+
+
+def write_auxiliary_files(lean_data_path: str | Path, ts_code: str) -> None:
+    map_path, factor_path = lean_auxiliary_paths(lean_data_path, ts_code)
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    factor_path.parent.mkdir(parents=True, exist_ok=True)
+    map_path.write_text("\n".join(build_map_file_rows(ts_code)) + "\n", encoding="utf-8")
+    factor_path.write_text("\n".join(build_factor_file_rows()) + "\n", encoding="utf-8")
+
+
+def has_complete_lean_export(lean_data_path: str | Path, ts_code: str) -> bool:
+    _, zip_path = lean_daily_paths(lean_data_path, ts_code)
+    map_path, factor_path = lean_auxiliary_paths(lean_data_path, ts_code)
+    return zip_path.exists() and map_path.exists() and factor_path.exists()
+
+
+def collect_symbol_coverage_report(
+    universe: list[str],
+    tushare_data_path: str | Path,
+    lean_data_path: str | Path,
+    start_date: str | None,
+    end_date: str | None,
+) -> dict:
+    missing_parquet = []
+    missing_lean_export = []
+    parquet_available = 0
+    lean_export_count = 0
+
+    for ts_code in sorted({str(symbol) for symbol in universe}):
+        rows = load_rows_from_parquet(parquet_path(tushare_data_path, ts_code), start_date, end_date)
+        if rows:
+            parquet_available += 1
+        else:
+            missing_parquet.append(ts_code)
+
+        if has_complete_lean_export(lean_data_path, ts_code):
+            lean_export_count += 1
+        elif rows:
+            missing_lean_export.append(ts_code)
+
+    return {
+        "symbol_count": len(sorted({str(symbol) for symbol in universe})),
+        "parquet_available_count": parquet_available,
+        "lean_export_count": lean_export_count,
+        "missing_parquet_symbols": missing_parquet,
+        "missing_lean_export_symbols": missing_lean_export,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 
 def collect_coverage_report(
@@ -155,34 +219,16 @@ def collect_coverage_report(
     exclude_money_market: bool = True,
 ) -> dict:
     universe = load_registry_universe(registry_file, exclude_money_market=exclude_money_market)
-    missing_parquet = []
-    missing_lean_export = []
-    parquet_available = 0
-    lean_export_count = 0
-
-    for ts_code in universe:
-        rows = load_rows_from_parquet(parquet_path(tushare_data_path, ts_code), start_date, end_date)
-        if rows:
-            parquet_available += 1
-        else:
-            missing_parquet.append(ts_code)
-
-        _, zip_path = lean_daily_paths(lean_data_path, ts_code)
-        if zip_path.exists():
-            lean_export_count += 1
-        elif rows:
-            missing_lean_export.append(ts_code)
-
-    return {
-        "registry_symbol_count": len(universe),
-        "parquet_available_count": parquet_available,
-        "lean_export_count": lean_export_count,
-        "missing_parquet_symbols": missing_parquet,
-        "missing_lean_export_symbols": missing_lean_export,
-        "start_date": start_date,
-        "end_date": end_date,
-        "exclude_money_market_etfs": exclude_money_market,
-    }
+    report = collect_symbol_coverage_report(
+        universe=universe,
+        tushare_data_path=tushare_data_path,
+        lean_data_path=lean_data_path,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    report["registry_symbol_count"] = report.pop("symbol_count")
+    report["exclude_money_market_etfs"] = exclude_money_market
+    return report
 
 
 def validate_zip_rows(zip_path: Path, ticker: str, expected_rows: list[str]) -> None:
@@ -208,7 +254,39 @@ def export_symbol(ts_code: str, tushare_data_path: str | Path, lean_data_path: s
         archive.writestr(f"{ticker.lower()}.csv", "\n".join(rows))
 
     validate_zip_rows(zip_path, ticker, rows)
+    write_auxiliary_files(lean_data_path, ts_code)
     return True
+
+
+def export_symbol_universe(
+    universe: list[str],
+    tushare_data_path: str | Path,
+    lean_data_path: str | Path,
+    start_date: str | None,
+    end_date: str | None,
+    report_file: str | Path | None = None,
+) -> dict:
+    exported_symbols = []
+    for ts_code in sorted({str(symbol) for symbol in universe}):
+        if export_symbol(ts_code, tushare_data_path, lean_data_path, start_date, end_date):
+            exported_symbols.append(ts_code)
+
+    report = collect_symbol_coverage_report(
+        universe=universe,
+        tushare_data_path=tushare_data_path,
+        lean_data_path=lean_data_path,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    report["exported_symbols"] = exported_symbols
+    report["exported_count"] = len(exported_symbols)
+
+    if report_file:
+        path = Path(report_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return report
 
 
 def export_registry_universe(config: dict) -> dict:
@@ -216,33 +294,14 @@ def export_registry_universe(config: dict) -> dict:
         config["registry-file"],
         exclude_money_market=config.get("exclude-money-market-etfs", True),
     )
-
-    exported_symbols = []
-    for ts_code in universe:
-        if export_symbol(
-            ts_code,
-            config["tushare-data-path"],
-            config["lean-data-path"],
-            config.get("start-date"),
-            config.get("end-date"),
-        ):
-            exported_symbols.append(ts_code)
-
-    report = collect_coverage_report(
-        registry_file=config["registry-file"],
+    report = export_symbol_universe(
+        universe=universe,
         tushare_data_path=config["tushare-data-path"],
         lean_data_path=config["lean-data-path"],
         start_date=config.get("start-date"),
         end_date=config.get("end-date"),
-        exclude_money_market=config.get("exclude-money-market-etfs", True),
+        report_file=config.get("report-file"),
     )
-    report["exported_symbols"] = exported_symbols
-    report["exported_count"] = len(exported_symbols)
-
-    report_file = config.get("report-file")
-    if report_file:
-        report_path = Path(report_file)
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-
+    report["registry_symbol_count"] = report.pop("symbol_count")
+    report["exclude_money_market_etfs"] = config.get("exclude-money-market-etfs", True)
     return report

@@ -149,13 +149,7 @@ namespace QuantConnect.Data
             try
             {
                 var allBars = GetOrLoadDailyData(tsCode);
-                var start = startDate.Date;
-                var end = endDate.Date;
-
-                var result = allBars
-                    .Where(bar => bar.EndTime.Date >= start && bar.EndTime.Date <= end)
-                    .Select(bar => new TradeBar(bar))
-                    .ToList();
+                var result = FilterAvailableDailyBars(allBars, startDate, endDate);
 
                 Log.Trace($"TushareDataConverter.GetDailyData(): Loaded {result.Count} bars for {tsCode}");
                 return result;
@@ -165,6 +159,26 @@ namespace QuantConnect.Data
                 Log.Error($"TushareDataConverter.GetDailyData(): Error reading data for {tsCode}: {ex.Message}");
                 return new List<TradeBar>();
             }
+        }
+
+        public static List<TradeBar> FilterAvailableDailyBars(IEnumerable<TradeBar> bars, DateTime startDate, DateTime endDate)
+        {
+            if (bars == null)
+            {
+                return new List<TradeBar>();
+            }
+
+            var startUtc = NormalizeUtc(startDate);
+            var endUtc = NormalizeUtc(endDate);
+            return bars
+                .Where(bar => NormalizeUtc(bar.EndTime) >= startUtc && NormalizeUtc(bar.EndTime) <= endUtc)
+                .Select(bar => new TradeBar(bar))
+                .ToList();
+        }
+
+        private static DateTime NormalizeUtc(DateTime value)
+        {
+            return value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
         }
 
         /// <summary>
