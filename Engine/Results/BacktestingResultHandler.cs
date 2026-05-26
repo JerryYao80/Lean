@@ -308,6 +308,7 @@ namespace QuantConnect.Lean.Engine.Results
 
                 if (result != null)
                 {
+                    InfluxDbExporter?.RecordResultSnapshot(result.Results, Algorithm?.UtcTime ?? DateTime.UtcNow);
                     // Get Storage Location:
                     var key = $"{AlgorithmId}.json";
 
@@ -406,6 +407,7 @@ namespace QuantConnect.Lean.Engine.Results
 
                 //Place result into storage.
                 StoreResult(result);
+                InfluxDbExporter?.RecordMessage("run", "Backtest completed", utcTime: endTime);
 
                 result.Results.ServerStatistics = GetServerStatistics(endTime);
                 //Second, send the truncated packet:
@@ -481,6 +483,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new DebugPacket(_projectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("debug", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -491,6 +494,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new SystemDebugPacket(_projectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("system", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -501,6 +505,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new LogPacket(AlgorithmId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("log", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -514,6 +519,7 @@ namespace QuantConnect.Lean.Engine.Results
             if (Messages.Count > 500) return;
             Messages.Enqueue(new HandledErrorPacket(AlgorithmId, message, stacktrace));
             _errorMessage = message;
+            InfluxDbExporter?.RecordMessage("error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -527,6 +533,7 @@ namespace QuantConnect.Lean.Engine.Results
             Messages.Enqueue(new RuntimeErrorPacket(_job.UserId, AlgorithmId, message, stacktrace));
             _errorMessage = message;
             SetAlgorithmState(message, stacktrace);
+            InfluxDbExporter?.RecordMessage("runtime_error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -535,7 +542,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// <param name="brokerageMessageEvent">The brokerage message event</param>
         public virtual void BrokerageMessage(BrokerageMessageEvent brokerageMessageEvent)
         {
-            // NOP
+            InfluxDbExporter?.RecordBrokerageMessage(brokerageMessageEvent, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -556,6 +563,7 @@ namespace QuantConnect.Lean.Engine.Results
                 return;
             }
 
+            var addedPoint = false;
             lock (ChartLock)
             {
                 //Add a copy locally:
@@ -580,6 +588,16 @@ namespace QuantConnect.Lean.Engine.Results
                     || chartName == PortfolioTurnoverKey)
                 {
                     series.AddPoint(value);
+                    addedPoint = true;
+                }
+            }
+
+            if (addedPoint)
+            {
+                InfluxDbExporter?.RecordChartPoint(chartName, seriesName, seriesType, unit, value);
+                if (chartName == StrategyEquityKey && seriesName == EquityKey)
+                {
+                    InfluxDbExporter?.RecordPortfolioSnapshot(value.Time);
                 }
             }
         }
@@ -704,6 +722,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             var statusPacket = new AlgorithmStatusPacket(_algorithmId, _projectId, status, message) { OptimizationId = _job.OptimizationId };
             MessagingHandler.Send(statusPacket);
+            InfluxDbExporter?.RecordMessage("status", status.ToString(), message, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -718,6 +737,7 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 RuntimeStatistics[key] = value;
             }
+            InfluxDbExporter?.RecordRuntimeStatistic(key, value, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -727,6 +747,7 @@ namespace QuantConnect.Lean.Engine.Results
         public override void OrderEvent(OrderEvent newEvent)
         {
             _capacityEstimate?.OnOrderEvent(newEvent);
+            InfluxDbExporter?.RecordOrderEvent(newEvent, Algorithm?.Transactions?.GetOrderById(newEvent.OrderId));
         }
 
         /// <summary>

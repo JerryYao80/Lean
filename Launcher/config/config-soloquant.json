@@ -36,11 +36,16 @@
   },
   "pipeline": {
     "poll-seconds": 300,
+    "crawl-interval-seconds": 28800,
+    "local-ingest-interval-seconds": 3600,
     "crawl-max-queries-per-task": 2,
     "crawl-max-results-per-query": 1,
     "crawl-timeout-seconds": 300,
+    "crawl-max-content-chars": 200000,
     "llm-max-items-per-tick": 1,
-    "llm-stage-timeout-seconds": 1200
+    "llm-stage-timeout-seconds": 3600,
+    "reproduce-interval-seconds": 1800,
+    "optimize-interval-seconds": 1800
   },
   "schedule": {
     "download-history-cron": "0 2 * * *",
@@ -131,6 +136,7 @@
   ],
   "strategy-policy": {
     "language": "CSharp",
+    "languages": ["CSharp", "Python"],
     "min-versions": 3,
     "baseline-version": "baseline",
     "required-learned-versions": 2,
@@ -142,10 +148,17 @@
     ]
   },
   "llm": {
-    "base-url": "https://api.deepseek.com",
-    "model": "deepseek-v4-pro",
-    "api-key-env-var": "LLM_API_KEY",
-    "api-key-default": "sk-0f24ceddfcad42d6aa5875dc49661dd6",
-    "timeout-seconds": 180
+    "base-url": "https://mydamoxing.cn/v1",
+    "model": "glm-5.1",
+    "api-key-env-var": "ZHIPU_API_KEY",
+    "api-key-default": "sk-Lqf1cFD3252DX3Jt4lXWa3C2lCD3U5bwSdFoUwUIJZWD6Dpw",
+    "timeout-seconds": 600
+  },
+  "code-generation-llm": {
+    "base-url": "https://mydamoxing.cn/v1",
+    "model": "glm-5.1",
+    "api-key-env-var": "ZHIPU_API_KEY",
+    "api-key-default": "sk-Lqf1cFD3252DX3Jt4lXWa3C2lCD3U5bwSdFoUwUIJZWD6Dpw",
+    "timeout-seconds": 600
   }
 }
