@@ -8,6 +8,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -19,6 +20,7 @@ if str(TUSHARE_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(TUSHARE_MODULE_DIR))
 
 from ashare_etf_t0_feature_backtest import build_etf_metadata_lookup
+import ashare_live_market_cache as live_market_cache
 from export_ashare_etf_t0_feature_data import FEATURE_COLUMNS, build_feature_frame, feature_daily_path
 from rt_daily_downloader import TushareRtDailyClient
 from tushare_data_layer import TushareDataLayer
@@ -32,6 +34,9 @@ PATH_KEYS = {
     'feature-data-path',
     'live-feature-report-file',
     'daily-quote-archive-path',
+    'shared-live-market-snapshot-file',
+    'shared-live-market-report-file',
+    'shared-live-market-archive-path',
 }
 LIVE_FEATURE_COLUMNS = [*FEATURE_COLUMNS, 'feature_timestamp']
 SIGNAL_SOURCE_FIELDS = {
@@ -85,6 +90,9 @@ def default_config() -> dict:
         'dataset-catalog': str(root / 'Launcher' / 'config' / 'config-ashare-dataset-catalog.json'),
         'feature-data-path': str(root / 'Data' / 'alternative' / 'ashare-etf-t0-live-features'),
         'daily-quote-archive-path': str(root / 'Data' / 'archive' / 'daily_quotes'),
+        'shared-live-market-snapshot-file': str(live_market_cache.default_shared_snapshot_file()),
+        'shared-live-market-report-file': str(live_market_cache.default_shared_report_file()),
+        'shared-live-market-archive-path': str(live_market_cache.default_shared_archive_path()),
         'start-date': '20240101',
         'end-date': '20261231',
         'exclude-money-market-etfs': True,
@@ -93,6 +101,22 @@ def default_config() -> dict:
         'tushare-token-env-var': 'TUSHARE_TOKEN',
         'live-feature-poll-interval-seconds': 30,
         'live-feature-quote-batch-size': 25,
+        'live-feature-minute-frequency': '1MIN',
+        'shared-live-market-refresh-interval-seconds': 60,
+        'shared-live-market-batch-size': 200,
+        'shared-live-market-max-workers': 1,
+        'shared-live-market-max-requests-per-minute': 50,
+        'live-price-source-mode': 'auto',
+        'market-symbol': '000300.SH',
+        'simulated-live-price-random-seed': 20260317,
+        'simulated-live-price-lookback-days': 60,
+        'simulated-live-price-min-history-days': 20,
+        'simulated-live-price-trading-minutes-per-day': 240,
+        'simulated-live-price-volatility-scale': 8.0,
+        'simulated-live-price-min-daily-volatility': 0.80,
+        'simulated-live-price-jump-probability': 0.22,
+        'simulated-live-price-jump-scale': 0.10,
+        'timezone': 'Asia/Shanghai',
         'live-feature-bootstrap-history': True,
         'live-feature-report-file': str(root / 'Results' / 'ashare-etf-t0-feature-live-bridge-report.json'),
     }
@@ -151,6 +175,11 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config['live-feature-bootstrap-history'] = _coerce_bool(config.get('live-feature-bootstrap-history'), True)
     config['live-feature-poll-interval-seconds'] = _coerce_int(config.get('live-feature-poll-interval-seconds'), 30)
     config['live-feature-quote-batch-size'] = _coerce_int(config.get('live-feature-quote-batch-size'), 25)
+    config['live-feature-minute-frequency'] = str(config.get('live-feature-minute-frequency') or '1MIN').strip().upper()
+    config['shared-live-market-refresh-interval-seconds'] = _coerce_int(config.get('shared-live-market-refresh-interval-seconds'), 60)
+    config['shared-live-market-batch-size'] = _coerce_int(config.get('shared-live-market-batch-size'), 200)
+    config['shared-live-market-max-workers'] = _coerce_int(config.get('shared-live-market-max-workers'), 1)
+    config['shared-live-market-max-requests-per-minute'] = _coerce_int(config.get('shared-live-market-max-requests-per-minute'), 50)
     return config
 
 
@@ -251,6 +280,85 @@ def _carry_forward(previous_row: pd.Series, field: str):
 
 
 TushareRealtimeQuoteClient = TushareRtDailyClient
+
+
+class TushareRealtimeMinuteClient:
+    """Compatibility shim retained for minute-bar tests and older tooling."""
+
+    def __init__(self, token: str, batch_size: int = 25, frequency: str = '1MIN', http_url: str | None = None):
+        self._token = token
+        self._batch_size = max(1, int(batch_size))
+        self._frequency = str(frequency or '1MIN').strip().upper()
+        self._http_url = http_url
+        self._api = None
+
+    def _create_api(self):
+        import tushare as ts  # type: ignore
+
+        api = ts.pro_api(self._token)
+        api._DataApi__token = self._token
+        if self._http_url:
+            api._DataApi__http_url = self._http_url
+        return api
+
+    @property
+    def api(self):
+        if self._api is None:
+            self._api = self._create_api()
+        return self._api
+
+    def _fetch_batch(self, ts_codes: list[str]) -> pd.DataFrame:
+        return self.api.rt_min(ts_code=','.join(ts_codes), freq=self._frequency)
+
+    def fetch_quotes(self, ts_codes: list[str]) -> pd.DataFrame:
+        symbols = [str(ts_code).strip().upper() for ts_code in ts_codes if str(ts_code).strip()]
+        frames: list[pd.DataFrame] = []
+        for start in range(0, len(symbols), self._batch_size):
+            batch = symbols[start:start + self._batch_size]
+            try:
+                frame = self._fetch_batch(batch)
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+                continue
+            except Exception:
+                pass
+
+            for symbol in batch:
+                frame = self.api.rt_min(ts_code=symbol, freq=self._frequency)
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+
+        if not frames:
+            return pd.DataFrame()
+        combined = pd.concat(frames, ignore_index=True)
+        combined.columns = [str(column).strip().lower() for column in combined.columns]
+        if 'ts_code' in combined.columns:
+            combined['ts_code'] = combined['ts_code'].astype(str).str.strip().str.upper()
+        return combined
+
+    @staticmethod
+    def aggregate_minute_bars(minute_frame: pd.DataFrame) -> pd.DataFrame:
+        if minute_frame is None or minute_frame.empty:
+            return pd.DataFrame()
+        frame = minute_frame.copy()
+        frame.columns = [str(column).strip().lower() for column in frame.columns]
+        frame['ts_code'] = frame['ts_code'].astype(str).str.strip().str.upper()
+        frame['trade_time'] = pd.to_datetime(frame['trade_time'])
+        grouped_rows: list[dict[str, object]] = []
+        for ts_code, group in frame.sort_values(['ts_code', 'trade_time']).groupby('ts_code'):
+            grouped_rows.append({
+                'ts_code': ts_code,
+                'trade_date': group['trade_time'].dt.strftime('%Y%m%d').iloc[-1],
+                'feature_timestamp': group['trade_time'].dt.strftime('%Y-%m-%d %H:%M:%S').iloc[-1],
+                'open': float(group['open'].iloc[0]),
+                'high': float(group['high'].max()),
+                'low': float(group['low'].min()),
+                'close': float(group['close'].iloc[-1]),
+                'price': float(group['close'].iloc[-1]),
+                'vol': float(group['vol'].sum()),
+                'amount': float(group['amount'].sum()),
+            })
+        return pd.DataFrame(grouped_rows).sort_values('ts_code').reset_index(drop=True)
 
 
 def build_history_cache(config: dict, session_date: str | None = None) -> dict[str, pd.DataFrame]:
@@ -469,12 +577,16 @@ def upsert_live_feature_file(feature_path: str | Path, base_history: pd.DataFram
 
 def refresh_live_feature_snapshots(
     config: dict,
-    quote_client,
-    history_cache: dict[str, pd.DataFrame],
+    quote_client=None,
+    history_cache: dict[str, pd.DataFrame] | None = None,
+    market_context: dict | None = None,
+    realtime_client=None,
+    simulated_client=None,
     current_time: datetime | None = None,
 ) -> dict:
     now = current_time or datetime.now()
     session_date = now.strftime('%Y%m%d')
+    history_cache = history_cache or {}
     universe = sorted(history_cache.keys())
 
     print(f"\n{'='*80}")
@@ -482,7 +594,22 @@ def refresh_live_feature_snapshots(
     print(f"📅 Session: {session_date} | Universe: {len(universe)} symbols")
     print(f"{'='*80}")
 
-    quotes = quote_client.fetch_quotes(universe)
+    shared_snapshot = None
+    if market_context is not None:
+        shared_snapshot = live_market_cache.ensure_full_market_snapshot(
+            config,
+            session_date,
+            market_context,
+            realtime_client=realtime_client if realtime_client is not None else quote_client,
+            simulated_client=simulated_client,
+        )
+        quotes = live_market_cache.filter_quotes(shared_snapshot.get('quotes'), universe)
+        refreshed_quotes = live_market_cache.filter_quotes(shared_snapshot.get('fresh_quotes'), universe)
+    else:
+        if quote_client is None:
+            raise RuntimeError('quote_client is required when market_context is not provided.')
+        quotes = quote_client.fetch_quotes(universe)
+        refreshed_quotes = quotes.copy()
 
     if quotes.empty:
         print("\n⚠️  No quotes received from API")
@@ -559,12 +686,21 @@ def refresh_live_feature_snapshots(
         'generated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
         'session_date': session_date,
         'quote_count': int(len(quotes.index)),
+        'refreshed_quote_count': int(len(refreshed_quotes.index)),
         'written_count': written,
         'updated_symbols': updated,
         'skipped_symbols': skipped,
         'feature_data_path': config['feature-data-path'],
         'signal_preview': signal_preview,
     }
+    if shared_snapshot is not None:
+        report.update({
+            'shared_market_requested_symbol_count': int(((shared_snapshot.get('snapshot_payload') or {}).get('requested_symbol_count') or 0)),
+            'shared_market_received_quote_count': int(((shared_snapshot.get('snapshot_payload') or {}).get('received_quote_count') or 0)),
+            'shared_market_refreshed_quote_count': int(((shared_snapshot.get('snapshot_payload') or {}).get('refreshed_quote_count') or 0)),
+            'shared_market_cached': bool(shared_snapshot.get('used_cached_snapshot')),
+            'shared_live_market_snapshot_file': config.get('shared-live-market-snapshot-file'),
+        })
     return report
 
 
@@ -890,12 +1026,10 @@ def run_live_bridge(
     once: bool = False,
     run_outside_market_hours: bool = False,
 ) -> int:
-    token = resolve_tushare_token(config)
-    quote_client = quote_client or TushareRtDailyClient(
-        token,
-        batch_size=config['live-feature-quote-batch-size'],
-        http_url=config.get('tushare-http-url'),
-    )
+    injected_quote_client = quote_client is not None
+    quote_client = quote_client or live_market_cache.create_realtime_client(config)
+    simulated_client = live_market_cache.create_simulated_client(config)
+    timezone = ZoneInfo(str(config.get('timezone') or 'Asia/Shanghai'))
     current_session = datetime.now().strftime('%Y%m%d')
     history_cache = build_history_cache(config, session_date=current_session)
     bootstrap_written = 0
@@ -907,7 +1041,7 @@ def run_live_bridge(
     iteration = 0
     while True:
         iteration += 1
-        now = datetime.now()
+        now = datetime.now(timezone)
         session_date = now.strftime('%Y%m%d')
         if session_date != current_session:
             print(f"\n📆 New trading session detected: {session_date}")
@@ -920,8 +1054,34 @@ def run_live_bridge(
                 print(f"✅ Bootstrapped {bootstrap_written} feature files\n")
 
         try:
-            if run_outside_market_hours or once or is_china_market_session_open(now):
-                report = refresh_live_feature_snapshots(config, quote_client, history_cache, current_time=now)
+            if injected_quote_client:
+                market_context = {
+                    'requested_mode': 'override',
+                    'selected_mode': 'tushare-realtime',
+                    'session_state': 'explicit-override',
+                    'market_open': True,
+                    'reason': 'run_live_bridge received explicit quote_client override',
+                    'now': now,
+                    'evaluated_at': now.isoformat(),
+                }
+            else:
+                market_context = live_market_cache.resolve_market_data_context(
+                    config['tushare-data-path'],
+                    requested_mode=config.get('live-price-source-mode', 'auto'),
+                    market_symbol=str(config.get('market-symbol') or '000300.SH'),
+                    now=now,
+                    timezone=str(config.get('timezone') or 'Asia/Shanghai'),
+                )
+            if run_outside_market_hours or once or market_context.get('market_open'):
+                report = refresh_live_feature_snapshots(
+                    config,
+                    quote_client=quote_client,
+                    history_cache=history_cache,
+                    market_context=market_context,
+                    realtime_client=quote_client,
+                    simulated_client=simulated_client,
+                    current_time=now,
+                )
             else:
                 market_status = "⏸️  Market closed - pausing updates"
                 print(f"\n{market_status} (iteration {iteration})")

@@ -23,6 +23,7 @@ for candidate in [CURRENT_DIR, DATA_SOURCE_DIR]:
         sys.path.insert(0, candidate_text)
 
 import config as tushare_runtime_config
+import ashare_live_market_cache as live_market_cache
 from rt_daily_downloader import GbmSyntheticRtDailyClient, TushareRtDailyClient
 
 
@@ -35,6 +36,9 @@ PATH_KEYS = {
     "live-bridge-report-file",
     "live-price-snapshot-file",
     "daily-quote-archive-path",
+    "shared-live-market-snapshot-file",
+    "shared-live-market-report-file",
+    "shared-live-market-archive-path",
 }
 DATA_RELATIVE_KEYS = {
     "historical-feature-path",
@@ -42,10 +46,13 @@ DATA_RELATIVE_KEYS = {
     "historical-benchmark-file",
     "benchmark-file",
     "daily-quote-archive-path",
+    "shared-live-market-archive-path",
 }
 RESULTS_RELATIVE_KEYS = {
     "live-bridge-report-file",
     "live-price-snapshot-file",
+    "shared-live-market-snapshot-file",
+    "shared-live-market-report-file",
 }
 
 FEATURE_COLUMNS = [
@@ -85,6 +92,9 @@ def default_config() -> dict:
         "live-bridge-report-file": str(root / "Results" / "ashare-llm-quant-live-bridge-report.json"),
         "live-price-snapshot-file": str(root / "Results" / "ashare-llm-quant-live-price-snapshot.json"),
         "daily-quote-archive-path": str(root / "Data" / "archive" / "ashare-llm-quant-live-daily-quotes"),
+        "shared-live-market-snapshot-file": str(live_market_cache.default_shared_snapshot_file()),
+        "shared-live-market-report-file": str(live_market_cache.default_shared_report_file()),
+        "shared-live-market-archive-path": str(live_market_cache.default_shared_archive_path()),
         "market-symbol": "000300.SH",
         "tushare-token": "",
         "tushare-http-url": "",
@@ -95,6 +105,10 @@ def default_config() -> dict:
         "live-price-max-requests-per-minute": 50,
         "live-factor-poll-interval-seconds": 60,
         "live-price-refresh-interval-seconds": 60,
+        "shared-live-market-refresh-interval-seconds": 60,
+        "shared-live-market-batch-size": 200,
+        "shared-live-market-max-workers": 1,
+        "shared-live-market-max-requests-per-minute": 50,
         "simulated-live-price-random-seed": 20260317,
         "simulated-live-price-lookback-days": 60,
         "simulated-live-price-min-history-days": 20,
@@ -183,6 +197,10 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config["live-price-max-requests-per-minute"] = max(1, coerce_int(config.get("live-price-max-requests-per-minute"), 50))
     config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 60))
     config["live-price-refresh-interval-seconds"] = max(1, coerce_int(config.get("live-price-refresh-interval-seconds"), 60))
+    config["shared-live-market-refresh-interval-seconds"] = max(1, coerce_int(config.get("shared-live-market-refresh-interval-seconds"), 60))
+    config["shared-live-market-batch-size"] = max(1, coerce_int(config.get("shared-live-market-batch-size"), 200))
+    config["shared-live-market-max-workers"] = max(1, coerce_int(config.get("shared-live-market-max-workers"), 1))
+    config["shared-live-market-max-requests-per-minute"] = max(1, coerce_int(config.get("shared-live-market-max-requests-per-minute"), 50))
     config["simulated-live-price-random-seed"] = coerce_int(config.get("simulated-live-price-random-seed"), 20260317)
     config["simulated-live-price-lookback-days"] = max(10, coerce_int(config.get("simulated-live-price-lookback-days"), 60))
     config["simulated-live-price-min-history-days"] = max(5, coerce_int(config.get("simulated-live-price-min-history-days"), 20))
@@ -486,16 +504,18 @@ def materialize_live_snapshot(config: dict, trade_date: str, market_context: dic
     timezone = ZoneInfo(str(config.get("timezone") or "Asia/Shanghai"))
     current_time = market_context["now"]
     universe = discover_universe(config["historical-feature-path"])
-    selected_mode = market_context["selected_mode"]
-    if selected_mode == "tushare-realtime" and realtime_client is not None:
-        quotes = realtime_client.fetch_quotes(universe, trade_date=trade_date)
-        metadata = dict(realtime_client.last_fetch_metadata)
-    else:
-        quotes = simulated_client.fetch_quotes(universe, trade_date=trade_date)
-        metadata = dict(simulated_client.last_fetch_metadata)
-        selected_mode = "gbm-simulated"
-
-    normalized_quote_rows = normalize_quote_records(quotes, trade_date, selected_mode, current_time, timezone)
+    shared_snapshot = live_market_cache.ensure_full_market_snapshot(
+        config,
+        trade_date,
+        market_context,
+        realtime_client=realtime_client,
+        simulated_client=simulated_client,
+    )
+    selected_mode = str((shared_snapshot.get("report") or {}).get("source_mode") or market_context["selected_mode"])
+    metadata = dict((shared_snapshot.get("report") or {}).get("client_metadata") or {})
+    filtered_quotes = live_market_cache.filter_quotes(shared_snapshot.get("quotes"), universe)
+    filtered_fresh_quotes = live_market_cache.filter_quotes(shared_snapshot.get("fresh_quotes"), universe)
+    normalized_quote_rows = normalize_quote_records(filtered_quotes, trade_date, selected_mode, current_time, timezone)
     quote_lookup = {
         str(row.get("ts_code") or "").strip().upper(): row
         for row in normalized_quote_rows
@@ -579,13 +599,18 @@ def materialize_live_snapshot(config: dict, trade_date: str, market_context: dic
         "live_quote_report": {
             "requested_symbol_count": len(universe),
             "received_quote_count": len(normalized_quote_rows),
-            "refreshed_quote_count": len(normalized_quote_rows),
+            "refreshed_quote_count": int(len(filtered_fresh_quotes.index)),
             "carried_forward_quote_count": carry_forward_count,
             "generated_at": generated_at,
             "source_mode": selected_mode,
             "batch_count": metadata.get("batch_count"),
             "minute_window_count": metadata.get("minute_window_count"),
             "max_requests_per_minute": config["live-price-max-requests-per-minute"],
+            "shared_market_requested_symbol_count": int(((shared_snapshot.get("snapshot_payload") or {}).get("requested_symbol_count") or 0)),
+            "shared_market_received_quote_count": int(((shared_snapshot.get("snapshot_payload") or {}).get("received_quote_count") or 0)),
+            "shared_market_refreshed_quote_count": int(((shared_snapshot.get("snapshot_payload") or {}).get("refreshed_quote_count") or 0)),
+            "shared_market_cached": bool(shared_snapshot.get("used_cached_snapshot")),
+            "shared_live_market_snapshot_file": config.get("shared-live-market-snapshot-file"),
         },
         "market_preview": {
             "trade_date": trade_date,
@@ -601,29 +626,8 @@ def build_clients(config: dict):
     token = resolve_tushare_token(config)
     realtime_client = None
     if token:
-        realtime_client = TushareRtDailyClient(
-            token=token,
-            batch_size=config["live-price-batch-size"],
-            http_url=config.get("tushare-http-url"),
-            verbose=False,
-            max_workers=config["live-price-max-workers"],
-            max_requests_per_minute=config["live-price-max-requests-per-minute"],
-        )
-    simulated_client = GbmSyntheticRtDailyClient(
-        tushare_data_path=config["tushare-data-path"],
-        batch_size=config["live-price-batch-size"],
-        poll_interval_seconds=config["live-factor-poll-interval-seconds"],
-        lookback_days=config["simulated-live-price-lookback-days"],
-        min_history_days=config["simulated-live-price-min-history-days"],
-        trading_minutes_per_day=config["simulated-live-price-trading-minutes-per-day"],
-        random_seed=config["simulated-live-price-random-seed"],
-        volatility_scale=config["simulated-live-price-volatility-scale"],
-        min_daily_volatility=config["simulated-live-price-min-daily-volatility"],
-        jump_probability=config["simulated-live-price-jump-probability"],
-        jump_scale=config["simulated-live-price-jump-scale"],
-        timezone=config["timezone"],
-        verbose=False,
-    )
+        realtime_client = live_market_cache.create_realtime_client(config)
+    simulated_client = live_market_cache.create_simulated_client(config)
     return realtime_client, simulated_client
 
 

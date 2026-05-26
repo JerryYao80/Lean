@@ -17,6 +17,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 import live_paper_console as console
+import live_paper_runner as runner
 
 
 def repo_root() -> Path:
@@ -38,6 +39,18 @@ def default_bridge_python_executable() -> str:
 
 def resolve_live_config_path(config_path: str | Path | None = None) -> Path:
     return Path(config_path).resolve() if config_path else default_live_config_path().resolve()
+
+
+def normalize_console_output_mode(value: str | None) -> str:
+    mode = str(value or "").strip().lower()
+    return "custom" if mode == "custom" else "native"
+
+
+def resolve_console_output_mode(runtime_config: dict | None = None, requested_mode: str | None = None) -> str:
+    configured_mode = None
+    if isinstance(runtime_config, dict):
+        configured_mode = runtime_config.get("console-output-mode")
+    return normalize_console_output_mode(requested_mode or configured_mode)
 
 
 def safe_int(value, default: int) -> int:
@@ -100,6 +113,8 @@ def load_runtime_config(config_path: str | Path | None = None) -> dict:
         "benchmark-file": resolve_path(parameters.get("benchmark-file"), root / "Data" / "alternative" / "ashare-llm-quant-live-features" / "benchmark" / "000300.SH.csv", data_base),
         "live-bridge-report-file": resolve_path(parameters.get("live-bridge-report-file"), root / "Results" / "ashare-llm-quant-live-bridge-report.json", results_base),
         "live-price-snapshot-file": resolve_path(parameters.get("live-price-snapshot-file"), root / "Results" / "ashare-llm-quant-live-price-snapshot.json", results_base),
+        "shared-live-market-snapshot-file": resolve_path(parameters.get("shared-live-market-snapshot-file"), root / "Results" / "shared-live-market" / "ashare-live-price-snapshot.json", results_base),
+        "shared-live-market-report-file": resolve_path(parameters.get("shared-live-market-report-file"), root / "Results" / "shared-live-market" / "ashare-live-market-report.json", results_base),
         "trade-report-file": resolve_path(parameters.get("trade-report-file"), root / "Results" / "ashare-llm-quant-live-trades.csv", results_base),
         "daily-summary-file": resolve_path(parameters.get("daily-summary-file"), root / "Results" / "ashare-llm-quant-live-daily.csv", results_base),
         "rebalance-report-file": resolve_path(parameters.get("rebalance-report-file"), root / "Results" / "ashare-llm-quant-live-rebalances.csv", results_base),
@@ -108,11 +123,14 @@ def load_runtime_config(config_path: str | Path | None = None) -> dict:
         "comparison-summary-file": resolve_path(parameters.get("comparison-summary-file"), root / "Results" / "ashare-llm-quant-live-comparison.json", results_base),
         "historical-feature-path": resolve_path(parameters.get("historical-feature-path"), root / "Data" / "alternative" / "ashare-llm-quant-features", data_base),
         "historical-benchmark-file": resolve_path(parameters.get("historical-benchmark-file"), root / "Data" / "alternative" / "ashare-llm-quant-features" / "benchmark" / "000300.SH.csv", data_base),
+        "shared-live-market-archive-path": resolve_path(parameters.get("shared-live-market-archive-path"), root / "Data" / "archive" / "ashare-live-market-daily-quotes", data_base),
         "bridge-ready-timeout-seconds": max(60, safe_int(parameters.get("bridge-ready-timeout-seconds"), 600)),
         "live-factor-poll-interval-seconds": max(1, safe_int(parameters.get("live-factor-poll-interval-seconds"), 60)),
+        "shared-live-market-refresh-interval-seconds": max(1, safe_int(parameters.get("shared-live-market-refresh-interval-seconds"), 60)),
         "live-signal-interval-minutes": max(1, safe_int(parameters.get("live-signal-interval-minutes"), 5)),
         "rebalance-frequency": str(parameters.get("rebalance-frequency") or "interval"),
         "initial-capital": str(parameters.get("initial-capital") or "1000000"),
+        "console-output-mode": normalize_console_output_mode(parameters.get("console-output-mode")),
         "live-price-source-mode": str(parameters.get("live-price-source-mode") or "auto"),
         "simulated-live-price-volatility-scale": str(parameters.get("simulated-live-price-volatility-scale") or "8.0"),
     }
@@ -178,12 +196,17 @@ def build_bridge_command(config_path: str | Path | None = None, python_executabl
 
 def build_launcher_command(config_path: str | Path | None = None) -> tuple[list[str], Path]:
     config_path = resolve_live_config_path(config_path)
-    launcher = launcher_binary_path().resolve()
-    return [str(launcher), "--config", str(config_path)], launcher.parent
+    launcher_dir = launcher_binary_path().resolve().parent
+    launcher_dll = launcher_dir / "QuantConnect.Lean.Launcher.dll"
+    return [runner.dotnet_binary_path(), str(launcher_dll), "--config", str(config_path)], launcher_dir
 
 
-def normalize_lean_output_line(line: str) -> str | None:
-    text = line.strip()
+def normalize_lean_output_line(line: str, console_output_mode: str = "custom") -> str | None:
+    raw_text = line.rstrip("\n")
+    if console_output_mode == "native":
+        return raw_text if raw_text.strip() else None
+
+    text = raw_text.strip()
     if not text:
         return None
     if "STATISTICS::" in text:
@@ -201,23 +224,31 @@ def normalize_lean_output_line(line: str) -> str | None:
     return None
 
 
-def normalize_process_output_line(label: str, line: str) -> str | None:
+def normalize_process_output_line(label: str, line: str, console_output_mode: str = "custom") -> str | None:
     text = line.rstrip("\n")
     if label == "lean":
-        normalized = normalize_lean_output_line(text)
-        return f"[lean] {normalized}" if normalized else None
+        normalized = normalize_lean_output_line(text, console_output_mode=console_output_mode)
+        if normalized is None:
+            return None
+        if console_output_mode == "native":
+            return normalized
+        return f"[lean] {normalized}"
     text = text.strip()
     return f"[{label}] {text}" if text else None
 
 
-def stream_process_output(process: subprocess.Popen, label: str) -> threading.Thread | None:
+def stream_process_output(
+    process: subprocess.Popen,
+    label: str,
+    console_output_mode: str = "custom",
+) -> threading.Thread | None:
     if process.stdout is None:
         return None
 
     def consume_output() -> None:
         assert process.stdout is not None
         for line in process.stdout:
-            normalized = normalize_process_output_line(label, line)
+            normalized = normalize_process_output_line(label, line, console_output_mode=console_output_mode)
             if normalized:
                 print(normalized, flush=True)
 
@@ -226,7 +257,12 @@ def stream_process_output(process: subprocess.Popen, label: str) -> threading.Th
     return thread
 
 
-def start_logged_process(command: list[str], cwd: Path, label: str) -> tuple[subprocess.Popen, threading.Thread | None]:
+def start_logged_process(
+    command: list[str],
+    cwd: Path,
+    label: str,
+    console_output_mode: str = "custom",
+) -> tuple[subprocess.Popen, threading.Thread | None]:
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -239,7 +275,7 @@ def start_logged_process(command: list[str], cwd: Path, label: str) -> tuple[sub
     )
     print(f"[process start] name={label} pid={process.pid} cwd={cwd}", flush=True)
     print(f"[process cmd] {label}: {' '.join(command)}", flush=True)
-    return process, stream_process_output(process, label)
+    return process, stream_process_output(process, label, console_output_mode=console_output_mode)
 
 
 def terminate_process(process: subprocess.Popen | None) -> None:
@@ -409,7 +445,12 @@ def wait_for_process_with_status(
     process: subprocess.Popen,
     runtime_config: dict,
     output_fresh_since: float | None = None,
+    console_output_mode: str | None = None,
 ) -> int:
+    resolved_console_output_mode = resolve_console_output_mode(runtime_config, console_output_mode)
+    if resolved_console_output_mode == "native":
+        return process.wait()
+
     interval_seconds = max(5.0, float(runtime_config["live-factor-poll-interval-seconds"]))
     display_state: dict[str, str] = {}
     print_runtime_status(runtime_config, output_fresh_since=output_fresh_since, display_state=display_state)
@@ -433,24 +474,79 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
     if session_root is not None:
         print(f"Session root        : {session_root}", flush=True)
     print("Market data         : Tushare realtime in-session; GBM-simulated daily bars off-session", flush=True)
+    print(
+        "Console output      : "
+        + (
+            "native no-broker LEAN live-paper stdout"
+            if resolve_console_output_mode(runtime_config) == "native"
+            else "custom account/trade/allocation summaries"
+        ),
+        flush=True,
+    )
     print(f"Historical features : {runtime_config['historical-feature-path']}", flush=True)
     print(f"Live feature path   : {runtime_config['feature-data-path']}", flush=True)
     print(f"Benchmark file      : {runtime_config['benchmark-file']}", flush=True)
     print(f"Snapshot file       : {runtime_config['live-price-snapshot-file']}", flush=True)
+    print(f"Shared mkt snapshot : {runtime_config['shared-live-market-snapshot-file']}", flush=True)
+    print(f"Shared mkt report   : {runtime_config['shared-live-market-report-file']}", flush=True)
     print(f"Bridge report       : {runtime_config['live-bridge-report-file']}", flush=True)
+    print(f"Shared mkt archive  : {runtime_config['shared-live-market-archive-path']}", flush=True)
     print(f"Rebalance           : {runtime_config['rebalance-frequency']} every {runtime_config['live-signal-interval-minutes']} minute(s)", flush=True)
+    print(f"Market cache refresh: {runtime_config['shared-live-market-refresh-interval-seconds']} seconds", flush=True)
     print(f"Initial capital     : {runtime_config['initial-capital']}", flush=True)
     print(f"Price mode          : {runtime_config['live-price-source-mode']} (sim vol scale={runtime_config['simulated-live-price-volatility-scale']})", flush=True)
+    print("Process flow        : full-market rt_k/rt_etf_k snapshot -> strategy universe filter -> signal generation -> LEAN live-paper", flush=True)
     print("=" * 100)
 
 
-def run_live_paper(config_path: str | Path | None = None, start_bridge: bool = True, start_launcher: bool = True, python_executable: str | None = None) -> int:
+def run_live_paper(
+    config_path: str | Path | None = None,
+    start_bridge: bool = True,
+    start_launcher: bool = True,
+    python_executable: str | None = None,
+    console_output_mode: str | None = None,
+) -> int:
     session_config_path, runtime_config, session_root = prepare_session_config(config_path)
+    runtime_config["console-output-mode"] = resolve_console_output_mode(runtime_config, console_output_mode)
     resolved_config_path = session_config_path
     print_live_plan(resolved_config_path, runtime_config, session_root=session_root)
 
+    if runtime_config["console-output-mode"] == "native":
+        bridge_spec = runner.ProcessSpec(
+            command=build_bridge_command(resolved_config_path, python_executable),
+            cwd=repo_root(),
+            label="bridge",
+            passthrough=False,
+        )
+        launcher_command, workdir = build_launcher_command(resolved_config_path)
+        launcher_spec = runner.ProcessSpec(
+            command=launcher_command,
+            cwd=workdir,
+            label="lean",
+            passthrough=True,
+        )
+        return runner.run_native_live_paper_session(
+            strategy_name="A-share LLM live paper",
+            start_bridge=start_bridge,
+            start_launcher=start_launcher,
+            bridge_spec=bridge_spec,
+            launcher_spec=launcher_spec,
+            wait_for_bridge_ready=(lambda process, bridge_started_at: wait_for_bridge_ready(
+                resolved_config_path,
+                process,
+                bridge_started_at,
+                float(runtime_config["bridge-ready-timeout-seconds"]),
+            )) if start_bridge and start_launcher else None,
+            bridge_timeout_message="Timed out waiting for bridge to materialize live feature files.",
+        )
+
     if start_bridge and not start_launcher:
-        bridge_process, bridge_thread = start_logged_process(build_bridge_command(resolved_config_path, python_executable), repo_root(), "bridge")
+        bridge_process, bridge_thread = start_logged_process(
+            build_bridge_command(resolved_config_path, python_executable),
+            repo_root(),
+            "bridge",
+            console_output_mode="custom",
+        )
         try:
             return bridge_process.wait()
         finally:
@@ -460,19 +556,30 @@ def run_live_paper(config_path: str | Path | None = None, start_bridge: bool = T
     if start_launcher and not start_bridge:
         launcher_command, workdir = build_launcher_command(resolved_config_path)
         launcher_started_at = time.time()
-        launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
+        launcher_process, launcher_thread = start_logged_process(
+            launcher_command,
+            workdir,
+            "lean",
+            console_output_mode=runtime_config["console-output-mode"],
+        )
         try:
             return wait_for_process_with_status(
                 launcher_process,
                 runtime_config,
                 output_fresh_since=launcher_started_at,
+                console_output_mode=runtime_config["console-output-mode"],
             )
         finally:
             terminate_process(launcher_process)
             join_output_thread(launcher_thread)
 
     bridge_started_at = time.time()
-    bridge_process, bridge_thread = start_logged_process(build_bridge_command(resolved_config_path, python_executable), repo_root(), "bridge")
+    bridge_process, bridge_thread = start_logged_process(
+        build_bridge_command(resolved_config_path, python_executable),
+        repo_root(),
+        "bridge",
+        console_output_mode="custom",
+    )
     launcher_process = None
     launcher_thread = None
     try:
@@ -483,13 +590,19 @@ def run_live_paper(config_path: str | Path | None = None, start_bridge: bool = T
         print("[stage 2/3] starting standard LEAN live-paper launcher", flush=True)
         launcher_command, workdir = build_launcher_command(resolved_config_path)
         launcher_started_at = time.time()
-        launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
+        launcher_process, launcher_thread = start_logged_process(
+            launcher_command,
+            workdir,
+            "lean",
+            console_output_mode=runtime_config["console-output-mode"],
+        )
 
         print("[stage 3/3] entering live status loop", flush=True)
         return wait_for_process_with_status(
             launcher_process,
             runtime_config,
             output_fresh_since=launcher_started_at,
+            console_output_mode=runtime_config["console-output-mode"],
         )
     finally:
         terminate_process(launcher_process)
@@ -504,6 +617,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bridge-only", action="store_true")
     parser.add_argument("--launcher-only", action="store_true")
     parser.add_argument("--python-executable")
+    parser.add_argument("--console-output-mode", choices=("native", "custom"))
     return parser.parse_args()
 
 
@@ -514,6 +628,7 @@ def main() -> int:
         start_bridge=not args.launcher_only,
         start_launcher=not args.bridge_only,
         python_executable=args.python_executable,
+        console_output_mode=args.console_output_mode,
     )
 
 

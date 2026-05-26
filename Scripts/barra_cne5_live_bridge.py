@@ -22,6 +22,7 @@ for candidate in [CURRENT_DIR, DATA_SOURCE_DIR]:
         sys.path.insert(0, candidate_text)
 
 import barra_cne5_factor_bridge
+import ashare_live_market_cache as live_market_cache
 from barra_cne5_data_loader import BarraCNE5DataLoader
 import config as tushare_runtime_config
 from rt_daily_downloader import GbmSyntheticRtDailyClient, TushareRtDailyClient
@@ -34,9 +35,22 @@ PATH_KEYS = {
     "live-price-snapshot-file",
     "daily-quote-archive-path",
     "external-factor-path",
+    "shared-live-market-snapshot-file",
+    "shared-live-market-report-file",
+    "shared-live-market-archive-path",
 }
-DATA_RELATIVE_KEYS = {"factor-data-path", "daily-quote-archive-path", "external-factor-path"}
-RESULTS_RELATIVE_KEYS = {"live-factor-report-file", "live-price-snapshot-file"}
+DATA_RELATIVE_KEYS = {
+    "factor-data-path",
+    "daily-quote-archive-path",
+    "external-factor-path",
+    "shared-live-market-archive-path",
+}
+RESULTS_RELATIVE_KEYS = {
+    "live-factor-report-file",
+    "live-price-snapshot-file",
+    "shared-live-market-snapshot-file",
+    "shared-live-market-report-file",
+}
 
 
 def repo_root() -> Path:
@@ -59,6 +73,9 @@ def default_config() -> dict:
         "live-factor-report-file": str(root / "Results" / "barra-cne5-live-bridge-report.json"),
         "live-price-snapshot-file": str(root / "Results" / "barra-cne5-live-price-snapshot.json"),
         "daily-quote-archive-path": str(root / "Data" / "archive" / "barra-cne5-live-daily-quotes"),
+        "shared-live-market-snapshot-file": str(live_market_cache.default_shared_snapshot_file()),
+        "shared-live-market-report-file": str(live_market_cache.default_shared_report_file()),
+        "shared-live-market-archive-path": str(live_market_cache.default_shared_archive_path()),
         "factor-source-mode": "auto",
         "random-factor-seed": 42,
         "external-factor-path": str(default_external_factor_path()),
@@ -72,7 +89,11 @@ def default_config() -> dict:
         "live-price-batch-size": 100,
         "live-price-max-workers": 1,
         "live-price-max-requests-per-minute": 50,
-        "live-price-poll-interval-seconds": 180,
+        "live-price-poll-interval-seconds": 60,
+        "shared-live-market-refresh-interval-seconds": 60,
+        "shared-live-market-batch-size": 200,
+        "shared-live-market-max-workers": 1,
+        "shared-live-market-max-requests-per-minute": 50,
         "live-price-source-mode": "auto",
         "simulated-live-price-random-seed": 20260317,
         "simulated-live-price-lookback-days": 60,
@@ -86,7 +107,7 @@ def default_config() -> dict:
         "parallel-date-block-size": 1,
         "progress-interval-symbols": 100,
         "progress-interval-files": 50,
-        "live-factor-poll-interval-seconds": 180,
+        "live-factor-poll-interval-seconds": 60,
         "timezone": "Asia/Shanghai",
     }
 
@@ -169,7 +190,7 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
             config[key] = value
 
     config = resolve_config_paths(config, repo_root())
-    config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 180))
+    config["live-factor-poll-interval-seconds"] = max(1, coerce_int(config.get("live-factor-poll-interval-seconds"), 60))
     config["live-price-batch-size"] = max(1, coerce_int(config.get("live-price-batch-size"), 100))
     config["live-price-max-workers"] = max(1, coerce_int(config.get("live-price-max-workers"), 1))
     config["live-price-max-requests-per-minute"] = max(
@@ -179,6 +200,22 @@ def load_live_bridge_config(config_path: str | Path | None = None, overrides: di
     config["live-price-poll-interval-seconds"] = max(
         1,
         coerce_int(config.get("live-price-poll-interval-seconds"), config["live-factor-poll-interval-seconds"]),
+    )
+    config["shared-live-market-refresh-interval-seconds"] = max(
+        1,
+        coerce_int(config.get("shared-live-market-refresh-interval-seconds"), 60),
+    )
+    config["shared-live-market-batch-size"] = max(
+        1,
+        coerce_int(config.get("shared-live-market-batch-size"), 200),
+    )
+    config["shared-live-market-max-workers"] = max(
+        1,
+        coerce_int(config.get("shared-live-market-max-workers"), 1),
+    )
+    config["shared-live-market-max-requests-per-minute"] = max(
+        1,
+        coerce_int(config.get("shared-live-market-max-requests-per-minute"), 50),
     )
     config["simulated-live-price-random-seed"] = coerce_int(
         config.get("simulated-live-price-random-seed"),
@@ -1086,7 +1123,7 @@ def summarize_bridge_report(bridge_report: dict) -> str:
 def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulated_quote_client=None) -> int:
     poll_interval = float(
         config.get("live-price-poll-interval-seconds")
-        or config.get("live-factor-poll-interval-seconds", 300)
+        or config.get("live-factor-poll-interval-seconds", 60)
     )
     last_trade_date = None
     last_bridge_report: dict | None = None
@@ -1095,34 +1132,12 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
 
     realtime_quote_client = quote_client
     if simulated_quote_client is None:
-        simulated_quote_client = GbmSyntheticRtDailyClient(
-            tushare_data_path=config["tushare-data-path"],
-            batch_size=config.get("live-price-batch-size", 100),
-            poll_interval_seconds=config.get("live-price-poll-interval-seconds", 180),
-            lookback_days=config.get("simulated-live-price-lookback-days", 60),
-            min_history_days=config.get("simulated-live-price-min-history-days", 20),
-            trading_minutes_per_day=config.get("simulated-live-price-trading-minutes-per-day", 240),
-            random_seed=config.get("simulated-live-price-random-seed", 20260317),
-            volatility_scale=config.get("simulated-live-price-volatility-scale", 8.0),
-            min_daily_volatility=config.get("simulated-live-price-min-daily-volatility", 0.80),
-            jump_probability=config.get("simulated-live-price-jump-probability", 0.22),
-            jump_scale=config.get("simulated-live-price-jump-scale", 0.10),
-            timezone=str(config.get("timezone") or "Asia/Shanghai"),
-            verbose=False,
-        )
+        simulated_quote_client = live_market_cache.create_simulated_client(config)
 
     def resolve_realtime_quote_client():
         nonlocal realtime_quote_client
         if realtime_quote_client is None:
-            token = resolve_tushare_token(config)
-            realtime_quote_client = TushareRtDailyClient(
-                token=token,
-                batch_size=config.get("live-price-batch-size", 100),
-                http_url=config.get("tushare-http-url"),
-                verbose=False,
-                max_workers=config.get("live-price-max-workers", 1),
-                max_requests_per_minute=config.get("live-price-max-requests-per-minute", 50),
-            )
+            realtime_quote_client = live_market_cache.create_realtime_client(config)
         return realtime_quote_client
 
     print("=" * 80)
@@ -1137,11 +1152,14 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
     print(f"Bridge report path : {config.get('live-factor-report-file')}", flush=True)
     print(f"Price snapshot path: {config.get('live-price-snapshot-file')}", flush=True)
     print(f"Quote archive path : {config.get('daily-quote-archive-path')}", flush=True)
+    print(f"Shared mkt snapshot: {config.get('shared-live-market-snapshot-file')}", flush=True)
+    print(f"Shared mkt archive : {config.get('shared-live-market-archive-path')}", flush=True)
     print(f"Universe           : {config.get('symbols') or config.get('universe')}", flush=True)
     print("Realtime APIs      : stock=rt_k, etf=rt_etf_k; off-hours fallback=GBM synthetic daily bars", flush=True)
-    print(f"Minute API cap     : {int(config.get('live-price-max-requests-per-minute', 50))} requests/minute", flush=True)
-    print(f"Symbols per request: {int(config.get('live-price-batch-size', 100))}", flush=True)
-    print(f"rt_k poll interval : {int(poll_interval)} seconds", flush=True)
+    print(f"Minute API cap     : {int(config.get('shared-live-market-max-requests-per-minute', 50))} requests/minute", flush=True)
+    print(f"Symbols per request: {int(config.get('shared-live-market-batch-size', 200))}", flush=True)
+    print(f"Market cache poll  : {int(config.get('shared-live-market-refresh-interval-seconds', 60))} seconds", flush=True)
+    print(f"Strategy snapshot  : {int(poll_interval)} seconds", flush=True)
     print(f"Price source mode  : {config.get('live-price-source-mode')}", flush=True)
     print(
         f"Sim seed/lookback  : {config.get('simulated-live-price-random-seed')}/"
@@ -1153,8 +1171,9 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
         flush=True,
     )
     print(
-        f"Refresh model      : full-universe refresh every {max(1, int(math.ceil(poll_interval / 60.0)))} minutes "
-        "with carry-forward only for transient misses",
+        f"Refresh model      : full-market stock+ETF refresh every "
+        f"{max(1, int(math.ceil(float(config.get('shared-live-market-refresh-interval-seconds', 60)) / 60.0)))} minute(s); "
+        "Barra strategy filters CSI300 from the shared snapshot",
         flush=True,
     )
     print("=" * 80)
@@ -1198,33 +1217,42 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
                 int(config.get("live-price-max-requests-per-minute", 50)),
                 previous_snapshot_payload,
                 trade_date,
-                poll_interval,
+                float(config.get("shared-live-market-refresh-interval-seconds", 60)),
             )
             refresh_symbols = list(refresh_plan["refresh_symbols"])
             print(
-                f"[live bridge][market] stage=download trade_date={trade_date} "
+                f"[live bridge][market] stage=filter-shared-snapshot trade_date={trade_date} "
                 f"requested_symbols={len(universe)} refresh_symbols={len(refresh_symbols)} "
                 f"carry_forward={max(0, len(universe) - len(refresh_symbols))} "
                 f"full_refresh_est={refresh_plan.get('estimated_full_refresh_minutes', 0)}m "
-                f"symbols_per_request={config.get('live-price-batch-size', 100)}",
+                f"shared_symbols_per_request={config.get('shared-live-market-batch-size', 200)}",
                 flush=True,
             )
-            active_quote_client = (
-                quote_client
-                if quote_client is not None
-                else simulated_quote_client
-                if market_data_context.get("selected_mode") == "gbm-simulated"
-                else resolve_realtime_quote_client()
-            )
-            raw_quotes = fetch_live_quotes(
-                active_quote_client,
-                refresh_symbols,
+            shared_market_snapshot = live_market_cache.ensure_full_market_snapshot(
+                config,
                 trade_date,
+                market_data_context,
+                realtime_client=(
+                    quote_client
+                    if quote_client is not None and market_data_context.get("selected_mode") == "tushare-realtime"
+                    else resolve_realtime_quote_client()
+                ),
+                simulated_client=simulated_quote_client,
                 progress_callback=build_quote_progress_logger(),
             )
-            normalized_quotes = normalize_live_quotes(raw_quotes, trade_date, now)
+            full_market_quotes = shared_market_snapshot.get("quotes")
+            if not isinstance(full_market_quotes, pd.DataFrame):
+                full_market_quotes = pd.DataFrame()
+            fresh_market_quotes = shared_market_snapshot.get("fresh_quotes")
+            if not isinstance(fresh_market_quotes, pd.DataFrame):
+                fresh_market_quotes = pd.DataFrame()
+            normalized_quotes = live_market_cache.filter_quotes(fresh_market_quotes, refresh_symbols)
+            if normalized_quotes.empty:
+                normalized_quotes = live_market_cache.filter_quotes(full_market_quotes, refresh_symbols)
             merged_quotes = merge_live_quotes(universe, trade_date, previous_snapshot_quotes, normalized_quotes)
-            quote_client_metadata = getattr(active_quote_client, "last_fetch_metadata", {}) or {}
+            shared_snapshot_payload = shared_market_snapshot.get("snapshot_payload") or {}
+            shared_market_report = shared_market_snapshot.get("report") or {}
+            quote_client_metadata = dict((shared_market_report or {}).get("client_metadata") or {})
 
             archived_file = archive_live_quotes(config, normalized_quotes, trade_date)
             snapshot_payload = write_live_price_snapshot(
@@ -1243,6 +1271,12 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
                     "market_data_mode": market_data_context.get("selected_mode"),
                     "market_session_state": market_data_context.get("session_state"),
                     "market_data_reason": market_data_context.get("reason"),
+                    "shared_live_market_snapshot_file": config.get("shared-live-market-snapshot-file"),
+                    "shared_live_market_report_file": config.get("shared-live-market-report-file"),
+                    "shared_requested_symbol_count": int(shared_snapshot_payload.get("requested_symbol_count", 0) or 0),
+                    "shared_received_quote_count": int(shared_snapshot_payload.get("received_quote_count", 0) or 0),
+                    "shared_etf_symbol_count": int(shared_snapshot_payload.get("etf_symbol_count", 0) or 0),
+                    "shared_stock_symbol_count": int(shared_snapshot_payload.get("stock_symbol_count", 0) or 0),
                 },
             )
             market_preview = build_live_market_preview(
@@ -1296,6 +1330,12 @@ def run_live_bridge(config: dict, once: bool = False, quote_client=None, simulat
                 "market_open": bool(market_data_context.get("market_open")),
                 "source_reason": market_data_context.get("reason"),
                 "client_metadata": quote_client_metadata,
+                "shared_market_requested_symbol_count": int(shared_snapshot_payload.get("requested_symbol_count", 0) or 0),
+                "shared_market_received_quote_count": int(shared_snapshot_payload.get("received_quote_count", 0) or 0),
+                "shared_market_refreshed_quote_count": int(shared_snapshot_payload.get("refreshed_quote_count", 0) or 0),
+                "shared_market_cached": bool(shared_market_snapshot.get("used_cached_snapshot")),
+                "shared_live_market_snapshot_file": config.get("shared-live-market-snapshot-file"),
+                "shared_live_market_archive_file": shared_snapshot_payload.get("daily_quote_archive_file"),
             }
             write_live_bridge_report(
                 config,

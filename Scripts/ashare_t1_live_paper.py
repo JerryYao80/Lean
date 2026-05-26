@@ -2,15 +2,15 @@
 
 import argparse
 import os
-import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+
+import live_paper_runner as runner
 
 
 def repo_root() -> Path:
@@ -31,9 +31,10 @@ def resolve_live_config_path(config_path: str | Path | None = None) -> Path:
 
 def build_launcher_command(config_path: str | Path | None = None) -> tuple[list[str], Path]:
     config_path = resolve_live_config_path(config_path)
-    launcher = launcher_binary_path().resolve()
-    command = [str(launcher), '--config', str(config_path)]
-    return command, launcher.parent
+    launcher_dir = launcher_binary_path().resolve().parent
+    launcher_dll = launcher_dir / 'QuantConnect.Lean.Launcher.dll'
+    command = [runner.dotnet_binary_path(), str(launcher_dll), '--config', str(config_path)]
+    return command, launcher_dir
 
 
 def build_tui_command(config_path: str | Path | None = None, python_executable: str | None = None) -> list[str]:
@@ -53,15 +54,25 @@ def terminate_process(process: subprocess.Popen | None) -> None:
         process.wait(timeout=5)
 
 
-def run_live_paper(config_path: str | Path | None = None, run_tui: bool = True, python_executable: str | None = None) -> int:
+def run_live_paper(config_path: str | Path | None = None, run_tui: bool = False, python_executable: str | None = None) -> int:
     launcher_command, workdir = build_launcher_command(config_path)
+    launcher_spec = runner.ProcessSpec(
+        command=launcher_command,
+        cwd=workdir,
+        label='lean',
+        passthrough=True,
+    )
+    if not run_tui:
+        return runner.run_native_live_paper_session(
+            strategy_name='A-share T1 live paper',
+            start_bridge=False,
+            start_launcher=True,
+            bridge_spec=None,
+            launcher_spec=launcher_spec,
+        )
+
     launcher_process = subprocess.Popen(launcher_command, cwd=workdir)
-
     try:
-        if not run_tui:
-            return launcher_process.wait()
-
-        time.sleep(1)
         tui_command = build_tui_command(config_path, python_executable)
         tui_result = subprocess.run(tui_command, cwd=repo_root())
         return tui_result.returncode
@@ -73,13 +84,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Launch A-share T+1 live-paper engine and optional TUI')
     parser.add_argument('--config', default=str(default_live_config_path()))
     parser.add_argument('--launcher-only', action='store_true')
+    parser.add_argument('--tui', action='store_true')
     parser.add_argument('--python-executable')
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    return run_live_paper(args.config, run_tui=not args.launcher_only, python_executable=args.python_executable)
+    run_tui = bool(args.tui and not args.launcher_only)
+    return run_live_paper(args.config, run_tui=run_tui, python_executable=args.python_executable)
 
 
 if __name__ == '__main__':

@@ -19,6 +19,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 import live_paper_console as console
+import live_paper_runner as runner
 
 
 def repo_root() -> Path:
@@ -42,6 +43,18 @@ def default_bridge_python_executable() -> str:
 
 def resolve_live_config_path(config_path: str | Path | None = None) -> Path:
     return Path(config_path).resolve() if config_path else default_live_config_path().resolve()
+
+
+def normalize_console_output_mode(value: str | None) -> str:
+    mode = str(value or "").strip().lower()
+    return "custom" if mode == "custom" else "native"
+
+
+def resolve_console_output_mode(runtime_config: dict | None = None, requested_mode: str | None = None) -> str:
+    configured_mode = None
+    if isinstance(runtime_config, dict):
+        configured_mode = runtime_config.get("console-output-mode")
+    return normalize_console_output_mode(requested_mode or configured_mode)
 
 
 def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dict:
@@ -77,8 +90,11 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "external-factor-path": resolve_path(parameters.get("external-factor-path"), root / "Data" / "alternative" / "barra-cne5-factors", data_base),
         "live-factor-report-file": resolve_path(parameters.get("live-factor-report-file"), root / "Results" / "barra-cne5-live-bridge-report.json", results_base),
         "live-price-snapshot-file": resolve_path(parameters.get("live-price-snapshot-file"), root / "Results" / "barra-cne5-live-price-snapshot.json", results_base),
+        "shared-live-market-snapshot-file": resolve_path(parameters.get("shared-live-market-snapshot-file"), root / "Results" / "shared-live-market" / "ashare-live-price-snapshot.json", results_base),
+        "shared-live-market-report-file": resolve_path(parameters.get("shared-live-market-report-file"), root / "Results" / "shared-live-market" / "ashare-live-market-report.json", results_base),
         "portfolio-state-file": resolve_path(parameters.get("portfolio-state-file"), root / "Results" / "barra-cne5-live-state.json", results_base),
         "daily-quote-archive-path": resolve_path(parameters.get("daily-quote-archive-path"), root / "Data" / "archive" / "barra-cne5-live-daily-quotes", data_base),
+        "shared-live-market-archive-path": resolve_path(parameters.get("shared-live-market-archive-path"), root / "Data" / "archive" / "ashare-live-market-daily-quotes", data_base),
         "daily-summary-file": resolve_path(parameters.get("daily-summary-file"), root / "Results" / "barra-cne5-live-daily-summary.csv", results_base),
         "allocation-report-file": resolve_path(parameters.get("allocation-report-file"), root / "Results" / "barra-cne5-live-allocation.csv", results_base),
         "factor-exposure-file": resolve_path(parameters.get("factor-exposure-file"), root / "Results" / "barra-cne5-live-factor-exposure.csv", results_base),
@@ -92,9 +108,10 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "live-price-poll-interval-seconds": str(
             parameters.get("live-price-poll-interval-seconds")
             or parameters.get("live-factor-poll-interval-seconds")
-            or "180"
+            or "60"
         ),
-        "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "180"),
+        "live-price-refresh-interval-seconds": str(parameters.get("live-price-refresh-interval-seconds") or "60"),
+        "shared-live-market-refresh-interval-seconds": str(parameters.get("shared-live-market-refresh-interval-seconds") or "60"),
         "simulated-live-price-random-seed": str(parameters.get("simulated-live-price-random-seed") or "20260317"),
         "simulated-live-price-lookback-days": str(parameters.get("simulated-live-price-lookback-days") or "60"),
         "simulated-live-price-volatility-scale": str(parameters.get("simulated-live-price-volatility-scale") or "8.0"),
@@ -105,6 +122,7 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "bridge-ready-min-quote-coverage": str(parameters.get("bridge-ready-min-quote-coverage") or "1.0"),
         "bridge-ready-min-factor-coverage": str(parameters.get("bridge-ready-min-factor-coverage") or "0.95"),
         "initial-cash": str(parameters.get("initial-cash") or "100000"),
+        "console-output-mode": normalize_console_output_mode(parameters.get("console-output-mode")),
         "rebalance-frequency": str(parameters.get("rebalance-frequency") or "monthly"),
         "top-n": str(parameters.get("top-n") or "30"),
         "target-portfolio-exposure": str(parameters.get("target-portfolio-exposure") or "0.95"),
@@ -704,11 +722,13 @@ def build_market_preview_line(bridge_report: dict | None) -> str | None:
 
 
 def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path | None = None) -> None:
-    poll_interval_seconds = max(1, safe_int(runtime_config.get("live-price-poll-interval-seconds"), 180))
-    queue_refresh_seconds = max(1, safe_int(runtime_config.get("live-price-refresh-interval-seconds"), 180))
+    poll_interval_seconds = max(1, safe_int(runtime_config.get("live-price-poll-interval-seconds"), 60))
+    queue_refresh_seconds = max(1, safe_int(runtime_config.get("live-price-refresh-interval-seconds"), 60))
+    shared_market_refresh_seconds = max(1, safe_int(runtime_config.get("shared-live-market-refresh-interval-seconds"), 60))
     signal_interval_minutes = max(1, safe_int(runtime_config.get("live-signal-interval-minutes"), 3))
     poll_interval_minutes = max(1, math.ceil(poll_interval_seconds / 60.0))
     queue_refresh_minutes = max(1, math.ceil(queue_refresh_seconds / 60.0))
+    shared_market_refresh_minutes = max(1, math.ceil(shared_market_refresh_seconds / 60.0))
     print("=" * 100)
     print("Barra CNE5 Live Paper")
     print("=" * 100)
@@ -717,6 +737,15 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
         print(f"Session root        : {session_root}", flush=True)
     print("Market data         : Tushare realtime in-session; GBM-simulated CSI300 daily bars off-session", flush=True)
     print("Order model         : synthetic internal execution only; no real Lean orders", flush=True)
+    print(
+        "Console output      : "
+        + (
+            "native no-broker LEAN live-paper stdout"
+            if resolve_console_output_mode(runtime_config) == "native"
+            else "custom account/trade/allocation summaries"
+        ),
+        flush=True,
+    )
     print(f"Factor mode         : {runtime_config['factor-source-mode']} (seed={runtime_config['random-factor-seed']})", flush=True)
     print("Resolved factor src : printed after bridge materializes live factor files", flush=True)
     print(
@@ -734,6 +763,7 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
     print(f"Bridge quote cover  : {runtime_config['bridge-ready-min-quote-coverage']}", flush=True)
     print(f"Bridge factor cover : {runtime_config['bridge-ready-min-factor-coverage']}", flush=True)
     print(f"Minute API cap      : {runtime_config['live-price-max-requests-per-minute']} requests/minute", flush=True)
+    print(f"Market cache refresh: {runtime_config['shared-live-market-refresh-interval-seconds']} seconds", flush=True)
     print(f"rt_k poll interval  : {runtime_config['live-price-poll-interval-seconds']} seconds", flush=True)
     print(f"Signal interval     : {runtime_config['live-signal-interval-minutes']} minutes", flush=True)
     print(f"LEAN queue refresh  : {runtime_config['live-price-refresh-interval-seconds']} seconds", flush=True)
@@ -744,16 +774,18 @@ def print_live_plan(config_path: Path, runtime_config: dict, session_root: Path 
     print(f"Historical factors  : {runtime_config['external-factor-path']}", flush=True)
     print(f"Bridge report       : {runtime_config['live-factor-report-file']}", flush=True)
     print(f"Price snapshot      : {runtime_config['live-price-snapshot-file']}", flush=True)
+    print(f"Shared mkt snapshot : {runtime_config['shared-live-market-snapshot-file']}", flush=True)
     print(f"Portfolio state     : {runtime_config['portfolio-state-file']}", flush=True)
     print(f"Quote archive       : {runtime_config['daily-quote-archive-path']}", flush=True)
+    print(f"Shared mkt archive  : {runtime_config['shared-live-market-archive-path']}", flush=True)
     print(f"Daily summary       : {runtime_config['daily-summary-file']}", flush=True)
     print(f"Allocation report   : {runtime_config['allocation-report-file']}", flush=True)
     print(f"Exposure report     : {runtime_config['factor-exposure-file']}", flush=True)
     print(f"Trade report        : {runtime_config['trade-report-file']}", flush=True)
     print(
         "Process flow        : "
-        f"1) bridge refreshes the full Barra universe every {poll_interval_minutes} minutes "
-        "2) during A-share session it uses Tushare rt_k/rt_etf_k, otherwise it auto-switches to GBM-simulated bars "
+        f"1) shared market cache refreshes all A-share stocks and ETFs every {shared_market_refresh_minutes} minutes "
+        f"2) Barra bridge filters CSI300 quotes and refreshes the strategy snapshot every {poll_interval_minutes} minutes "
         "3) LEAN starts only after the first full snapshot is ready "
         "4) strategy restores persisted cash/holdings "
         f"5) LEAN queue refreshes every {queue_refresh_minutes} minutes and strategy aligns portfolio every {signal_interval_minutes} minutes, then writes account/trade/allocation outputs",
@@ -922,8 +954,12 @@ def print_runtime_status(
         print(exposure_preview, flush=True)
 
 
-def normalize_lean_output_line(line: str) -> str | None:
-    text = line.strip()
+def normalize_lean_output_line(line: str, console_output_mode: str = "custom") -> str | None:
+    raw_text = line.rstrip("\n")
+    if console_output_mode == "native":
+        return raw_text if raw_text.strip() else None
+
+    text = raw_text.strip()
     if not text:
         return None
     if "STATISTICS::" in text:
@@ -965,25 +1001,33 @@ def normalize_lean_output_line(line: str) -> str | None:
     return None
 
 
-def normalize_process_output_line(label: str, line: str) -> str | None:
+def normalize_process_output_line(label: str, line: str, console_output_mode: str = "custom") -> str | None:
     text = line.rstrip("\n")
     if label == "lean":
-        normalized = normalize_lean_output_line(text)
-        return None if normalized is None else f"[lean] {normalized}"
+        normalized = normalize_lean_output_line(text, console_output_mode=console_output_mode)
+        if normalized is None:
+            return None
+        if console_output_mode == "native":
+            return normalized
+        return f"[lean] {normalized}"
     text = text.strip()
     if not text:
         return None
     return f"[{label}] {text}"
 
 
-def stream_process_output(process: subprocess.Popen, label: str) -> threading.Thread | None:
+def stream_process_output(
+    process: subprocess.Popen,
+    label: str,
+    console_output_mode: str = "custom",
+) -> threading.Thread | None:
     if process.stdout is None:
         return None
 
     def consume_output() -> None:
         assert process.stdout is not None
         for line in process.stdout:
-            normalized = normalize_process_output_line(label, line)
+            normalized = normalize_process_output_line(label, line, console_output_mode=console_output_mode)
             if normalized:
                 print(normalized, flush=True)
 
@@ -992,7 +1036,12 @@ def stream_process_output(process: subprocess.Popen, label: str) -> threading.Th
     return thread
 
 
-def start_logged_process(command: list[str], cwd: Path, label: str) -> tuple[subprocess.Popen, threading.Thread | None]:
+def start_logged_process(
+    command: list[str],
+    cwd: Path,
+    label: str,
+    console_output_mode: str = "custom",
+) -> tuple[subprocess.Popen, threading.Thread | None]:
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -1005,7 +1054,7 @@ def start_logged_process(command: list[str], cwd: Path, label: str) -> tuple[sub
     )
     print(f"[process start] name={label} pid={process.pid} cwd={cwd}", flush=True)
     print(f"[process cmd] {label}: {' '.join(command)}", flush=True)
-    return process, stream_process_output(process, label)
+    return process, stream_process_output(process, label, console_output_mode=console_output_mode)
 
 
 def join_output_thread(thread: threading.Thread | None) -> None:
@@ -1019,10 +1068,15 @@ def wait_for_process_with_status(
     runtime_config: dict,
     status_interval_seconds: float | None = None,
     output_fresh_since: float | None = None,
+    console_output_mode: str | None = None,
 ) -> int:
+    resolved_console_output_mode = resolve_console_output_mode(runtime_config, console_output_mode)
+    if resolved_console_output_mode == "native":
+        return process.wait()
+
     interval_seconds = max(
         5.0,
-        float(status_interval_seconds or runtime_config.get("live-price-poll-interval-seconds") or 180),
+        float(status_interval_seconds or runtime_config.get("live-price-poll-interval-seconds") or 60),
     )
     display_state: dict[str, str] = {}
     print_runtime_status(runtime_config, output_fresh_since=output_fresh_since, display_state=display_state)
@@ -1117,9 +1171,10 @@ def build_bridge_command(config_path: str | Path | None = None, python_executabl
 
 def build_launcher_command(config_path: str | Path | None = None) -> tuple[list[str], Path]:
     config_path = resolve_live_config_path(config_path)
-    launcher = launcher_binary_path().resolve()
-    command = [str(launcher), "--config", str(config_path)]
-    return command, launcher.parent
+    launcher_dir = launcher_binary_path().resolve().parent
+    launcher_dll = launcher_dir / "QuantConnect.Lean.Launcher.dll"
+    command = [runner.dotnet_binary_path(), str(launcher_dll), "--config", str(config_path)]
+    return command, launcher_dir
 
 
 def terminate_process(process: subprocess.Popen | None) -> None:
@@ -1138,8 +1193,10 @@ def run_live_paper(
     start_bridge: bool = True,
     start_launcher: bool = True,
     python_executable: str | None = None,
+    console_output_mode: str | None = None,
 ) -> int:
     session_config_path, runtime_config, session_root = prepare_session_config(config_path)
+    runtime_config["console-output-mode"] = resolve_console_output_mode(runtime_config, console_output_mode)
     resolved_config_path = session_config_path
     print_live_plan(resolved_config_path, runtime_config, session_root=session_root)
 
@@ -1157,6 +1214,42 @@ def run_live_paper(
             )
             return 1
 
+    if runtime_config["console-output-mode"] == "native":
+        bridge_spec = runner.ProcessSpec(
+            command=build_bridge_command(resolved_config_path, python_executable),
+            cwd=repo_root(),
+            label="bridge",
+            passthrough=False,
+        )
+        launcher_command, workdir = build_launcher_command(resolved_config_path)
+        launcher_spec = runner.ProcessSpec(
+            command=launcher_command,
+            cwd=workdir,
+            label="lean",
+            passthrough=True,
+        )
+        try:
+            return runner.run_native_live_paper_session(
+                strategy_name="Barra CNE5 live paper",
+                start_bridge=start_bridge,
+                start_launcher=start_launcher,
+                bridge_spec=bridge_spec,
+                launcher_spec=launcher_spec,
+                wait_for_bridge_ready=(lambda process, bridge_started_at: wait_for_bridge_ready(
+                    resolved_config_path,
+                    process,
+                    bridge_started_at=bridge_started_at,
+                    timeout_seconds=float(runtime_config["bridge-ready-timeout-seconds"]),
+                )) if start_bridge and start_launcher else None,
+                bridge_timeout_message=(
+                    "Timed out waiting for bridge to finish the first full realtime snapshot and factor materialization. "
+                    "Check Tushare connectivity or increase `bridge-ready-timeout-seconds`."
+                ),
+            )
+        finally:
+            if start_launcher:
+                release_live_paper_lock(lock_path)
+
     try:
         if not start_bridge and not start_launcher:
             return 0
@@ -1167,6 +1260,7 @@ def run_live_paper(
                 build_bridge_command(resolved_config_path, python_executable),
                 repo_root(),
                 "bridge",
+                console_output_mode="custom",
             )
             try:
                 return bridge_process.wait()
@@ -1181,12 +1275,18 @@ def run_live_paper(
             launcher_command, workdir = build_launcher_command(resolved_config_path)
             print("[stage 1/1] starting launcher only", flush=True)
             launcher_started_at = time.time()
-            launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
+            launcher_process, launcher_thread = start_logged_process(
+                launcher_command,
+                workdir,
+                "lean",
+                console_output_mode=runtime_config["console-output-mode"],
+            )
             try:
                 return wait_for_process_with_status(
                     launcher_process,
                     runtime_config,
                     output_fresh_since=launcher_started_at,
+                    console_output_mode=runtime_config["console-output-mode"],
                 )
             except KeyboardInterrupt:
                 print("[live paper] interrupted by user; stopping launcher", flush=True)
@@ -1201,6 +1301,7 @@ def run_live_paper(
             build_bridge_command(resolved_config_path, python_executable),
             repo_root(),
             "bridge",
+            console_output_mode="custom",
         )
         launcher_process = None
         launcher_thread = None
@@ -1224,13 +1325,19 @@ def run_live_paper(
             launcher_command, workdir = build_launcher_command(resolved_config_path)
             print("[stage 3/4] bridge ready; starting LEAN live-paper engine", flush=True)
             launcher_started_at = time.time()
-            launcher_process, launcher_thread = start_logged_process(launcher_command, workdir, "lean")
+            launcher_process, launcher_thread = start_logged_process(
+                launcher_command,
+                workdir,
+                "lean",
+                console_output_mode=runtime_config["console-output-mode"],
+            )
             try:
                 print("[stage 4/4] entering live status loop", flush=True)
                 return wait_for_process_with_status(
                     launcher_process,
                     runtime_config,
                     output_fresh_since=launcher_started_at,
+                    console_output_mode=runtime_config["console-output-mode"],
                 )
             except KeyboardInterrupt:
                 print("[live paper] interrupted by user; stopping launcher and bridge", flush=True)
@@ -1251,6 +1358,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bridge-only", action="store_true")
     parser.add_argument("--launcher-only", action="store_true")
     parser.add_argument("--python-executable")
+    parser.add_argument("--console-output-mode", choices=("native", "custom"))
     return parser.parse_args()
 
 
@@ -1263,6 +1371,7 @@ def main() -> int:
         start_bridge=start_bridge,
         start_launcher=start_launcher,
         python_executable=args.python_executable,
+        console_output_mode=args.console_output_mode,
     )
 
 
