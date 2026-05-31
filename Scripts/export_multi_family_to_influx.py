@@ -42,7 +42,7 @@ def esc(s: str) -> str:
     return s.replace(" ", "\\ ").replace(",", "\\,")
 
 
-def write_influx(lines: list[str], dry_run: bool = False) -> int:
+def write_influx(lines: list[str], dry_run: bool = False, batch_size: int = 5000) -> int:
     if not lines:
         return 0
     if dry_run:
@@ -50,16 +50,20 @@ def write_influx(lines: list[str], dry_run: bool = False) -> int:
             print(line)
         print(f"... ({len(lines)} total)")
         return len(lines)
-    body = "\n".join(lines)
-    url = f"{INFLUX_URL}/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}&precision=s"
-    req = request.Request(url, data=body.encode(), method="POST")
-    req.add_header("Authorization", f"Token {INFLUX_TOKEN}")
-    req.add_header("Content-Type", "text/plain; charset=utf-8")
-    with request.urlopen(req, timeout=30) as resp:
-        if resp.status >= 300:
-            print(f"Write failed: {resp.status} {resp.read().decode()[:200]}", file=sys.stderr)
-            return 0
-    return len(lines)
+    total = 0
+    for i in range(0, len(lines), batch_size):
+        batch = lines[i:i + batch_size]
+        body = "\n".join(batch)
+        url = f"{INFLUX_URL}/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}&precision=s"
+        req = request.Request(url, data=body.encode(), method="POST")
+        req.add_header("Authorization", f"Token {INFLUX_TOKEN}")
+        req.add_header("Content-Type", "text/plain; charset=utf-8")
+        with request.urlopen(req, timeout=60) as resp:
+            if resp.status >= 300:
+                print(f"Write failed: {resp.status} {resp.read().decode()[:200]}", file=sys.stderr)
+                return total
+        total += len(batch)
+    return total
 
 
 def export_daily_summary(csv_path: str, algorithm_id: str, mode: str, dry_run: bool = False) -> int:
@@ -140,6 +144,126 @@ def export_trades(csv_path: str, algorithm_id: str, mode: str, dry_run: bool = F
     return write_influx(lines, dry_run=dry_run)
 
 
+def read_lean_summary_stats(summary_json_path: str) -> dict | None:
+    """Read statistics from LEAN engine's -summary.json output file."""
+    import json as _json
+
+    if not summary_json_path or not os.path.isfile(summary_json_path):
+        return None
+
+    with open(summary_json_path, encoding="utf-8") as f:
+        data = _json.load(f)
+
+    statistics = data.get("statistics", {})
+    portfolio = data.get("totalPerformance", {}).get("portfolioStatistics", {})
+    if not statistics and not portfolio:
+        return None
+
+    # Parse percentage strings like "11.358%" → 11.358, "0.067" → 0.067
+    def parse_pct(s):
+        if not s:
+            return None
+        s = str(s).strip().rstrip("%")
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    stats = {}
+    # From statistics dict (display values)
+    for key in [
+        "Total Orders", "Average Win", "Average Loss",
+        "Compounding Annual Return", "Drawdown", "Expectancy",
+        "Start Equity", "End Equity", "Net Profit",
+        "Sharpe Ratio", "Sortino Ratio", "Probabilistic Sharpe Ratio",
+        "Loss Rate", "Win Rate", "Profit-Loss Ratio",
+        "Alpha", "Beta", "Annual Standard Deviation", "Annual Variance",
+        "Information Ratio", "Tracking Error", "Treynor Ratio",
+        "Total Fees", "Portfolio Turnover", "Drawdown Recovery",
+    ]:
+        val = statistics.get(key)
+        if val is not None:
+            parsed = parse_pct(val)
+            if parsed is not None:
+                stats[key] = parsed
+
+    # From totalPerformance.portfolioStatistics (raw numeric values)
+    for key in [
+        "startEquity", "endEquity", "compoundingAnnualReturn", "drawdown",
+        "totalNetProfit", "sharpeRatio", "sortinoRatio", "probabilisticSharpeRatio",
+        "alpha", "beta", "annualStandardDeviation", "annualVariance",
+        "informationRatio", "trackingError", "treynorRatio",
+        "portfolioTurnover", "valueAtRisk99", "valueAtRisk95", "drawdownRecovery",
+        "averageWinRate", "averageLossRate", "profitLossRatio",
+        "winRate", "lossRate", "expectancy",
+    ]:
+        val = portfolio.get(key)
+        if val is not None:
+            parsed = parse_pct(val)
+            if parsed is not None:
+                stats[key] = parsed
+
+    return stats
+
+
+def export_backtest_stats(stats: dict, algorithm_id: str, mode: str, ts: int,
+                          dry_run: bool = False) -> int:
+    """Write LEAN-computed summary statistics as lean_metric and lean_portfolio_statistics points."""
+    if not stats:
+        return 0
+
+    lines: list[str] = []
+    tags = f",algorithm_id={esc(algorithm_id)},mode={esc(mode)}"
+
+    # Write all statistics as lean_metric points (matching InfluxDbResultExporter format)
+    for metric_name, value in stats.items():
+        # Always use float for numeric_value to match existing schema
+        lines.append(
+            f'lean_metric{tags},category=summary,metric={esc(metric_name)} '
+            f'numeric_value={float(value)} {ts}'
+        )
+
+    # Write lean_portfolio_statistics (matching InfluxDbResultExporter RecordStatisticsObject format)
+    # Map statistics keys to portfolio_statistics field names
+    field_map = {
+        "total_return": stats.get("Net Profit") or stats.get("totalNetProfit"),
+        "cagr": stats.get("Compounding Annual Return") or stats.get("compoundingAnnualReturn"),
+        "sharpe_ratio": stats.get("Sharpe Ratio") or stats.get("sharpeRatio"),
+        "max_drawdown": stats.get("Drawdown") or stats.get("drawdown"),
+        "win_rate": stats.get("Win Rate") or stats.get("winRate"),
+        "loss_rate": stats.get("Loss Rate") or stats.get("lossRate"),
+        "profit_loss_ratio": stats.get("Profit-Loss Ratio") or stats.get("profitLossRatio"),
+        "sortino_ratio": stats.get("Sortino Ratio") or stats.get("sortinoRatio"),
+        "expectancy": stats.get("Expectancy") or stats.get("expectancy"),
+        "total_fees": stats.get("Total Fees"),
+        "total_orders": stats.get("Total Orders"),
+        "drawdown_recovery": stats.get("Drawdown Recovery") or stats.get("drawdownRecovery"),
+        "annual_standard_deviation": stats.get("Annual Standard Deviation") or stats.get("annualStandardDeviation"),
+        "alpha": stats.get("Alpha") or stats.get("alpha"),
+        "beta": stats.get("Beta") or stats.get("beta"),
+        "information_ratio": stats.get("Information Ratio") or stats.get("informationRatio"),
+        "tracking_error": stats.get("Tracking Error") or stats.get("trackingError"),
+        "treynor_ratio": stats.get("Treynor Ratio") or stats.get("treynorRatio"),
+        "portfolio_turnover": stats.get("Portfolio Turnover") or stats.get("portfolioTurnover"),
+        "closed_trades": stats.get("Synthetic Closed Trades"),
+    }
+
+    pfields = []
+    for fk, fv in field_map.items():
+        if fv is None:
+            continue
+        # closed_trades and total_orders exist as integer; all others as float
+        if fk in ("closed_trades", "total_orders", "drawdown_recovery"):
+            pfields.append(f'{fk}={int(float(fv))}i')
+        else:
+            pfields.append(f'{fk}={float(fv)}')
+
+    if pfields:
+        lines.append(f'lean_portfolio_statistics{tags} {",".join(pfields)} {ts}')
+
+    return write_influx(lines, dry_run=dry_run)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Export multi-family CSV data to InfluxDB")
@@ -150,6 +274,8 @@ def main():
                         help="backtesting or live")
     parser.add_argument("--algorithm-id", required=True,
                         help="Algorithm ID tag for InfluxDB (e.g. AShareMultiFamilyV1)")
+    parser.add_argument("--summary-json", default=None,
+                        help="Path to LEAN engine -summary.json file (required for backtest stats)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -157,6 +283,17 @@ def main():
     results["daily_summary"] = export_daily_summary(args.daily_summary, args.algorithm_id, args.mode, args.dry_run)
     results["family_exposure"] = export_family_exposure(args.family_exposure, args.algorithm_id, args.mode, args.dry_run)
     results["trades"] = export_trades(args.trades, args.algorithm_id, args.mode, args.dry_run)
+
+    # Export LEAN-computed summary statistics from -summary.json
+    if args.mode == "backtesting" and args.summary_json:
+        stats = read_lean_summary_stats(args.summary_json)
+        if stats:
+            # Use last date timestamp for summary stats
+            with open(args.daily_summary, newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                last_ts = int(parse_date(rows[-1]["trade_date"]).timestamp()) if rows else 0
+            results["backtest_stats"] = export_backtest_stats(stats, args.algorithm_id, args.mode, last_ts, args.dry_run)
 
     print(json.dumps({"mode": args.mode, "results": results}))
 
