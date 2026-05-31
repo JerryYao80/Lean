@@ -487,6 +487,262 @@ STRATEGY_SOURCE_KEYWORD_PREFIX: dict[str, str] = {
 }
 
 
+STRATEGY_FAMILY_REGISTRY: dict[str, dict] = {
+    "momentum_reversal": {
+        "display_name": "动量反转",
+        "datasets": ["daily", "daily_basic", "adj_factor"],
+        "fields": {
+            "daily": ["close", "pct_chg", "vol", "amount", "pre_close"],
+            "daily_basic": ["turnover_rate", "total_mv", "circ_mv", "pe", "pb"],
+            "adj_factor": ["adj_factor"],
+        },
+        "search_keywords_cn": [
+            "A股 动量因子 收盘价 换手率 总市值 量化策略 回测",
+            "A股 反转因子 涨跌幅 成交量 换手率 策略 回测",
+            "A股 截面动量 换手率 总市值 风险因子 多空策略",
+            "华泰 金工 动量反转因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "cross-sectional momentum factor turnover market cap A-share backtest",
+            "short-term reversal factor volume turnover A-share strategy",
+            "momentum crash reversal factor A-share quant strategy",
+        ],
+        "description": "基于历史收益率、换手率、市值等因子的动量与反转策略",
+    },
+    "value_quality": {
+        "display_name": "价值质量",
+        "datasets": ["daily_basic", "fina_indicator"],
+        "fields": {
+            "daily_basic": ["pe", "pe_ttm", "pb", "ps", "ps_ttm", "dv_ratio", "dv_ttm", "total_mv", "circ_mv"],
+            "fina_indicator": ["roe", "roe_waa", "roa", "grossprofit_margin", "current_ratio", "quick_ratio", "debt_to_assets", "netprofit_margin", "bps", "netprofit_yoy", "dt_netprofit_yoy"],
+        },
+        "search_keywords_cn": [
+            "A股 价值因子 市盈率 市净率 股息率 ROE 量化策略 回测",
+            "A股 质量因子 ROE 毛利率 资产负债率 策略 回测",
+            "A股 价值成长 PE PB DV ROE 多因子 策略 回测",
+            "中信 金工 价值质量因子 研报 策略",
+        ],
+        "search_keywords_en": [
+            "value factor PE PB dividend yield ROE A-share strategy backtest",
+            "quality factor gross margin current ratio debt A-share quant",
+            "value investing PE PB ROE A-share multi-factor backtest",
+        ],
+        "description": "基于估值(PE/PB/PS/DV)和质量(ROE/ROA/毛利率/资产负债率)因子的选股策略",
+    },
+    "money_flow": {
+        "display_name": "资金流向",
+        "datasets": ["moneyflow", "daily"],
+        "fields": {
+            "moneyflow": ["net_mf_vol", "net_mf_amount", "buy_sm_vol", "buy_sm_amount", "sell_sm_vol", "sell_sm_amount",
+                           "buy_md_vol", "buy_md_amount", "sell_md_vol", "sell_md_amount",
+                           "buy_lg_vol", "buy_lg_amount", "sell_lg_vol", "sell_lg_amount",
+                           "buy_elg_vol", "buy_elg_amount", "sell_elg_vol", "sell_elg_amount"],
+            "daily": ["close", "vol", "amount", "pct_chg"],
+        },
+        "search_keywords_cn": [
+            "A股 资金流向 大单净流入 主力资金 量化策略 回测",
+            "A股 资金流因子 超大单 小单 净流入 选股策略 回测",
+            "A股 主力资金 机构资金 资金流向 策略 回测",
+            "华泰 金工 资金流因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "money flow factor large order net inflow A-share strategy backtest",
+            "capital flow institutional money inflow A-share quant strategy",
+            "smart money flow factor A-share stock selection backtest",
+        ],
+        "description": "基于大单/小单资金净流入、主力资金流向的选股策略",
+    },
+    "earnings_surprise": {
+        "display_name": "盈利惊喜",
+        "datasets": ["forecast", "express", "fina_indicator"],
+        "fields": {
+            "forecast": ["p_change_min", "p_change_max", "type", "net_profit_min", "net_profit_max", "summary", "ann_date"],
+            "express": ["diluted_eps", "diluted_roe", "yoy_net_profit", "n_income", "revenue", "operate_profit"],
+            "fina_indicator": ["eps", "dt_eps", "basic_eps_yoy", "dt_eps_yoy", "netprofit_yoy", "dt_netprofit_yoy", "roe", "op_yoy", "ebt_yoy", "tr_yoy", "or_yoy"],
+        },
+        "search_keywords_cn": [
+            "A股 盈利惊喜 业绩预告 EPS超预期 量化策略 回测",
+            "A股 业绩快报 净利润增长率 营收增长 选股策略 回测",
+            "A股 PEAD 盈利公告后漂移 标准化意外盈利 策略 回测",
+            "A股 盈利超预期因子 业绩预告 研报 策略",
+        ],
+        "search_keywords_en": [
+            "earnings surprise factor PEAD A-share strategy backtest",
+            "post-earnings announcement drift A-share quant strategy",
+            "standardized unexpected earnings SUE A-share backtest",
+        ],
+        "description": "基于业绩预告、业绩快报和财务指标超预期的盈利惊喜策略(PEAD)",
+    },
+    "chip_cost": {
+        "display_name": "筹码成本",
+        "datasets": ["cyq_chips", "cyq_perf", "daily"],
+        "fields": {
+            "cyq_chips": ["price", "percent"],
+            "cyq_perf": ["cost_5pct", "cost_15pct", "cost_50pct", "cost_85pct", "cost_95pct", "weight_avg", "winner_rate", "his_low", "his_high"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 筹码分布 获利盘 筹码集中度 量化策略 回测",
+            "A股 筹码成本 均价 获利比例 选股策略 回测",
+            "A股 筹码峰 集中度因子 支撑压力 策略 回测",
+        ],
+        "search_keywords_en": [
+            "chip distribution cost basis winner rate A-share strategy backtest",
+            "chip concentration factor A-share quant strategy",
+            "cost distribution support resistance A-share backtest",
+        ],
+        "description": "基于筹码分布、获利盘比例、成本集中度的选股策略",
+    },
+    "etf_premium": {
+        "display_name": "ETF折溢价",
+        "datasets": ["fund_daily", "fund_nav", "etf_share_size"],
+        "fields": {
+            "fund_daily": ["close", "pre_close", "pct_chg", "vol", "amount"],
+            "fund_nav": ["unit_nav", "accum_nav", "adj_nav", "net_asset", "total_netasset"],
+            "etf_share_size": ["total_share", "total_size", "etf_name"],
+        },
+        "search_keywords_cn": [
+            "ETF 折溢价 NAV 净值差 套利策略 回测",
+            "A股 ETF 份额变化 净值 折价溢价 量化策略",
+            "A股 ETF 场内溢价 份额增减 策略 回测",
+        ],
+        "search_keywords_en": [
+            "ETF premium discount NAV arbitrage A-share strategy backtest",
+            "ETF share creation redemption premium A-share quant",
+            "ETF NAV discount spread trading strategy A-share",
+        ],
+        "description": "基于ETF净值与市价折溢价、份额变动的套利与择时策略",
+    },
+    "sector_rotation": {
+        "display_name": "行业轮动",
+        "datasets": ["sw_daily", "ths_daily", "dc_daily", "index_weight", "daily"],
+        "fields": {
+            "sw_daily": ["close", "pct_change", "pe", "pb", "vol", "amount", "float_mv", "total_mv"],
+            "ths_daily": ["close", "pct_change", "vol", "turnover_rate", "avg_price"],
+            "dc_daily": ["close", "pct_change", "vol", "amount", "swing", "turnover_rate", "category"],
+            "index_weight": ["index_code", "con_code", "weight"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 行业轮动 申万行业 动量 量化策略 回测",
+            "A股 行业动量 行业估值 PE PB 轮动策略 回测",
+            "A股 板块轮动 行业资金流向 策略 回测",
+            "华泰 金工 行业轮动 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "sector rotation momentum A-share Shenwan industry strategy backtest",
+            "industry rotation PE PB valuation A-share quant strategy",
+            "sector momentum rotation A-share multi-factor backtest",
+        ],
+        "description": "基于申万/同花顺/东财行业指数动量、估值和资金流向的行业轮动策略",
+    },
+    "margin_signal": {
+        "display_name": "融资融券",
+        "datasets": ["margin_detail", "daily"],
+        "fields": {
+            "margin_detail": ["rzye", "rqye", "rzmre", "rqyl", "rzche", "rzrqye", "rqchl", "rqmcl"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 融资融券 融资余额 融券余额 量化信号 策略 回测",
+            "A股 融资净买入 融券余量 杠杆资金 策略 回测",
+            "A股 两融数据 融资买入 预测收益 策略 回测",
+        ],
+        "search_keywords_en": [
+            "margin trading balance融资余额 A-share signal strategy backtest",
+            "short selling balance margin data A-share quant strategy",
+            "leverage flow融资净买入 A-share stock selection backtest",
+        ],
+        "description": "基于融资余额、融券余量、融资净买入等两融数据的选股与择时策略",
+    },
+    "northbound_flow": {
+        "display_name": "北向资金",
+        "datasets": ["moneyflow_hsgt", "hk_hold", "daily"],
+        "fields": {
+            "moneyflow_hsgt": ["hgt", "sgt", "north_money", "south_money", "ggt_ss", "ggt_sz"],
+            "hk_hold": ["vol", "ratio", "ts_code", "name"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 北向资金 沪股通 深股通 量化策略 回测",
+            "A股 港资持股 北向资金流 选股策略 回测",
+            "A股 外资流入 沪深港通 持股比例 策略 回测",
+        ],
+        "search_keywords_en": [
+            "northbound capital flow沪股通 A-share strategy backtest",
+            "Hong Kong connect holding ratio A-share quant strategy",
+            "foreign inflow Stock Connect A-share stock selection backtest",
+        ],
+        "description": "基于北向资金净流入、港资持股比例和变动趋势的选股策略",
+    },
+    "multi_factor": {
+        "display_name": "多因子合成",
+        "datasets": ["daily_basic", "fina_indicator", "moneyflow"],
+        "fields": {
+            "daily_basic": ["pe", "pe_ttm", "pb", "ps", "dv_ttm", "turnover_rate", "total_mv", "circ_mv", "volume_ratio"],
+            "fina_indicator": ["roe", "roa", "netprofit_yoy", "dt_netprofit_yoy", "grossprofit_margin", "debt_to_assets", "assets_turn", "current_ratio"],
+            "moneyflow": ["net_mf_vol", "net_mf_amount", "buy_lg_vol", "buy_lg_amount", "sell_lg_vol", "sell_lg_amount"],
+        },
+        "search_keywords_cn": [
+            "A股 多因子合成 价值 成长 质量 资金流 量化策略 回测",
+            "A股 因子投资 Barra 风险模型 多因子 策略 回测",
+            "A股 因子选股 PE PB ROE 换手率 资金流 多因子 策略",
+            "华泰 金工 多因子合成 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "multi-factor composite value quality momentum A-share strategy backtest",
+            "factor investing Barra risk model A-share quant strategy",
+            "multi-factor stock selection A-share PE PB ROE turnover backtest",
+        ],
+        "description": "合成价值、质量、动量、资金流等多因子打分的选股策略",
+    },
+    "analyst_signal": {
+        "display_name": "分析师信号",
+        "datasets": ["report_rc", "top_inst", "forecast"],
+        "fields": {
+            "report_rc": ["rating", "max_price", "min_price", "eps", "pe", "roe", "org_name", "report_title"],
+            "top_inst": ["buy", "buy_rate", "sell", "sell_rate", "net_buy", "side", "reason", "exalter"],
+            "forecast": ["p_change_min", "p_change_max", "type", "summary", "ann_date"],
+        },
+        "search_keywords_cn": [
+            "A股 分析师评级 买入卖出 净买入 量化信号 策略 回测",
+            "A股 机构调研 净买入 调研信号 选股策略 回测",
+            "A股 分析师一致预期 EPS 目标价 量化策略 回测",
+        ],
+        "search_keywords_en": [
+            "analyst rating buy sell net buy A-share signal strategy backtest",
+            "institutional research visit net buy A-share quant strategy",
+            "analyst consensus EPS target price A-share backtest",
+        ],
+        "description": "基于分析师评级、机构调研净买入、盈利预告的分析师信号策略",
+    },
+    "macro_rate": {
+        "display_name": "宏观利率",
+        "datasets": ["cn_cpi", "cn_gdp", "cn_m", "cn_pmi", "shibor", "shibor_lpr", "repo_daily"],
+        "fields": {
+            "cn_cpi": ["nt_yoy", "nt_mom", "town_yoy", "cnt_yoy"],
+            "cn_gdp": ["gdp_yoy", "pi_yoy", "si_yoy", "ti_yoy"],
+            "cn_m": ["m0_yoy", "m1_yoy", "m2_yoy", "m2_mom"],
+            "cn_pmi": ["PMI020201", "PMI010401", "PMI010000"],
+            "shibor": ["on", "1w", "1m", "3m", "6m", "1y"],
+            "shibor_lpr": ["1y", "5y"],
+            "repo_daily": ["close", "amount", "repo_maturity", "ts_code"],
+        },
+        "search_keywords_cn": [
+            "A股 宏观因子 CPI PMI M2 利率 策略 回测",
+            "A股 Shibor 利率因子 国债逆回购 大类资产配置 策略",
+            "A股 宏观择时 GDP PMI 流动性 量化策略 回测",
+        ],
+        "search_keywords_en": [
+            "macro factor CPI PMI M2 interest rate A-share timing strategy backtest",
+            "Shibor rate factor liquidity A-share allocation strategy",
+            "GDP PMI monetary policy A-share quantitative timing backtest",
+        ],
+        "description": "基于CPI、GDP、M2、PMI、Shibor等宏观数据的大类资产择时策略",
+    },
+}
+
+
 def build_strategy_query(source: str, keyword: str) -> dict:
     site_restriction = STRATEGY_SITE_RESTRICTIONS.get(source, "")
     query_text = f"{site_restriction} {keyword} quantitative strategy backtest".strip()
@@ -542,6 +798,66 @@ def build_research_query_plan(keywords: Sequence[str] | None = None, tick_offset
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "keywords": normalized_keywords,
+        "queries": queries,
+    }
+
+
+def build_data_driven_query_plan(
+    field_mapping_path: str | Path | None = None,
+    tick_offset: int = 0,
+    max_queries_per_family: int = 2,
+) -> dict:
+    valid_families: list[dict] = []
+    if field_mapping_path:
+        mapping = load_json_payload(field_mapping_path)
+        datasets_map = mapping.get("datasets") if isinstance(mapping, dict) else {}
+        datasets_map = datasets_map if isinstance(datasets_map, dict) else {}
+    else:
+        datasets_map = None
+
+    for family_key, family in STRATEGY_FAMILY_REGISTRY.items():
+        if datasets_map is not None:
+            all_found = True
+            for ds_name, ds_fields in family.get("fields", {}).items():
+                ds_entry = datasets_map.get(ds_name)
+                if not isinstance(ds_entry, dict):
+                    all_found = False
+                    break
+                ds_available = set((ds_entry.get("fields") or {}).keys())
+                for f in ds_fields:
+                    if f not in ds_available:
+                        all_found = False
+                        break
+                if not all_found:
+                    break
+            if not all_found:
+                continue
+        valid_families.append({"key": family_key, **family})
+
+    queries: list[dict] = []
+    rng = random.Random(tick_offset)
+    for family_info in valid_families:
+        family_key = family_info["key"]
+        cn_kw = family_info.get("search_keywords_cn") or []
+        en_kw = family_info.get("search_keywords_en") or []
+        all_kw = cn_kw + en_kw
+        if not all_kw:
+            continue
+        chosen = rng.sample(all_kw, min(max_queries_per_family, len(all_kw)))
+        for kw in chosen:
+            queries.append({
+                "category": "strategy",
+                "source": f"data_driven_{family_key}",
+                "query": kw,
+                "data_family": family_key,
+                "available_datasets": family_info.get("datasets") or [],
+                "available_fields": family_info.get("fields") or {},
+            })
+
+    rng.shuffle(queries)
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "valid_families": [f["key"] for f in valid_families],
         "queries": queries,
     }
 
@@ -835,6 +1151,89 @@ def build_llm_screening_payload(crawled_items: Sequence[dict], model: str = "dee
     }
 
 
+def build_data_aware_screening_payload(
+    crawled_items: Sequence[dict],
+    data_family: str,
+    available_fields: dict,
+    model: str = "deepseek-v4-pro",
+) -> dict:
+    family_info = STRATEGY_FAMILY_REGISTRY.get(data_family, {})
+    family_display = family_info.get("display_name", data_family)
+    datasets = family_info.get("datasets", [])
+
+    fields_manifest_parts: list[str] = []
+    for ds_name, ds_fields in available_fields.items():
+        fields_manifest_parts.append(f"  {ds_name}: {', '.join(ds_fields)}")
+    fields_manifest = "\n".join(fields_manifest_parts)
+    data_constraint = (
+        f"策略主要数据应来自以下 Tushare 数据集和字段，可用字段覆盖率需 ≥ 50%：\n"
+        f"数据集: {', '.join(datasets)}\n"
+        f"字段清单:\n{fields_manifest}\n"
+        f"判断标准：策略所需的数据字段中，至少 50% 必须在上述清单中，否则拒绝。"
+    )
+
+    items = []
+    for index, item in enumerate(crawled_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        items.append({
+            "id": str(item.get("id") or f"item-{index}"),
+            "title": str(item.get("title") or ""),
+            "url": str(item.get("url") or ""),
+            "source": str(item.get("source") or ""),
+            "content": str(item.get("content") or item.get("text") or "")[:12000],
+        })
+
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    f"你是数据驱动的量化策略筛选器。当前筛选策略族：{family_display}。\n"
+                    "你必须验证策略所需数据字段中至少 50% 在可用清单中，否则拒绝。\n"
+                    "严格拒绝以下低质量内容：网站首页/导航页/列表页、社交媒体帖、推广文章、课程页面、竞赛首页、重复镜像。\n"
+                    "输出 JSON，不要输出无关文字。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({
+                    "task": "screen_data_driven_research",
+                    "data_family": data_family,
+                    "data_constraint": data_constraint,
+                    "available_datasets_and_fields": available_fields,
+                    "criteria": [
+                        "策略所需数据字段中至少 50% 必须在上述可用数据集和字段中",
+                        "可理解的量化思路（必需）",
+                        "部分或完整的实现步骤（加分项）",
+                        "回测或实盘效果描述（加分项，非必需）",
+                        "不是网站首页/导航页/列表页/社交媒体帖/推广文章/课程页面/竞赛平台首页",
+                    ],
+                    "items": items,
+                    "expected_schema": {
+                        "valuable_items": [
+                            {
+                                "title": "string",
+                                "url": "string",
+                                "is_valuable": True,
+                                "confidence_level": "high|medium|low",
+                                "strategy_idea": "string",
+                                "implementation_steps": ["string"],
+                                "evidence": "string",
+                                "required_fields": [{"dataset": "string", "field": "string"}],
+                                "data_coverage_pct": "0-100, 可用字段占策略所需字段的百分比",
+                                "data_coverage_verified": True,
+                            }
+                        ]
+                    },
+                }, ensure_ascii=False),
+            },
+        ],
+        "temperature": 0.1,
+    }
+
+
 def parse_llm_screening_decisions(payload: dict | str) -> list[dict]:
     if isinstance(payload, str):
         payload = json.loads(payload)
@@ -876,6 +1275,69 @@ def build_reproduction_summary_payload(
     content = select_reproduction_content(crawled_item)
     if int(max_content_chars or 0) > 0:
         content = content[: int(max_content_chars)]
+
+    data_family = str(crawled_item.get("data_family") or "").strip()
+    data_family_instructions: list[str] = []
+    data_family_fields: dict | None = None
+    if data_family and data_family in STRATEGY_FAMILY_REGISTRY:
+        family_info = STRATEGY_FAMILY_REGISTRY[data_family]
+        data_family_fields = family_info.get("fields") or {}
+        family_display = family_info.get("display_name", data_family)
+        datasets_str = ", ".join(family_info.get("datasets") or [])
+        fields_str_parts = []
+        for ds_name, ds_fields in data_family_fields.items():
+            fields_str_parts.append(f"  {ds_name}: {', '.join(ds_fields)}")
+        fields_str = "\n".join(fields_str_parts)
+        data_family_instructions = [
+            f"此策略属于 {family_display} 策略族（data_family={data_family})",
+            f"策略所需数据字段中至少 50% 应来自以下 Tushare 数据集和字段，允许使用少量清单外数据：",
+            f"可用数据集: {datasets_str}",
+            f"可用字段:\n{fields_str}",
+        ]
+
+    instructions = [
+        "总结核心量化思路",
+        "提取交易标的、调仓频率、信号定义、组合构建、风控、交易成本假设",
+        "列出复现需要的数据字段，并尽量映射到 Tushare 字段",
+        "指出论文中明确的回测区间、基准、评价指标和效果",
+        "给出在 LEAN 中复现的步骤，不要直接编造不存在的数据",
+    ]
+    if data_family_instructions:
+        instructions.extend(data_family_instructions)
+
+    user_payload = {
+        "task": "quant_paper_reproduction_summary",
+        "goal": "为复现准备，而不是直接生成策略代码",
+        "source": {
+            "title": str(crawled_item.get("title") or ""),
+            "url": str(crawled_item.get("url") or ""),
+            "publisher": str(crawled_item.get("source") or ""),
+        },
+        "instructions": instructions,
+        "expected_schema": {
+            "core_idea": "string",
+            "tradable_universe": "string",
+            "rebalance_frequency": "string",
+            "signals": [{"name": "string", "formula": "string", "direction": "string"}],
+            "portfolio_construction": "string",
+            "risk_controls": ["string"],
+            "data_requirements": [{"dataset": "string", "field": "string", "reason": "string"}],
+            "backtest_plan": {
+                "start_date": "string",
+                "end_date": "string",
+                "benchmark": "string",
+                "metrics": ["string"],
+            },
+            "reported_results": "string",
+            "reproduction_steps": ["string"],
+            "implementation_notes": ["string"],
+            "open_questions": ["string"],
+        },
+        "paper_content": content,
+    }
+    if data_family_fields:
+        user_payload["available_tushare_datasets_and_fields"] = data_family_fields
+
     payload = {
         "model": model,
         "messages": [
@@ -888,45 +1350,7 @@ def build_reproduction_summary_payload(
             },
             {
                 "role": "user",
-                "content": json.dumps(
-                    {
-                        "task": "quant_paper_reproduction_summary",
-                        "goal": "为复现准备，而不是直接生成策略代码",
-                        "source": {
-                            "title": str(crawled_item.get("title") or ""),
-                            "url": str(crawled_item.get("url") or ""),
-                            "publisher": str(crawled_item.get("source") or ""),
-                        },
-                        "instructions": [
-                            "总结核心量化思路",
-                            "提取交易标的、调仓频率、信号定义、组合构建、风控、交易成本假设",
-                            "列出复现需要的数据字段，并尽量映射到 Tushare 字段",
-                            "指出论文中明确的回测区间、基准、评价指标和效果",
-                            "给出在 LEAN 中复现的步骤，不要直接编造不存在的数据",
-                        ],
-                        "expected_schema": {
-                            "core_idea": "string",
-                            "tradable_universe": "string",
-                            "rebalance_frequency": "string",
-                            "signals": [{"name": "string", "formula": "string", "direction": "string"}],
-                            "portfolio_construction": "string",
-                            "risk_controls": ["string"],
-                            "data_requirements": [{"dataset": "string", "field": "string", "reason": "string"}],
-                            "backtest_plan": {
-                                "start_date": "string",
-                                "end_date": "string",
-                                "benchmark": "string",
-                                "metrics": ["string"],
-                            },
-                            "reported_results": "string",
-                            "reproduction_steps": ["string"],
-                            "implementation_notes": ["string"],
-                            "open_questions": ["string"],
-                        },
-                        "paper_content": content,
-                    },
-                    ensure_ascii=False,
-                ),
+                "content": json.dumps(user_payload, ensure_ascii=False),
             },
         ],
         "temperature": 0.1,
@@ -2340,8 +2764,9 @@ def ingest_local_strategies(
 
             updated_tracking[file_key] = {"name": file_path.name, "mtime": mtime, "status": "ingested"}
             ingested_count += 1
-        except Exception:
+        except Exception as exc:
             error_count += 1
+            logger.error(f"ingest_local_strategies file failed: {file_path}: {exc}")
 
     if crawled_items:
         persist_crawled_items(crawled_items, artifact_root, run_date=run_date)
@@ -2716,8 +3141,12 @@ def run_crawl_pipeline(
     if llm_screen_client is not None and crawled_items:
         llm_config = config.get("llm") or config.get("glm") or {}
         llm_payload = build_llm_screening_payload(crawled_items, model=llm_config.get("model", "deepseek-v4-pro"))
-        llm_response = llm_screen_client(llm_payload)
-        decisions = parse_llm_screening_decisions(llm_response)
+        try:
+            llm_response = llm_screen_client(llm_payload)
+            decisions = parse_llm_screening_decisions(llm_response)
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(f"LLM screening failed (crawled items still persisted): {exc}")
 
     screened_report = persist_screened_items(decisions, config["artifact-root"], run_date=run_date) if decisions else {
         "run_date": run_date or utc_run_date(),
@@ -2726,6 +3155,95 @@ def run_crawl_pipeline(
     }
     required_fields = []
     for decision in decisions:
+        required_fields.extend(decision.get("required_fields") or [])
+    data_requirements = resolve_data_requirements(
+        required_fields,
+        (config.get("data") or {}).get("field-mapping-path"),
+        config.get("missing-data-log"),
+        supplement_root=(config.get("data") or {}).get("field-cache-root"),
+        search_client=search_client,
+        crawl_client=crawl_client,
+    ) if required_fields else {"available": [], "missing": []}
+
+    return {
+        "status": "ok",
+        "query_plan": query_plan,
+        "crawled": crawled_report,
+        "screened": screened_report,
+        "data_requirements": data_requirements,
+    }
+
+
+def run_data_driven_crawl_pipeline(
+    config: dict,
+    search_client: Callable[[dict], Sequence[dict]],
+    crawl_client: Callable[[dict], dict],
+    llm_screen_client: Callable[[dict], dict] | None = None,
+    run_date: str | None = None,
+    max_queries: int | None = None,
+    max_results_per_query: int | None = 3,
+    tick_offset: int = 0,
+) -> dict:
+    field_mapping_path = (config.get("data") or {}).get("field-mapping-path")
+    query_plan = build_data_driven_query_plan(
+        field_mapping_path=field_mapping_path,
+        tick_offset=tick_offset,
+        max_queries_per_family=2,
+    )
+    queries = query_plan["queries"]
+    if max_queries is not None:
+        queries = queries[: max(0, int(max_queries))]
+    query_plan = {**query_plan, "queries": queries}
+
+    crawled_items = run_search_and_crawl(
+        query_plan,
+        search_client=search_client,
+        crawl_client=crawl_client,
+        max_results_per_query=max_results_per_query,
+    )
+    crawled_report = persist_crawled_items(crawled_items, config["artifact-root"], run_date=run_date)
+
+    all_decisions: list[dict] = []
+    if llm_screen_client is not None and crawled_items:
+        family_groups: dict[str, list[dict]] = {}
+        for item in crawled_items:
+            family = str(item.get("data_family") or "unknown")
+            family_groups.setdefault(family, []).append(item)
+
+        llm_config = config.get("llm") or config.get("glm") or {}
+        model = llm_config.get("model", "deepseek-v4-pro")
+
+        for family, items in family_groups.items():
+            family_info = STRATEGY_FAMILY_REGISTRY.get(family, {})
+            available_fields = family_info.get("fields", {})
+            if not available_fields:
+                continue
+            payload = build_data_aware_screening_payload(
+                items,
+                data_family=family,
+                available_fields=available_fields,
+                model=model,
+            )
+            try:
+                llm_response = llm_screen_client(payload)
+                decisions = parse_llm_screening_decisions(llm_response)
+                for d in decisions:
+                    d["data_family"] = family
+                    d["available_fields"] = available_fields
+                    d["data_coverage_verified"] = True
+                all_decisions.extend(decisions)
+            except Exception as exc:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(f"Data-aware LLM screening failed for family {family}: {exc}")
+
+    screened_report = persist_screened_items(all_decisions, config["artifact-root"], run_date=run_date) if all_decisions else {
+        "run_date": run_date or utc_run_date(),
+        "written_count": 0,
+        "files": [],
+    }
+
+    required_fields = []
+    for decision in all_decisions:
         required_fields.extend(decision.get("required_fields") or [])
     data_requirements = resolve_data_requirements(
         required_fields,
@@ -3109,6 +3627,41 @@ def _load_lean_reference_template(language: str) -> str:
         return ""
 
 
+def _derive_class_name_from_title(title: str) -> str:
+    """Derive a meaningful PascalCase class name prefix from a strategy title.
+    E.g. "Timing Excess Returns: A Cross-Universe Approach" → "TimingExcessReturns"
+    """
+    import unicodedata
+    # Remove common noise words
+    noise = {"a", "an", "the", "of", "in", "on", "for", "to", "with", "and", "or", "from", "by", "via"}
+    # Split on non-alphanumeric, keep segments
+    segments = re.split(r"[\s:\-–—/|.,;!?()]+", title)
+    parts = []
+    for seg in segments:
+        if not seg:
+            continue
+        # Skip CJK-only segments
+        if all("一" <= c <= "鿿" for c in seg):
+            continue
+        # Skip noise words
+        if seg.lower() in noise:
+            continue
+        # PascalCase: capitalize first letter
+        part = seg[0].upper() + seg[1:] if seg else ""
+        # Remove non-alpha chars
+        part = re.sub(r"[^A-Za-z0-9]", "", part)
+        if part and len(part) > 1:
+            parts.append(part)
+    if not parts:
+        return "Strategy"
+    # Take at most 3 significant parts for concise names
+    result = "".join(parts[:3])
+    # Truncate at 30 chars, avoiding mid-word cut
+    if len(result) > 30:
+        result = result[:30]
+    return result
+
+
 def build_strategy_implementation_payload(
     reproduction_summary: dict,
     model: str = "glm-5.1",
@@ -3169,7 +3722,7 @@ def build_strategy_implementation_payload(
         lang_label = "Python"
         code_desc = "full Python source code inheriting from QCAlgorithm"
         lang_constraints = [
-            "class_name 必须以 SoloQuantGenerated 开头并以 Algorithm 结尾",
+            "class_name 必须以策略核心特征英文命名并以 Algorithm 结尾（如 CrossSectionalMomentumAlgorithm、PairsTradingArbitrageAlgorithm），禁止使用无意义前缀",
             "必须实现 def Initialize(self) 和 def OnData(self, slice)",
             "不要使用 import requests、import subprocess、open()、pd.read_csv()、pd.read_parquet()",
             "必须使用 from AlgorithmImports import *",
@@ -3206,7 +3759,7 @@ def build_strategy_implementation_payload(
             "不要使用 DateTime.Parse(param)（用 DateTime.ParseExact(param, \"yyyyMMdd\", null)）\n"
             "不要使用 \"000300.SS\" 基准（用 SetBenchmark(_ => 0m)）\n"
             "不要使用 RSI 类名（LEAN 中是 RelativeStrengthIndex）\n"
-            "不要使用 class SymbolData（改用 SoloQuantSymbolData）\n"
+            "不要使用 class SymbolData（改用与策略名关联的唯一名称，如 MomentumSymbolData）\n"
             "不要使用 string.ToInt()（用 int.Parse()）\n"
             "不要使用 IndexConstituent 枚举\n"
             "不要使用 algorithm.Delay()\n"
@@ -3217,7 +3770,7 @@ def build_strategy_implementation_payload(
         lang_label = "CSharp"
         code_desc = "full C# source code"
         lang_constraints = [
-            "class_name 必须以 SoloQuantGenerated 开头并以 Algorithm 结尾",
+            "class_name 必须以策略核心特征英文命名并以 Algorithm 结尾（如 CrossSectionalMomentumAlgorithm、PairsTradingArbitrageAlgorithm），禁止使用无意义前缀",
             "namespace 必须是 QuantConnect.Algorithm.CSharp",
             "必须包含以下 using 指令：using QuantConnect.Algorithm; using QuantConnect.Data; using QuantConnect.Data.Market; using QuantConnect.Orders.Fees; using QuantConnect.Orders.Fills; using QuantConnect.Orders; using QuantConnect.Indicators; using QuantConnect.Securities;",
             "必须使用直接 OnData(Slice data) 方式实现交易逻辑，不要使用 Framework 模型（AlphaModel/PortfolioConstructionModel/RiskManagementModel/ExecutionModel）",
@@ -3229,7 +3782,7 @@ def build_strategy_implementation_payload(
             "AShareStockBuyingPowerModel() 无构造函数参数",
             "不要使用 File.ReadAllText、StreamReader、File.Open、File.ReadAllLines",
             "不要使用 RSI 类名，LEAN 中是 RelativeStrengthIndex",
-            "不要使用 class SymbolData 作为类名，改用 SoloQuantSymbolData",
+            "不要使用 class SymbolData 作为类名，改用与策略名关联的唯一名称（如 MomentumSymbolData）",
             "不要使用 Securities.OnSecurityAdded（不存在此 API）",
             "不要使用 SetSecurityInitializer（直接在 AddEquity 后设置 Security 属性）",
             "不要使用 (double)weight 在 PortfolioTarget 中（Quantity 是 decimal）",
@@ -3283,13 +3836,42 @@ def build_strategy_implementation_payload(
             "A股交易时间：9:30-11:30, 13:00-15:00（北京时间），非US交易时间",
         ])
 
+    # Derive a meaningful class name hint from the strategy title
+    title = str(reproduction_summary.get("title") or "")
+    class_name_hint = _derive_class_name_from_title(title)
+
+    data_family = str(reproduction_summary.get("data_family") or "").strip()
+    if data_family and data_family in STRATEGY_FAMILY_REGISTRY:
+        family_info = STRATEGY_FAMILY_REGISTRY[data_family]
+        family_fields = family_info.get("fields") or {}
+        family_display = family_info.get("display_name", data_family)
+        datasets_list = family_info.get("datasets") or []
+        fields_manifest_parts = []
+        for ds_name, ds_fields in family_fields.items():
+            fields_manifest_parts.append(f"  {ds_name}: {', '.join(ds_fields)}")
+        fields_manifest = "\n".join(fields_manifest_parts)
+        data_constraint = (
+            f"\n\n=== Tushare 数据集（优先使用这些字段，覆盖率需 ≥ 50%）===\n"
+            f"策略族: {family_display} (data_family={data_family})\n"
+            f"可用数据集: {', '.join(datasets_list)}\n"
+            f"可用字段:\n{fields_manifest}\n"
+            f"=== 结束 ===\n"
+            f"策略所需数据字段中至少 50% 必须来自上述清单，其余字段允许使用其他可用 Tushare 数据。\n"
+        )
+        system_prompt += data_constraint
+        lean_module_constraints.extend([
+            f"此策略属于 {family_display} 策略族，策略所需数据字段中至少 50% 应来自以下 Tushare 数据集和字段",
+            f"可用数据集: {', '.join(datasets_list)}",
+            f"可用字段见上方清单，其余字段允许使用其他可用 Tushare 数据",
+        ])
+
     user_payload: dict = {
         "task": "soloquant_generate_lean_strategy_code",
         "language": lang_label,
-        "goal": f"根据复现摘要生成一个新的 SoloQuantGenerated* {lang_label} QCAlgorithm 草案，遵循 LEAN 标准模块架构",
+        "goal": f"根据复现摘要生成一个新的 {lang_label} QCAlgorithm 草案，遵循 LEAN 标准模块架构",
         "constraints": lang_constraints + lean_module_constraints,
         "expected_schema": {
-            "class_name": f"SoloQuantGeneratedNameAlgorithm",
+            "class_name": f"{class_name_hint}Algorithm",
             "description": "string",
             "code": code_desc,
             "parameters": {"string": "string"},
@@ -3373,6 +3955,32 @@ def postprocess_generated_csharp_code(code: str) -> str:
     # Fix: string.ToInt() → int.Parse(string)
     code = re.sub(r"(\w+)\.ToInt\(\)", r"int.Parse(\1)", code)
 
+    # Fix: Market variable declaration — Market is a static class, use Market.SSE/SZSE directly
+    # "Market market = ticker.StartsWith..." → use string marketName and resolve
+    def _fix_market_decl(m):
+        replacement = m.group(2).replace("Market.SSE", '"SSE"').replace("Market.SZSE", '"SZSE"')
+        return f'var {m.group(1)} = {replacement};'
+    code = re.sub(
+        r"Market\s+(\w+)\s*=\s*([^;]+);",
+        _fix_market_decl,
+        code,
+    )
+    # Fix AddEquity with string market parameter → use Markets helper
+    # Pattern: AddEquity(ticker, Resolution.Daily, "SSE") → AddEquity(ticker, Resolution.Daily, Market.SSE)
+    code = re.sub(r'AddEquity\s*\(\s*(\w+)\s*,\s*Resolution\.Daily\s*,\s*"SSE"\s*\)',
+                   r'AddEquity(\1, Resolution.Daily, Market.SSE)', code)
+    code = re.sub(r'AddEquity\s*\(\s*(\w+)\s*,\s*Resolution\.Daily\s*,\s*"SZSE"\s*\)',
+                   r'AddEquity(\1, Resolution.Daily, Market.SZSE)', code)
+    # Fix: AddEquity with Market-type var → use ternary with Market.SSE/SZSE
+    code = re.sub(
+        r'AddEquity\s*\(\s*(\w+)\s*,\s*Resolution\.Daily\s*,\s*(\w+)\s*\)',
+        lambda m: f'AddEquity({m.group(1)}, Resolution.Daily, {m.group(1)}.StartsWith("6") ? Market.SSE : Market.SZSE)' if m.group(2) != "Market.SSE" and m.group(2) != "Market.SZSE" and m.group(2) != m.group(1) else m.group(0),
+        code,
+    )
+
+    # Fix: decimal to int conversion errors — add explicit cast
+    code = re.sub(r"(\w+)\s*=\s*\((\w+)\.Count\s*/\s*(\d+)\)", r"\1 = (int)(\2.Count / \3)", code)
+
     # Fix: OrderParameters → OrderFeeParameters
     code = code.replace("OrderParameters ", "OrderFeeParameters ")
     code = code.replace("(OrderParameters)", "(OrderFeeParameters)")
@@ -3411,9 +4019,18 @@ def postprocess_generated_csharp_code(code: str) -> str:
         code = re.sub(r"algorithm\.Delay\s*\(", "// TODO: replace algorithm.Delay( ", code)
 
     # Fix: SymbolData class name conflicts with other algorithms in the same project
-    # Rename to SoloQuantSymbolData to avoid CS0101 namespace collision
+    # Rename to a unique name based on the algorithm class to avoid CS0101 collision
+    algo_class_match = re.search(r"class\s+(\w+)\s*:.*QCAlgorithm", code)
+    if algo_class_match:
+        algo_name = algo_class_match.group(1)
+        unique_name = f"{algo_name}SymbolData"
+    else:
+        unique_name = "StrategySymbolData"
     if re.search(r"\bclass\s+SymbolData\b", code):
-        code = re.sub(r"\bSymbolData\b", "SoloQuantSymbolData", code)
+        code = re.sub(r"\bSymbolData\b", unique_name, code)
+    # Also rename SoloQuantSymbolData (from LLM following old instructions) → unique name
+    if re.search(r"\bclass\s+SoloQuantSymbolData\b", code):
+        code = re.sub(r"\bSoloQuantSymbolData\b", unique_name, code)
 
     # Fix: RSI class doesn't exist in LEAN, use RelativeStrengthIndex
     code = re.sub(r"\bnew\s+RSI\b", "new RelativeStrengthIndex", code)
@@ -3471,6 +4088,30 @@ def postprocess_generated_csharp_code(code: str) -> str:
     code = re.sub(r'"(\d+)\.SSE"', r'"\1"', code)
     code = re.sub(r'"(\d+)\.SZSE"', r'"\1"', code)
     code = re.sub(r'"(\d+)\.SZ"', r'"\1"', code)
+    # Fix: AddEquity with .SH/.SZ suffix in ticker string
+    # e.g., AddEquity("600000.SH") → AddEquity("600000", Market.SSE)
+    # and AddEquity("000001.SZ") → AddEquity("000001", Market.SZSE)
+    code = re.sub(
+        r'AddEquity\s*\(\s*"(\d+)\.(?:SH|SSE)"\s*,\s*Resolution\.Daily\s*\)',
+        r'AddEquity("\1", Resolution.Daily, Market.SSE)',
+        code,
+    )
+    code = re.sub(
+        r'AddEquity\s*\(\s*"(\d+)\.(?:SZ|SZSE)"\s*,\s*Resolution\.Daily\s*\)',
+        r'AddEquity("\1", Resolution.Daily, Market.SZSE)',
+        code,
+    )
+    # Fix: AddEquity with .SH/.SZ suffix and no resolution
+    code = re.sub(
+        r'AddEquity\s*\(\s*"(\d+)\.(?:SH|SSE)"\s*\)',
+        r'AddEquity("\1", Resolution.Daily, Market.SSE)',
+        code,
+    )
+    code = re.sub(
+        r'AddEquity\s*\(\s*"(\d+)\.(?:SZ|SZSE)"\s*\)',
+        r'AddEquity("\1", Resolution.Daily, Market.SZSE)',
+        code,
+    )
 
     # Fix: missing using QuantConnect.Orders.Fills
     if "AShareStockFillModel" in code and "using QuantConnect.Orders.Fills;" not in code:
@@ -3639,8 +4280,8 @@ def compile_validate_generated_code(
             fixed_code = str(fix_response.get("code") or "")
             if fixed_code and class_name in fixed_code:
                 current_code = postprocess_generated_csharp_code(fixed_code)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(f"C# compile-fix LLM call failed for {class_name} attempt {attempt}: {exc}")
 
     if not code_path.exists() or code_path.read_text(encoding="utf-8").strip() != current_code.strip():
         code_path.write_text(current_code, encoding="utf-8")
@@ -3763,8 +4404,8 @@ def validate_generated_strategy_code(class_name: str, code: str, metadata: dict 
     normalized_lang = str(language or "CSharp").strip().lower()
     validate_no_inline_service_secrets(metadata)
     validate_no_secret_values(code, "generated_strategy.code")
-    if not re.fullmatch(r"SoloQuantGenerated[A-Za-z0-9_]*Algorithm", class_name):
-        raise ValueError(f"generated strategy class is forbidden or invalid: {class_name}")
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9_]*Algorithm", class_name):
+        raise ValueError(f"generated strategy class name must be PascalCase ending in 'Algorithm': {class_name}")
     if class_name in default_config()["strategy-policy"]["avoid-algorithms"]:
         raise ValueError(f"generated strategy class is forbidden: {class_name}")
     if normalized_lang in {"python", "py"}:
@@ -3873,9 +4514,12 @@ def generate_strategy_implementation_package(
     for attempt in range(1 + max_retries):
         try:
             response = _normalize_generated_strategy_response(client(request_payload))
+            if not response:
+                raise ValueError(f"LLM returned empty response for {strategy_id}")
             break
         except Exception as exc:
             last_exception = exc
+            logger.warning(f"LLM generation attempt {attempt+1}/{1+max_retries} failed for {strategy_id}: {exc}")
             if attempt < max_retries:
                 time.sleep(5 * (attempt + 1))
     else:
@@ -4018,8 +4662,9 @@ def generate_strategy_implementations(
                 language=language,
                 config_or_none=config_or_none,
             )
-        except Exception:
+        except Exception as exc:
             error_count += 1
+            logger.error(f"generate_strategy_implementation_package failed for {path}: {exc}")
             continue
         if package.get("skipped_existing"):
             skipped_count += 1
@@ -4125,7 +4770,7 @@ def materialize_generated_strategy_implementation(
     generated_manifest = load_json_payload(source_path)
     strategy_id = safe_slug(str(generated_manifest.get("strategy_id") or generated_manifest.get("strategy-id") or source_path.parent.name), "soloquant-generated")
     class_name = str(generated_manifest.get("class_name") or generated_manifest.get("class-name") or "").strip()
-    if not re.fullmatch(r"SoloQuantGenerated[A-Za-z0-9_]*Algorithm", class_name):
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9_]*Algorithm", class_name):
         raise ValueError(f"generated strategy manifest has invalid class_name: {class_name}")
 
     algorithm_language = str(generated_manifest.get("algorithm_language") or "CSharp").strip()
@@ -4809,6 +5454,13 @@ def _load_lean_summary_from_config(config_path: str | Path) -> dict:
         portfolio_snapshot = parameters.get("portfolio-snapshot-file")
         if portfolio_snapshot:
             candidate_paths.append(portfolio_snapshot)
+    # Also check for LEAN's default result file location
+    if isinstance(parameters, dict):
+        algo_id = parameters.get("soloquant-strategy-id") or payload.get("algorithm-id")
+        if algo_id:
+            results_dir = payload.get("results-destination-folder")
+            if results_dir:
+                candidate_paths.append(str(Path(results_dir) / f"{algo_id}-summary.json"))
 
     for candidate in candidate_paths:
         resolved = Path(str(candidate))
@@ -4830,6 +5482,13 @@ def _load_lean_summary_from_config(config_path: str | Path) -> dict:
 def _score_variant(summary: dict, metric_name: str = "score") -> float:
     if not isinstance(summary, dict):
         return float("-inf")
+    # Check for total return first (most reliable metric from LEAN backtests)
+    total_return = safe_float(summary.get("total_return") or summary.get("TotalReturn"), None)
+    max_drawdown = safe_float(summary.get("max_drawdown") or summary.get("MaxDrawdown"), None)
+    if total_return is not None and max_drawdown is not None:
+        return float(total_return) - abs(float(max_drawdown))
+    if total_return is not None:
+        return float(total_return)
     sharpe = safe_float(summary.get("sharpe_ratio") or summary.get("SharpeRatio"), None)
     if sharpe is not None:
         return sharpe
@@ -4839,12 +5498,6 @@ def _score_variant(summary: dict, metric_name: str = "score") -> float:
     candidate = summary.get(metric_name)
     if candidate is None:
         candidate = summary.get("strategy_total_return")
-    if candidate is None:
-        total_return = safe_float(summary.get("total_return"), None)
-        max_drawdown = safe_float(summary.get("max_drawdown"), None)
-        if total_return is not None and max_drawdown is not None:
-            return float(total_return) - abs(float(max_drawdown))
-        return float("-inf")
     score = safe_float(candidate, None)
     return float(score) if score is not None else float("-inf")
 

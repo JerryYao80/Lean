@@ -143,6 +143,15 @@ def default_crawl_tasks() -> list[dict]:
             "max-results-per-query": 3,
             "screen-with-llm": True,
         },
+        {
+            "name": "data_driven_strategy",
+            "category": "strategy",
+            "interval-minutes": 10,
+            "max-queries": 40,
+            "max-results-per-query": 3,
+            "mode": "data_driven",
+            "screen-with-llm": True,
+        },
     ]
 
 
@@ -156,7 +165,7 @@ def load_crawl_tasks(config: dict) -> list[dict]:
             name = str(item.get("name") or item.get("category") or "").strip()
             category = orchestrator.normalize_category(item.get("category") or name)
             keywords = [str(value) for value in (item.get("keywords") or []) if str(value).strip()]
-            if not name or not keywords:
+            if not name or not keywords and not item.get("mode"):
                 continue
             tasks.append(
                 {
@@ -167,6 +176,7 @@ def load_crawl_tasks(config: dict) -> list[dict]:
                     "max-queries": max(1, int(item.get("max-queries") or 20)),
                     "max-results-per-query": max(1, int(item.get("max-results-per-query") or 3)),
                     "screen-with-llm": bool(item.get("screen-with-llm", True)),
+                    "mode": str(item.get("mode") or "").strip(),
                 }
             )
         if tasks:
@@ -286,7 +296,20 @@ def run_due_tasks(
             force=force,
         )
         try:
-            report = orchestrator.run_crawl_pipeline(
+            task_mode = str(task.get("mode") or "").strip()
+            if task_mode == "data_driven":
+                report = orchestrator.run_data_driven_crawl_pipeline(
+                    config=config,
+                    search_client=search_client,
+                    crawl_client=crawl_client,
+                    llm_screen_client=llm_screen_client if screen else None,
+                    run_date=run_date,
+                    max_queries=max_queries_per_task if max_queries_per_task is not None else task.get("max-queries"),
+                    max_results_per_query=max_results_per_query_override if max_results_per_query_override is not None else task.get("max-results-per-query", 3),
+                    tick_offset=int(now.timestamp() / 300),
+                )
+            else:
+                report = orchestrator.run_crawl_pipeline(
                 config=config,
                 keywords=keywords,
                 categories=[str(task.get("category") or task_name)],

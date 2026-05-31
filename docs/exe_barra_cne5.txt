@@ -1,0 +1,231 @@
+Barra CNE5 实现流程与 live-paper 执行流程
+===========================================
+
+一、核心文件
+-----------
+1. 因子生成与落盘
+   - Scripts/barra_cne5_factor_bridge.py
+   - Scripts/barra_cne5_factor_builder.py
+   - Scripts/barra_cne5_live_bridge.py
+2. 策略算法
+   - Algorithm.CSharp/AShareBarraCNE5Algorithm.cs
+   - Algorithm.CSharp/AShareBarraCNE5FactorData.cs
+   - Algorithm.CSharp/AShareBarraCNE5SignalModel.cs
+3. 启动与编排
+   - Scripts/barra_cne5_live_paper.py
+   - Launcher/config/config-barra-cne5-backtest.json
+   - Launcher/config/config-barra-cne5-live-paper.json
+4. 主要输出
+   - Results/barra-cne5-trades.csv
+   - Results/barra-cne5-daily-summary.csv
+   - Results/barra-cne5-allocation.csv
+   - Results/barra-cne5-factor-exposure.csv
+   - Results/barra-cne5-live-state.json
+   - Results/barra-cne5-live-bridge-report.json
+   - Results/barra-cne5-live-price-snapshot.json
+
+
+二、Barra CNE5 的实现流程
+------------------------
+1. 因子输入来源
+   - 标准回测/离线流程优先从 `factor-data-path` 读取 Barra CNE5 因子 CSV。
+   - 因子 CSV 的列包含 `trade_date,beta,momentum,size,earnyld,resvol,growth,btop,leverage,liquidity,nlsize,total_mv,turnover_rate,listed_days,missing_factor_count,is_st`。
+   - live 场景下，`barra_cne5_live_bridge.py` 会先把当天可用的因子文件落到 `Data/alternative/barra-cne5-live-factors/.../*.csv`，算法再从磁盘同步。
+   - live 因子来源由 `factor-source-mode` 控制：
+     - `external`/`auto`：优先从 `external-factor-path` 复制或沿用历史因子。
+     - 如果外部因子不可用，则由 `barra_cne5_factor_bridge.py` 调用因子构建流程生成。
+     - 若配置为随机兜底，则可以生成随机因子以保证链路打通。
+
+2. 因子桥接
+   - `barra_cne5_factor_bridge.py` 负责：
+     - 读取 Tushare 历史数据。
+     - 构建股票池，例如 `csi300`。
+     - 对每个交易日、每只股票计算 Barra CNE5 因子。
+     - 将结果按市场和证券代码分文件写入 `sse/daily/*.csv` 或 `szse/daily/*.csv`。
+     - 输出 bridge report，记录写入 symbol 数、覆盖率、模式、缺失情况。
+
+3. LEAN 算法初始化
+   - `AShareBarraCNE5Algorithm.Initialize()` 完成以下动作：
+     - 读取回测或 live-paper 配置。
+     - 设置 `start-date`、`end-date`、`initial-cash`、`rebalance-frequency`、`top-n`、目标暴露和因子权重。
+     - 为股票标的添加 LEAN A 股日线订阅。
+     - 为同一标的添加 `AShareBarraCNE5FactorData` 自定义数据订阅。
+     - 初始化 synthetic portfolio，而不是依赖真实 LEAN 下单。
+     - live 模式下注册每分钟调度 `RunLiveMonitoringCycle()`。
+
+4. 因子接入与会话处理
+   - `OnData()` 收到因子切片后，将最新因子缓存到 `_latestFactorsByUnderlying`。
+   - 若是 live 模式，会先调用 `EnsureLiveFactorSnapshots(sessionDate)` 从 live 因子目录同步当天或最近不晚于当天的因子快照。
+   - 之后统一进入 `ProcessSession(sessionDate)`。
+
+5. `ProcessSession()` 的策略主流程
+   - 读取最新价格映射，价格来源优先级是 live snapshot，其次是本地日线。
+   - 从 `_latestFactorsByUnderlying` 中筛出“当天新鲜且满足条件”的因子：
+     - 因子缺失数不能超过阈值。
+     - 上市天数、总市值、ST 状态等要通过过滤。
+   - 若当前日期满足调仓条件：
+     - `AShareBarraCNE5SignalModel.ComputeScores(...)` 根据 10 个 Barra 因子及其权重计算截面分数。
+     - `SelectPortfolio(...)` 按 `top-n`、`min-score-spread`、`target-portfolio-exposure` 生成目标权重。
+     - `ApplyTargetPortfolio(...)` 在 synthetic 账户里执行买卖，更新现金、持仓、交易记录。
+   - 若 live 模式当天不需要正式调仓，但已有历史目标权重：
+     - 会执行 `live-align`，按保留的目标权重和最新价格对组合做对齐更新。
+
+6. 组合、信号和风险输出
+   - 每次 `ProcessSession()` 完成后都会更新：
+     - `DailySummaryRow`：总资产、现金、已投资金额、收益率、持仓数、候选数、选中数、换手率、分数差。
+     - `AllocationRow`：每个持仓的权重、数量、价格、分数。
+     - `FactorExposureRow`：组合对 10 个 Barra 因子的加权暴露。
+     - `TradeRow`：买卖方向、数量、成交价、交易金额、手续费、交易前后数量。
+   - 所有输出最终通过 `PersistOutputs()` 落盘。
+   - `WritePortfolioState()` 会把现金、持仓、历史交易、日汇总、资产配置、因子暴露一起写到 `barra-cne5-live-state.json`，供下次 live-paper 恢复。
+
+7. 回测统计
+   - 标准 LEAN 回测结束时：
+     - `PublishSyntheticSummaryStatistics()` 输出 synthetic 回测统计。
+     - 若开启 Monte Carlo，会基于 `daily-summary + factor-exposure` 再输出：
+       - `Monte Carlo Trials`
+       - `Monte Carlo Horizon Days`
+       - `Monte Carlo Baseline Loss Probability`
+       - `Monte Carlo Combined Loss Probability`
+       - `Monte Carlo Combined Median Return`
+       - `Monte Carlo Combined P95 Drawdown`
+
+
+三、live-paper 执行流程
+----------------------
+1. 启动命令
+   - 默认启动：
+     - `python3 Scripts/barra_cne5_live_paper.py --config Launcher/config/config-barra-cne5-live-paper.json`
+   - 仅启动 bridge：
+     - `python3 Scripts/barra_cne5_live_paper.py --config Launcher/config/config-barra-cne5-live-paper.json --bridge-only`
+   - 仅启动 LEAN：
+     - `python3 Scripts/barra_cne5_live_paper.py --config Launcher/config/config-barra-cne5-live-paper.json --launcher-only`
+
+2. `barra_cne5_live_paper.py` 的编排顺序
+   - Stage 1/4：启动 `barra_cne5_live_bridge.py`
+   - Stage 2/4：等待 bridge 就绪
+     - 判定条件不是黑盒：
+       - `live-factor-report-file` 已生成。
+       - `live-price-snapshot-file` 已生成。
+       - 实时报价覆盖率至少达到 10%。
+       - 因子文件覆盖率至少达到 90%。
+       - 因子文件数不少于 bridge report 中已写入 symbol 数。
+   - Stage 3/4：启动 `QuantConnect.Lean.Launcher`
+   - Stage 4/4：进入状态循环，持续打印：
+     - account summary
+     - trade signals
+     - portfolio allocation
+     - factor exposure
+     - 关键 LEAN 日志与统计
+
+3. `barra_cne5_live_bridge.py` 每个循环周期的真实顺序
+   - 解析当前交易日：
+     - 通过交易日历解析 live trade_date，而不是简单取系统日期。
+   - 构建股票池：
+     - 从 `universe` 或 `symbols` 生成当期股票列表。
+   - 读取旧 snapshot：
+     - 载入上一次 `barra-cne5-live-price-snapshot.json`，用于续接和 carry-forward。
+   - 构建分钟刷新计划：
+     - 根据 `live-price-max-requests-per-minute`、`batch-size` 和股票池大小，计算本分钟需要刷新的子集。
+     - 当前实现是“轮转刷新 + 未刷新部分沿用上一轮 snapshot”。
+   - 调用 Tushare 实时日线接口：
+     - 股票调用 `rt_k`
+     - ETF 调用 `rt_etf_k`
+   - 合并新旧报价：
+     - 新拿到的报价覆盖旧 snapshot 中同 symbol 的记录。
+     - 未刷新到的 symbol 沿用上一轮报价，实现 snapshot carry-forward。
+   - 持久化实时数据：
+     - 新抓取的 fresh quotes 先归档到 `daily-quote-archive-path/date=YYYYMMDD/quotes.parquet`
+     - 合并后的全量 snapshot 再写入 `barra-cne5-live-price-snapshot.json`
+   - 生成 market preview：
+     - 报告 sample 标的、价格、涨跌幅、source_api、刷新窗口、全量轮转估计分钟数。
+   - 因子物化：
+     - 若 trade_date 变化，或尚未生成当日因子，则调用 `materialize_live_factor_snapshot(...)`
+     - 优先用 `external-factor-path` 做历史因子 seed
+     - 否则走 `barra_cne5_factor_bridge.run_factor_bridge(...)`
+   - 最后写 bridge report：
+     - `bridge_report`
+     - `live_quote_report`
+     - `market_preview`
+     - 路径信息和生成时间
+
+4. LEAN live-paper 启动后的算法流程
+   - `AShareBarraCNE5Algorithm.Initialize()`：
+     - 创建股票和 Barra 因子订阅。
+     - `sync-lean-portfolio=false`，因此不发送真实 LEAN 订单。
+     - 账户资金、持仓、交易、日汇总都由 synthetic 组合内部维护。
+   - `BootstrapLiveSessionState()`：
+     - 从 `barra-cne5-live-state.json` 恢复现金、持仓、交易历史、上一轮目标权重和历史报表。
+     - 从 `barra-cne5-live-price-snapshot.json` 读取快照价格。
+     - 强制从 live 因子目录同步一次当天因子。
+     - 立即执行一次 `ProcessSession(bootstrapDate)`，让策略启动后能立刻给出资产与信号状态。
+   - 每分钟调度 `RunLiveMonitoringCycle()`：
+     - 解析当前 sessionDate
+     - `EnsureLiveFactorSnapshots()` 从磁盘读取当天或最近不晚于当天的因子
+     - `ProcessSession()` 执行评分、选股、调仓或 live-align
+     - 更新现金、持仓数量、信号、组合因子暴露
+     - 写出 CSV 与 state JSON
+
+5. live-paper 中实时日线的处理顺序
+   - 不是“先给策略算完再存”。
+   - 实际顺序是：
+     - 先从 Tushare 拉取 `rt_k/rt_etf_k`
+     - 再与旧 snapshot 合并成全量 snapshot
+     - fresh quotes 归档到 parquet
+     - 合并后的 snapshot 持久化为 JSON
+     - LEAN 与算法再消费这个 snapshot，用于估值、交易信号和资产配置更新
+   - 因此，实时日线同时承担两个角色：
+     - 作为策略输入数据
+     - 作为可追溯的持久化行情快照
+
+6. live-paper 输出内容
+   - bridge 输出：
+     - 当前 cycle
+     - trade_date
+     - 本分钟刷新 symbol 数
+     - carry-forward 数
+     - 因子物化结果
+     - quote flow 与 market preview
+   - live-paper orchestrator 输出：
+     - account summary
+     - trade signals
+     - portfolio allocation
+     - factor exposure
+   - LEAN 算法输出：
+     - `[signal ranking]`
+     - `[signal targets]`
+     - `[daily]`
+     - `[portfolio]`
+     - `[factor sync]`
+     - `[state] restored`
+
+
+四、关键运行特征
+---------------
+1. 当前 Barra CNE5 live-paper 是“合成执行”模型
+   - 不发真实券商订单
+   - 不依赖真实 Lean order event 回补持仓
+   - 现金和仓位变化完全由算法内部 synthetic 账户维护
+
+2. 当前实时报价是分钟轮转刷新，不是每分钟全量 300 只都重新打接口
+   - 这样做是为了遵守 Tushare `rt_k/rt_etf_k` 的每分钟请求上限
+   - 未刷新的标的沿用上一轮 snapshot，直到轮转到该 symbol
+
+3. live-paper 是可恢复的
+   - 依赖 `barra-cne5-live-state.json`
+   - 恢复后不会从 0 持仓重新开始，而是延续上次的现金、持仓、交易和目标权重
+
+
+五、建议的排查入口
+----------------
+1. 看 bridge 是否正常工作
+   - `Results/barra-cne5-live-bridge-report.json`
+   - `Results/barra-cne5-live-price-snapshot.json`
+   - `Data/archive/barra-cne5-live-daily-quotes/date=YYYYMMDD/quotes.parquet`
+2. 看算法是否正常产出
+   - `Results/barra-cne5-live-trades.csv`
+   - `Results/barra-cne5-live-daily-summary.csv`
+   - `Results/barra-cne5-live-allocation.csv`
+   - `Results/barra-cne5-live-factor-exposure.csv`
+3. 看状态是否正确恢复
+   - `Results/barra-cne5-live-state.json`

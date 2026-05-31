@@ -37,6 +37,7 @@
   "pipeline": {
     "poll-seconds": 300,
     "crawl-interval-seconds": 28800,
+    "data-driven-crawl-interval-seconds": 28800,
     "local-ingest-interval-seconds": 3600,
     "crawl-max-queries-per-task": 2,
     "crawl-max-results-per-query": 1,
@@ -131,6 +132,14 @@
         "site:theice.com OR site:cboe.com OR site:eurex.com futures options margin volatility circular notice 2026",
         "site:euronext.com market notice derivatives clearing volatility 2026"
       ],
+      "screen-with-llm": true
+    },
+    {
+      "name": "data_driven_strategy",
+      "category": "strategy",
+      "interval-minutes": 10,
+      "max-queries": 40,
+      "mode": "data_driven",
       "screen-with-llm": true
     }
   ],

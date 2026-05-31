@@ -22,6 +22,7 @@ import soloquant_orchestrator as orchestrator
 
 PIPELINE_STAGES = (
     "ingest_local_strategies",
+    "data_driven_crawl",
     "crawl_research",
     "prepare_reproduction",
     "prepare_iv_data",
@@ -576,6 +577,53 @@ class DefaultPipelineServices:
             run_date=run_date,
         )
 
+    def data_driven_crawl(self, config: dict, run_date: str | None = None) -> dict:
+        pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
+        interval_seconds = max(60, orchestrator.safe_int(pipeline_config.get("data-driven-crawl-interval-seconds"), 28800))
+        state = self._state
+        if state is not None and not state.should_run("data_driven_crawl", interval_seconds):
+            return {"status": "ok", "action": "interval_not_elapsed", "interval_seconds": interval_seconds}
+        if self.mode == "debug":
+            report = self._data_driven_crawl_sync(config, run_date=run_date)
+        else:
+            command = [
+                sys.executable,
+                str(orchestrator.repo_root() / "Scripts" / "soloquant_crawl_scheduler.py"),
+                "--config",
+                str(orchestrator.repo_root() / "Launcher" / "config" / "config-soloquant.json"),
+                "--task",
+                "data_driven_strategy",
+                "--force",
+                "--once",
+                "--max-queries-per-task",
+                str(max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-queries-per-task"), 4))),
+                "--max-results-per-query",
+                str(max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-results-per-query"), 2))),
+            ]
+            if run_date:
+                command.extend(["--run-date", str(run_date)])
+            try:
+                info = _launch_background_command(command, "data_driven_crawl", config, run_date=run_date, popen=self.live_popen)
+                report = {"status": "ok", "mode": "background", "action": "launched", "pid": info["pid"]}
+            except Exception as exc:
+                report = {"status": "error", "error": str(exc)}
+        if state is not None:
+            state.mark_finished("data_driven_crawl", report=report)
+        return report
+
+    def _data_driven_crawl_sync(self, config: dict, run_date: str | None = None) -> dict:
+        client = orchestrator.create_http_client_from_config(config)
+        pipeline_config = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
+        return orchestrator.run_data_driven_crawl_pipeline(
+            config=config,
+            search_client=client.search,
+            crawl_client=client.crawl,
+            llm_screen_client=client.screen_with_llm,
+            run_date=run_date,
+            max_queries=max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-queries-per-task"), 4)),
+            max_results_per_query=max(1, orchestrator.safe_int(pipeline_config.get("crawl-max-results-per-query"), 2)),
+        )
+
     def crawl_research(self, config: dict, run_date: str | None = None) -> dict:
         if self.mode == "debug":
             return self._crawl_research_sync(config, run_date=run_date)
@@ -953,6 +1001,12 @@ def run_pipeline_tick(
                 if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
                     logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
                     continue
+            if stage_name == "data_driven_crawl" and state is not None:
+                interval = max(1, orchestrator.safe_int(pipeline_config.get("data-driven-crawl-interval-seconds"), 28800))
+                last_run = state.stage_last_run_at(stage_name)
+                if last_run and not is_pipeline_due(now, last_run, interval_seconds=interval):
+                    logger.info("stage_skip", stage=stage_name, reason="interval_not_elapsed")
+                    continue
             if stage_name == "crawl_research" and state is not None:
                 interval = max(1, orchestrator.safe_int(pipeline_config.get("crawl-interval-seconds"), 28800))
                 last_run = state.stage_last_run_at(stage_name)
@@ -975,7 +1029,7 @@ def run_pipeline_tick(
         logger.info("stage_start", stage=stage_name)
         stage_started_at = datetime.now(timezone.utc)
         try:
-            if stage_name in {"ingest_local_strategies", "crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "reproduce_one", "materialize_variants", "optimize_backtests", "export_influx"}:
+            if stage_name in {"ingest_local_strategies", "data_driven_crawl", "crawl_research", "prepare_reproduction", "prepare_iv_data", "build_event_graph", "build_event_signals", "reproduce_one", "materialize_variants", "optimize_backtests", "export_influx"}:
                 stage_report = getattr(services, stage_name)(config, run_date=run_date)
             elif stage_name == "prepare_live_market_data":
                 stage_report = services.prepare_live_market_data(config, now=now)
