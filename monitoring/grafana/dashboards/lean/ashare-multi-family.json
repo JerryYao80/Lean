@@ -126,7 +126,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "percentunit",
+          "unit": "percent",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -300,7 +300,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "percentunit",
+          "unit": "percent",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -838,7 +838,7 @@
           "custom": {
             "lineWidth": 2
           },
-          "unit": "percentunit"
+          "unit": "percent"
         },
         "overrides": []
       },
@@ -1177,7 +1177,7 @@
             "lineWidth": 1.5,
             "fillOpacity": 15
           },
-          "unit": "percentunit",
+          "unit": "percent",
           "color": {
             "fixedColor": "red",
             "mode": "fixed"
