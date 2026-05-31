@@ -104,11 +104,15 @@ namespace QuantConnect.Algorithm.CSharp
                 return null;
             }
 
+            // Shift EndTime by 1 trading day to avoid look-ahead bias:
+            // Barra factor data for trade_date T should be delivered on T+1.
+            var nextTradingDay = tradeDate.Date.AddDays(1);
+
             return new AShareBarraCNE5FactorData
             {
                 Symbol = config.Symbol,
                 Time = tradeDate.Date,
-                EndTime = tradeDate.Date,
+                EndTime = nextTradingDay,
                 Value = ParseNullableDecimal(csv[2]) ?? 0m,
                 Beta = ParseNullableDecimal(csv[1]),
                 Momentum = ParseNullableDecimal(csv[2]),
