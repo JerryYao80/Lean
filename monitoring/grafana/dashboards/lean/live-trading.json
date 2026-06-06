@@ -590,6 +590,1354 @@
       ],
       "title": "Unrealized P&L",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 50,
+      "panels": [],
+      "title": "Barra CNE5 V2 - Live Paper Trading",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 25
+      },
+      "id": 51,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Live Equity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "id": 52,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"equity\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Current Equity",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 33
+      },
+      "id": 53,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Live Factor Exposure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-background"
+            },
+            "inspect": false
+          },
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "super-light-blue",
+                "value": null
+              },
+              {
+                "color": "transparent",
+                "value": 0
+              },
+              {
+                "color": "light-red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
+      },
+      "id": 54,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "factor"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"beta\"), last(\"momentum\"), last(\"size\"), last(\"earnyld\"), last(\"resvol\"), last(\"growth\"), last(\"btop\"), last(\"leverage\"), last(\"liquidity\"), last(\"nlsize\"), last(\"moneyflow\"), last(\"quality\"), last(\"northbound\"), last(\"margin\"), last(\"chipcost\") FROM \"barra_cne5v2_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Factor Snapshot",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 41
+      },
+      "id": 55,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"holdings\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Holdings Count",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "ratio"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 41
+      },
+      "id": 56,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"kelly_scale\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Kelly Scale",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 41
+      },
+      "id": 57,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"gross_return\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Today Return",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 41
+      },
+      "id": 58,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"effective_exposure\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Drawdown",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 59,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "time"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "query": "SELECT \"action\", \"quantity\", \"price\", \"trade_value\", \"fee\", \"score\", \"reason\" FROM \"barra_cne5v2_trades\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 50",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2 Live Trade Activity",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "id": 80,
+      "panels": [],
+      "title": "Barra CNE5 V2.1 - Live Paper Trading",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 54
+      },
+      "id": 81,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Live Equity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 54
+      },
+      "id": 82,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"equity\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Current Equity",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 62
+      },
+      "id": 83,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_1_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Live Factor Exposure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-background"
+            },
+            "inspect": false
+          },
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "super-light-blue",
+                "value": null
+              },
+              {
+                "color": "transparent",
+                "value": 0
+              },
+              {
+                "color": "light-red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 62
+      },
+      "id": 84,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "factor"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"beta\"), last(\"momentum\"), last(\"size\"), last(\"earnyld\"), last(\"resvol\"), last(\"growth\"), last(\"btop\"), last(\"leverage\"), last(\"liquidity\"), last(\"nlsize\"), last(\"moneyflow\"), last(\"quality\"), last(\"northbound\"), last(\"margin\"), last(\"chipcost\") FROM \"barra_cne5v2_1_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Factor Snapshot",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 70
+      },
+      "id": 85,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"holdings\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Holdings Count",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "ratio"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 70
+      },
+      "id": 86,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"kelly_scale\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Kelly Scale",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 70
+      },
+      "id": 87,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"gross_return\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Today Return",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 70
+      },
+      "id": 88,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"effective_exposure\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Drawdown",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "id": 89,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "time"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "query": "SELECT \"action\", \"quantity\", \"price\", \"trade_value\", \"fee\", \"score\", \"reason\" FROM \"barra_cne5v2_1_trades\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 50",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "V2.1 Live Trade Activity",
+      "type": "table"
     }
   ],
   "refresh": "5s",
@@ -598,7 +1946,8 @@
   "tags": [
     "lean",
     "live",
-    "paper"
+    "paper",
+    "barracne5v2"
   ],
   "templating": {
     "list": [
@@ -635,6 +1984,6 @@
   "timezone": "",
   "title": "Live Paper Trading",
   "uid": "lean-live-trading",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

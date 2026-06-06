@@ -31,7 +31,7 @@
         "y": 0
       },
       "id": 100,
-      "title": "多因子策略总览 (12 Strategy Families)",
+      "title": "收益总览",
       "type": "row"
     },
     {
@@ -44,7 +44,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -85,7 +85,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -473,7 +473,7 @@
         "y": 16
       },
       "id": 102,
-      "title": "12因子家族暴露度 (Family Exposure)",
+      "title": "因子家族暴露度",
       "type": "row"
     },
     {
@@ -703,7 +703,7 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"momentum_reversal\", \"value_quality\", \"money_flow\", \"earnings_surprise\", \"chip_cost\", \"etf_premium\", \"sector_rotation\", \"margin_signal\", \"northbound_flow\", \"multi_factor\", \"analyst_signal\", \"macro_rate\" FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting'",
+          "query": "SELECT \"momentum_reversal\", \"value_quality\", \"money_flow\", \"earnings_surprise\", \"chip_cost\", \"etf_premium\", \"sector_rotation\", \"margin_signal\", \"northbound_flow\", \"multi_factor\", \"analyst_signal\", \"macro_rate\", \"barra_beta\", \"barra_nlsize\", \"barra_resvol\", \"barra_liquidity\", \"barra_momentum\", \"barra_value\", \"barra_quality\", \"low_volatility\", \"size_tilt\", \"liquidity_premium\", \"chip_concentration\", \"rate_sensitivity\", \"basis_sentiment\", \"options_pcr\", \"margin_short_ratio\" FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting'",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true
@@ -760,7 +760,7 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"momentum_reversal\"), last(\"value_quality\"), last(\"money_flow\"), last(\"earnings_surprise\"), last(\"chip_cost\"), last(\"etf_premium\"), last(\"sector_rotation\"), last(\"margin_signal\"), last(\"northbound_flow\"), last(\"multi_factor\"), last(\"analyst_signal\"), last(\"macro_rate\") FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting'",
+          "query": "SELECT last(\"momentum_reversal\"), last(\"value_quality\"), last(\"money_flow\"), last(\"earnings_surprise\"), last(\"chip_cost\"), last(\"etf_premium\"), last(\"sector_rotation\"), last(\"margin_signal\"), last(\"northbound_flow\"), last(\"multi_factor\"), last(\"analyst_signal\"), last(\"macro_rate\"), last(\"barra_beta\"), last(\"barra_nlsize\"), last(\"barra_resvol\"), last(\"barra_liquidity\"), last(\"barra_momentum\"), last(\"barra_value\"), last(\"barra_quality\"), last(\"low_volatility\"), last(\"size_tilt\"), last(\"liquidity_premium\"), last(\"chip_concentration\"), last(\"rate_sensitivity\"), last(\"basis_sentiment\"), last(\"options_pcr\"), last(\"margin_short_ratio\") FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting'",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true
@@ -1076,7 +1076,7 @@
           }
         ]
       },
-      "title": "最近交易记录 (lean_mf_order)",
+      "title": "交易记录",
       "type": "table",
       "targets": [
         {
@@ -1218,6 +1218,1255 @@
           "rawQuery": true
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "id": 106,
+      "title": "蒙特卡洛模拟",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 57
+      },
+      "id": 60,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "MC模拟次数",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_backtest_stat\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'statistics' AND \"metric\" = 'Monte Carlo Trials'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Monte Carlo Trials'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"metric\" = 'trialCount'",
+          "refId": "C",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 4,
+        "y": 57
+      },
+      "id": 61,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "MC基线亏损概率",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = 'baseline' AND \"metric\" = 'lossProbability'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"metric\" = 'baseline_loss_probability'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 70
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 9,
+        "y": 57
+      },
+      "id": 62,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "MC组合亏损概率",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = 'combinedStress' AND \"metric\" = 'lossProbability'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Monte Carlo Combined Loss Probability'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "max": 10,
+          "min": -20,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": -5
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 14,
+        "y": 57
+      },
+      "id": 63,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "MC组合中位数收益率",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = 'combinedStress' AND \"metric\" = 'medianTotalReturn'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Monte Carlo Combined Median Return'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "max": 0,
+          "min": -30,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": -10
+              },
+              {
+                "color": "red",
+                "value": -20
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 57
+      },
+      "id": 64,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "MC组合P95最大回撤",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = 'combinedStress' AND \"metric\" = 'p95MaxDrawdown'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Monte Carlo Combined P95 Drawdown'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scenario"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "metric"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 61
+      },
+      "id": 65,
+      "options": {
+        "showHeader": true
+      },
+      "title": "MC情景分析",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"metric\" != 'horizonDays' AND \"metric\" != 'trialCount' GROUP BY \"scenario\", \"metric\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = '' AND \"metric\" != 'horizonDays' GROUP BY \"metric\"",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "metric"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 61
+      },
+      "id": 66,
+      "options": {
+        "showHeader": true
+      },
+      "title": "MC分位数分布",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_monte_carlo\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"scenario\" = '' AND (\"metric\" = 'terminal_value_p5' OR \"metric\" = 'terminal_value_p25' OR \"metric\" = 'terminal_value_p50' OR \"metric\" = 'terminal_value_p75' OR \"metric\" = 'terminal_value_p95' OR \"metric\" = 'max_drawdown_p5' OR \"metric\" = 'max_drawdown_p50' OR \"metric\" = 'max_drawdown_p95' OR \"metric\" = 'sharpe_p5' OR \"metric\" = 'sharpe_p50' OR \"metric\" = 'sharpe_p95' OR \"metric\" = 'baseline_loss_probability') GROUP BY \"metric\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "id": 107,
+      "title": "扩展风险指标",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 70
+      },
+      "id": 70,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "Sortino Ratio",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Sortino Ratio'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 70
+      },
+      "id": 71,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "PSR",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Probabilistic Sharpe Ratio'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.05
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 70
+      },
+      "id": 72,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "Alpha",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Alpha'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              },
+              {
+                "color": "yellow",
+                "value": 1.2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 70
+      },
+      "id": 73,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "Beta",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Beta'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 70
+      },
+      "id": 74,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "CAGR",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'CAGR'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Compounding Annual Return'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10000
+              },
+              {
+                "color": "red",
+                "value": 50000
+              }
+            ]
+          },
+          "unit": "currencyCNY",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 70
+      },
+      "id": 75,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "总手续费",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Total Fees'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"total_fees\") FROM \"lean_portfolio_statistics\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting'",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 74
+      },
+      "id": 76,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "Information Ratio",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Information Ratio'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 74
+      },
+      "id": 77,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "Tracking Error",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Tracking Error'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 74
+      },
+      "id": 78,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "年化标准差",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Annual Standard Deviation'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 74
+      },
+      "id": 79,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "总订单数",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Total Orders'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 74
+      },
+      "id": 80,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "期望值",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Expectancy'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 1.5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 74
+      },
+      "id": 81,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "title": "盈亏比",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'backtesting' AND \"category\" = 'summary' AND \"metric\" = 'Profit-Loss Ratio'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
     }
   ],
   "refresh": "5m",
@@ -1240,14 +2489,14 @@
           "type": "influxdb",
           "uid": "lean-influxdb"
         },
-        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily/",
+        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily|AShareBarraCNE5/",
         "hide": 0,
         "includeAll": false,
-        "label": "Version",
+        "label": "Algorithm",
         "multi": false,
         "name": "algorithm_id",
         "options": [],
-        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily/",
+        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily|AShareBarraCNE5/",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -1260,7 +2509,7 @@
   },
   "timepicker": {},
   "timezone": "Asia/Shanghai",
-  "title": "多因子策略仪表板 (12 Families)",
+  "title": "多因子策略仪表板 (27 Families + Barra CNE5)",
   "uid": "ashare-multi-family",
   "version": 1,
   "weekStart": "monday"

@@ -242,6 +242,27 @@ def safe_slug(value: str, fallback: str = "item") -> str:
     return text[:80] or fallback
 
 
+def normalize_origin(source: str | None, default: str = "web") -> str:
+    """Normalize source field to origin: web, local, or cli."""
+    if not source:
+        return default
+    src = str(source).strip().lower()
+    if src == "local":
+        return "local"
+    if src == "cli":
+        return "cli"
+    if src.startswith("data_driven_"):
+        return "web"
+    if src in {
+        "arxiv q-fin", "ssrn", "quantpedia", "worldquant brain",
+        "quantconnect community", "numerai", "alpha architect", "aqr",
+        "generic", "华泰 金工研报", "中信 金工研报", "聚宽 社区",
+        "米筐 研究报告", "优矿 策略",
+    }:
+        return "web"
+    return default
+
+
 def normalize_paper_url(url: str) -> str:
     """Normalize URLs to canonical form for dedup: arxiv /abs/ and /pdf/ map to the same paper."""
     url = str(url or "").strip()
@@ -739,6 +760,156 @@ STRATEGY_FAMILY_REGISTRY: dict[str, dict] = {
             "GDP PMI monetary policy A-share quantitative timing backtest",
         ],
         "description": "基于CPI、GDP、M2、PMI、Shibor等宏观数据的大类资产择时策略",
+    },
+    "barra_momentum": {
+        "display_name": "Barra动量",
+        "datasets": ["barra_cne5"],
+        "fields": {
+            "barra_cne5": ["momentum", "residual_volatility"],
+        },
+        "search_keywords_cn": [
+            "A股 Barra CNE5 动量因子 RSTR 残差动量 量化策略 回测",
+            "A股 Barra 风险因子 动量 反转 中性化 策略 回测",
+            "华泰 金工 Barra动量因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "Barra CNE5 momentum factor RSTR A-share strategy backtest",
+            "Barra risk model momentum residual volatility A-share quant",
+            "Barra momentum factor neutralization A-share backtest",
+        ],
+        "description": "基于Barra CNE5动量因子(RSTR)和残差波动率的选股策略",
+    },
+    "barra_value": {
+        "display_name": "Barra价值",
+        "datasets": ["barra_cne5"],
+        "fields": {
+            "barra_cne5": ["book_to_price", "earnings_yield"],
+        },
+        "search_keywords_cn": [
+            "A股 Barra CNE5 价值因子 BTOP 账面市值比 量化策略 回测",
+            "A股 Barra 价值因子 EP 盈利收益率 策略 回测",
+            "华泰 金工 Barra价值因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "Barra CNE5 value factor BTOP book-to-price A-share backtest",
+            "Barra value factor earnings yield A-share strategy",
+            "Barra book-to-price EP ratio A-share quant backtest",
+        ],
+        "description": "基于Barra CNE5价值因子(BTOP)和盈利收益率的选股策略",
+    },
+    "barra_quality": {
+        "display_name": "Barra质量",
+        "datasets": ["barra_cne5"],
+        "fields": {
+            "barra_cne5": ["earnings_yield", "growth", "leverage"],
+        },
+        "search_keywords_cn": [
+            "A股 Barra CNE5 质量因子 盈利 成长 杠杆 量化策略 回测",
+            "A股 Barra 质量因子 ROE增长 杠杆率 策略 回测",
+            "华泰 金工 Barra质量因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "Barra CNE5 quality factor earnings growth leverage A-share backtest",
+            "Barra quality factor ROE growth leverage A-share strategy",
+            "Barra profitability growth leverage A-share quant backtest",
+        ],
+        "description": "基于Barra CNE5质量因子(盈利收益率+成长-杠杆)的选股策略",
+    },
+    "low_volatility": {
+        "display_name": "低波动率",
+        "datasets": ["daily_basic", "daily"],
+        "fields": {
+            "daily_basic": ["turnover_rate", "total_mv", "circ_mv"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 低波动率异象 最小方差 低波动因子 量化策略 回测",
+            "A股 低波动因子 波动率 逆向选股 策略 回测",
+            "华泰 金工 低波动因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "low volatility anomaly minimum variance A-share strategy backtest",
+            "low volatility factor betting against beta A-share quant",
+            "low volatility premium defensive stock A-share backtest",
+        ],
+        "description": "基于低波动率异象(负向z-score on volatility_20)的选股策略",
+    },
+    "size_tilt": {
+        "display_name": "市值倾斜",
+        "datasets": ["daily_basic", "daily"],
+        "fields": {
+            "daily_basic": ["total_mv", "circ_mv", "turnover_rate"],
+            "daily": ["close", "pct_chg", "vol"],
+        },
+        "search_keywords_cn": [
+            "A股 小盘股效应 市值因子 流通市值 量化策略 回测",
+            "A股 规模因子 小市值 流通比例 策略 回测",
+            "华泰 金工 规模因子 小盘效应 研报 策略",
+        ],
+        "search_keywords_en": [
+            "small cap premium size factor A-share strategy backtest",
+            "size tilt factor market cap circulation ratio A-share quant",
+            "small firm effect size factor A-share backtest",
+        ],
+        "description": "基于小市值倾向和流通约束因子(circ_mv/total_mv)的选股策略",
+    },
+    "liquidity_premium": {
+        "display_name": "流动性溢价",
+        "datasets": ["daily_basic", "daily"],
+        "fields": {
+            "daily_basic": ["turnover_rate", "total_mv", "circ_mv"],
+            "daily": ["close", "pct_chg", "vol", "amount"],
+        },
+        "search_keywords_cn": [
+            "A股 流动性溢价 Amihud非流动性 换手率 量化策略 回测",
+            "A股 低流动性因子 换手率 成交量 选股策略 回测",
+            "华泰 金工 流动性因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "liquidity premium Amihud illiquidity A-share strategy backtest",
+            "low liquidity factor turnover volume A-share quant strategy",
+            "illiquidity premium trading volume A-share backtest",
+        ],
+        "description": "基于Amihud非流动性和低换手率的流动性溢价选股策略",
+    },
+    "chip_concentration": {
+        "display_name": "筹码集中度",
+        "datasets": ["cyq_perf", "cyq_chips", "daily"],
+        "fields": {
+            "cyq_perf": ["cost_5pct", "cost_50pct", "cost_95pct", "winner_rate", "weight_avg"],
+            "cyq_chips": ["price", "percent"],
+            "daily": ["close", "pct_chg", "vol"],
+        },
+        "search_keywords_cn": [
+            "A股 筹码集中度 筹码宽度 获利盘 集中度因子 量化策略 回测",
+            "A股 筹码分布 筹码峰 成本价 获利比例 选股策略 回测",
+            "华泰 金工 筹码因子 研报 策略 回测",
+        ],
+        "search_keywords_en": [
+            "chip concentration cost spread winner rate A-share strategy backtest",
+            "chip distribution tightness factor A-share quant strategy",
+            "cost basis concentration support resistance A-share backtest",
+        ],
+        "description": "基于筹码宽度(cost_95pct-cost_5pct)、获利比例和成本接近度的选股策略",
+    },
+    "rate_sensitivity": {
+        "display_name": "利率敏感度",
+        "datasets": ["daily_basic", "fina_indicator"],
+        "fields": {
+            "daily_basic": ["dv_ttm", "pe_ttm", "pb", "total_mv"],
+            "fina_indicator": ["roe", "debt_to_assets", "current_ratio"],
+        },
+        "search_keywords_cn": [
+            "A股 利率敏感度 高股息率 利率下行 量化策略 回测",
+            "A股 股息率因子 红利策略 利率因子 选股策略 回测",
+            "华泰 金工 利率因子 红利策略 研报 策略",
+        ],
+        "search_keywords_en": [
+            "interest rate sensitivity dividend yield A-share strategy backtest",
+            "high dividend yield rate factor A-share quant strategy",
+            "rate sensitive stock dividend factor A-share backtest",
+        ],
+        "description": "基于高股息率(dv_ttm)作为利率敏感度代理的选股策略",
     },
 }
 
@@ -2806,6 +2977,54 @@ def ingest_local_strategies(
     }
 
 
+def submit_cli_strategy(
+    strategy_input: str,
+    artifact_root: str | Path,
+    title: str | None = None,
+) -> dict:
+    """Submit a strategy idea from the CLI for pipeline processing.
+
+    Accepts a JSON string or file path. Writes to reproduction/strategy/ with source="cli".
+    """
+    artifact_root = Path(artifact_root)
+    repro_root = artifact_root / "reproduction" / "strategy"
+    repro_root.mkdir(parents=True, exist_ok=True)
+
+    # Resolve input: file path or JSON string
+    input_path = Path(strategy_input)
+    if input_path.exists() and input_path.is_file():
+        data = load_json_payload(input_path)
+        if not isinstance(data, dict):
+            return {"status": "error", "message": f"File does not contain a JSON object: {strategy_input}"}
+        resolved_title = title or data.get("title") or input_path.stem
+    else:
+        try:
+            data = json.loads(strategy_input)
+        except json.JSONDecodeError as exc:
+            return {"status": "error", "message": f"Invalid JSON: {exc}"}
+        if not isinstance(data, dict):
+            return {"status": "error", "message": "Input must be a JSON object"}
+        resolved_title = title or data.get("title") or "cli-strategy"
+
+    # Ensure required fields
+    data.setdefault("source", "cli")
+    data.setdefault("category", "strategy")
+    data.setdefault("title", resolved_title)
+    if "url" not in data:
+        data["url"] = f"cli://{safe_slug(resolved_title)}"
+
+    slug = safe_slug(resolved_title, fallback="cli")
+    url_hash = stable_hash(data["url"])
+    output_path = repro_root / f"cli-{slug}-{url_hash}.json"
+
+    if output_path.exists():
+        return {"status": "skipped", "message": f"Strategy already exists: {output_path.name}", "path": str(output_path)}
+
+    write_json_payload(output_path, data)
+    print(f"CLI strategy submitted: {output_path.name}")
+    return {"status": "ok", "path": str(output_path), "title": resolved_title, "origin": "cli"}
+
+
 def _extract_local_pdf_text(
     pdf_path: Path,
     artifact_root: str | Path,
@@ -3038,14 +3257,50 @@ class SoloQuantHttpClient:
         self.timeout_seconds = timeout_seconds
 
     def search(self, query: dict) -> list[dict]:
-        params = {
-            "q": query.get("query", ""),
-            "format": "json",
-            "categories": query.get("category", "general"),
-        }
-        response = self.get_json(f"{self.searxng_url}/search", params, {}, self.timeout_seconds)
-        results = response.get("results") if isinstance(response, dict) else []
-        return [item for item in results if isinstance(item, dict)]
+        internal_category = str(query.get("category", "") or "").lower()
+        query_text = query.get("query", "")
+
+        # For strategy queries: search academic + Chinese + web to maximize coverage
+        # For finance_intelligence: search news + Chinese + web
+        if internal_category == "strategy":
+            category_queries = [
+                {"categories": "scientific publications", "engines": ""},
+                {"categories": "general", "engines": "baidu,sogou,sogou_wechat,360search"},
+                {"categories": "web", "engines": "bing,brave,presearch"},
+            ]
+        elif internal_category == "finance_intelligence":
+            category_queries = [
+                {"categories": "news", "engines": "bing news,reuters,qwant news"},
+                {"categories": "general", "engines": "baidu,sogou,360search"},
+                {"categories": "web", "engines": "bing,brave,presearch"},
+            ]
+        else:
+            category_queries = [{"categories": "general", "engines": ""}]
+
+        seen_urls: set[str] = set()
+        all_results: list[dict] = []
+        for cat_query in category_queries:
+            params = {
+                "q": query_text,
+                "format": "json",
+                "categories": cat_query["categories"],
+            }
+            if cat_query.get("engines"):
+                params["engines"] = cat_query["engines"]
+            try:
+                response = self.get_json(f"{self.searxng_url}/search", params, {}, self.timeout_seconds)
+                results = response.get("results") if isinstance(response, dict) else []
+            except Exception:
+                continue
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url", "") or "").strip()
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_results.append(item)
+
+        return all_results
 
     def crawl(self, result: dict) -> dict:
         url = str(result.get("url") or "").strip()
@@ -4466,6 +4721,8 @@ def generate_strategy_implementation_package(
     source_path = Path(summary_path)
     summary_payload = load_json_payload(source_path)
 
+    origin = normalize_origin(summary_payload.get("source"), default="web")
+
     strategy_id = safe_slug(str(summary_payload.get("title") or ""), fallback="strategy")
     if algorithm_root is not None:
         lean_algorithm_root = Path(algorithm_root)
@@ -4582,6 +4839,7 @@ def generate_strategy_implementation_package(
         "description": str(response.get("description") or ""),
         "code_file": str(code_path),
         "source_summary": str(source_path.resolve()),
+        "origin": origin,
         "parameters": response.get("parameters") if isinstance(response.get("parameters"), dict) else {},
         "risk_controls": response.get("risk_controls") if isinstance(response.get("risk_controls"), list) else [],
         "data_requirements": response.get("data_requirements") if isinstance(response.get("data_requirements"), list) else [],
@@ -4929,6 +5187,7 @@ def update_strategy_registry(
     strategy_id: str,
     optimization_result: dict,
     live_config_path: str | Path,
+    origin: str = "web",
 ) -> dict:
     path = Path(registry_path)
     with _registry_lock:
@@ -4942,6 +5201,7 @@ def update_strategy_registry(
         strategies.append(
             {
                 "strategy_id": strategy_id,
+                "origin": origin,
                 "best_version": optimization_result.get("best_version"),
                 "best_score": optimization_result.get("best_score"),
                 "live-paper-config": str(live_config_path),
@@ -5008,6 +5268,7 @@ def strategy_result_to_line_protocol(
     summary: dict,
     score: float | int | None = None,
     is_best: bool = False,
+    origin: str = "web",
     measurement: str = "soloquant_strategy_result",
     timestamp: str | None = None,
 ) -> str:
@@ -5028,6 +5289,7 @@ def strategy_result_to_line_protocol(
         "strategy_id": str(strategy_id),
         "version": str(version),
         "stage": str(stage),
+        "origin": str(origin),
     }
     tag_set = ",".join(f"{escape_influx_key(key)}={escape_influx_key(value)}" for key, value in tags.items())
     field_set = ",".join(f"{escape_influx_key(key)}={format_influx_field_value(value)}" for key, value in fields.items())
@@ -5048,6 +5310,7 @@ def collect_strategy_result_influx_lines(
         strategy_id = str(strategy.get("strategy_id") or strategy.get("strategy-id") or "").strip()
         if not strategy_id:
             continue
+        origin = str(strategy.get("origin") or "web").strip()
         best_version = str(strategy.get("best_version") or "")
         evaluated_versions = strategy.get("evaluated_versions") if isinstance(strategy.get("evaluated_versions"), list) else []
         for evaluated in evaluated_versions:
@@ -5067,6 +5330,7 @@ def collect_strategy_result_influx_lines(
                     is_best=version == best_version,
                     measurement=measurement,
                     timestamp=strategy.get("updated_at_utc"),
+                    origin=origin,
                 )
             )
         if include_live_paper:
@@ -5083,6 +5347,7 @@ def collect_strategy_result_influx_lines(
                             score=safe_float(summary.get("score"), safe_float(strategy.get("best_score"), None)),
                             is_best=True,
                             measurement=measurement,
+                            origin=origin,
                         )
                     )
     return lines
@@ -5138,6 +5403,67 @@ def collect_research_artifact_influx_lines(
             if isinstance(item, dict):
                 lines.append(research_artifact_to_line_protocol(item, category, run_date=str(artifact_run_date), measurement=measurement))
     return lines
+
+
+def crawled_idea_to_line_protocol(item: dict, run_date: str | None = None, measurement: str = "soloquant_crawled_idea") -> str:
+    title = str(item.get("title") or "").strip()
+    url = str(item.get("url") or "").strip()
+    source = str(item.get("source") or "unknown").strip() or "unknown"
+    query = str(item.get("query") or "").strip()
+    content_hash = str(item.get("content_hash") or stable_hash({"title": title, "url": url})).strip()
+    timestamp_ns = run_date_to_timestamp_ns(run_date)
+
+    tags = {
+        "source": source,
+        "idea_id": content_hash,
+    }
+    fields = {
+        "title": title,
+        "url": url,
+        "query": query,
+    }
+    tag_set = ",".join(f"{escape_influx_key(key)}={escape_influx_key(tags[key])}" for key in ("source", "idea_id"))
+    field_set = ",".join(f"{escape_influx_key(key)}={format_influx_field_value(value)}" for key, value in fields.items())
+    return f"{escape_influx_key(measurement)},{tag_set} {field_set} {timestamp_ns}"
+
+
+def collect_crawled_ideas_influx_lines(
+    artifact_root: str | Path,
+    run_date: str | None = None,
+    measurement: str = "soloquant_crawled_idea",
+) -> list[str]:
+    lines: list[str] = []
+    for path in iter_crawled_strategy_files(artifact_root, run_date=run_date):
+        try:
+            item = load_json_payload(path)
+            if isinstance(item, dict):
+                lines.append(crawled_idea_to_line_protocol(item, run_date=run_date, measurement=measurement))
+        except Exception:
+            continue
+    return lines
+
+
+def export_crawled_ideas_to_influx(config: dict, run_date: str | None = None, dry_run: bool = False) -> dict:
+    influx = config.get("influxdb") or {}
+    token_env_var = str(influx.get("token-env-var") or "INFLUXDB_TOKEN")
+    lines = collect_crawled_ideas_influx_lines(config["artifact-root"], run_date=run_date)
+    written = 0
+    if not dry_run:
+        token = os.getenv(token_env_var, "").strip()
+        written = write_lines_to_influx(
+            lines,
+            influx_url=str(influx.get("url") or "http://127.0.0.1:8086"),
+            org=str(influx.get("org") or "lean"),
+            bucket=str(influx.get("bucket") or "quant"),
+            token=token,
+        )
+    return {
+        "status": "ok",
+        "dry_run": dry_run,
+        "lines": len(lines),
+        "written": written,
+        "measurement": "soloquant_crawled_idea",
+    }
 
 
 def iter_finance_event_graph_files(artifact_root: str | Path, run_date: str | None = None):
@@ -5719,7 +6045,9 @@ def collect_strategy_progress_lines(config: dict) -> list[str]:
         if best_score_val is not None and live_score_val is not None and best_score_val != 0:
             decay_ratio = (live_score_val / best_score_val) - 1.0
 
-        tags = {"strategy_id": escape_influx_key(strategy_id)}
+        origin = str(gen.get("origin") or reg.get("origin") or "web").strip()
+
+        tags = {"strategy_id": escape_influx_key(strategy_id), "origin": escape_influx_key(origin)}
         fields = {
             "pipeline_stage": format_influx_field_value(pipeline_stage),
             "pipeline_stage_code": format_influx_field_value(pipeline_stage_code),
@@ -5880,6 +6208,73 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
         fields["retired_last_updated"] = f'"{retired_last_updated}"'
 
     field_str = ",".join(f"{k}={v}" for k, v in fields.items())
+    # Global aggregate line (backward compatible)
+    global_line = f"{measurement} {field_str} {timestamp_ns}"
+
+    # Per-origin funnel lines
+    origin_counts: dict[str, dict[str, int]] = {}
+    for origin_val in ("web", "local", "cli"):
+        origin_counts[origin_val] = {
+            "crawled_count": 0, "summarized_count": 0, "reproduced_count": 0,
+            "backtested_count": 0, "live_paper_count": 0,
+            "serving_count": 0, "retired_count": 0,
+        }
+    # Classify crawled items by origin
+    for crawl_category in ("strategy", "finance_intelligence"):
+        index_path = artifact_root / "crawled" / crawl_category / "index.json"
+        if index_path.exists():
+            try:
+                index = load_json_payload(index_path)
+                for item in (index.get("items") or []):
+                    src = str(item.get("source") or "")
+                    o = normalize_origin(src, default="web")
+                    origin_counts.setdefault(o, origin_counts["web"].copy())
+                    origin_counts[o]["crawled_count"] += 1
+            except Exception:
+                pass
+    # Classify summarized items by origin
+    if repro_index.exists():
+        try:
+            index = load_json_payload(repro_index)
+            for item in (index.get("items") or []):
+                src = str(item.get("source") or "")
+                o = normalize_origin(src, default="web")
+                origin_counts.setdefault(o, origin_counts["web"].copy())
+                origin_counts[o]["summarized_count"] += 1
+        except Exception:
+            pass
+    # Classify reproduced by origin from generated manifest
+    for mf in manifest_files:
+        try:
+            manifest = load_json_payload(Path(mf))
+            o = str(manifest.get("origin") or "web").strip()
+            if o not in origin_counts:
+                o = normalize_origin(o, default="web")
+            origin_counts.setdefault(o, origin_counts["web"].copy())
+            origin_counts[o]["reproduced_count"] += 1
+        except Exception:
+            pass
+    # Classify registry strategies by origin
+    for s in registry_strategies:
+        o = str(s.get("origin") or "web").strip()
+        if o not in origin_counts:
+            o = normalize_origin(o, default="web")
+        origin_counts.setdefault(o, origin_counts["web"].copy())
+        origin_counts[o]["backtested_count"] += 1
+        if safe_float(s.get("live_score"), None) is not None:
+            origin_counts[o]["live_paper_count"] += 1
+        if str(s.get("status")) == "serving":
+            origin_counts[o]["serving_count"] += 1
+        if str(s.get("status")) == "retired":
+            origin_counts[o]["retired_count"] += 1
+    # Generate per-origin lines
+    origin_lines: list[str] = []
+    for o, counts in sorted(origin_counts.items()):
+        if not any(v > 0 for v in counts.values()):
+            continue
+        o_field_str = ",".join(f"{k}={v}" for k, v in counts.items())
+        origin_lines.append(f'{measurement},origin={escape_influx_key(o)} {o_field_str} {timestamp_ns}')
+
     # Per-stage rows for Grafana table display (7 rows x 3 columns: stage, count, last_updated)
     stage_measurement = "soloquant_pipeline_funnel_stages"
     stage_rows = [
@@ -5899,7 +6294,7 @@ def collect_pipeline_funnel_lines(config: dict) -> list[str]:
         escaped_stage = stage_name.replace(" ", r"\ ")
         stage_lines.append(f'{stage_measurement},stage={escaped_stage} {stage_fields} {timestamp_ns}')
 
-    return [f"{measurement} {field_str} {timestamp_ns}"] + stage_lines
+    return [global_line] + origin_lines + stage_lines
 
 
 def export_strategy_pipeline_progress(
@@ -5993,6 +6388,8 @@ def optimize_strategy_packages(
         best_version = optimization_result.get("best_version")
         best_variant = next((item for item in normalized_variants if str(item.get("version") or item.get("name")) == str(best_version)), None)
         live_config_path = (best_variant or {}).get("live-paper-config") or manifest.get("live-paper-config")
+        # Extract origin from package manifest for registry
+        package_origin = str(manifest.get("origin") or "web").strip()
         if not live_config_path and not best_version:
             results.append({
                 "strategy_id": strategy_id,
@@ -6005,7 +6402,7 @@ def optimize_strategy_packages(
         if not live_config_path:
             continue
 
-        update_strategy_registry(registry_file, strategy_id, optimization_result, live_config_path=live_config_path)
+        update_strategy_registry(registry_file, strategy_id, optimization_result, live_config_path=live_config_path, origin=package_origin)
         results.append(
             {
                 "strategy_id": strategy_id,
@@ -6088,8 +6485,11 @@ def main() -> int:
     parser.add_argument("--export-finance-event-graph-influx", action="store_true")
     parser.add_argument("--export-strategy-results-influx", action="store_true")
     parser.add_argument("--export-strategy-pipeline", action="store_true")
+    parser.add_argument("--export-crawled-ideas-influx", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-lines", action="store_true")
+    parser.add_argument("--submit-strategy", default=None, help="Submit a CLI strategy: JSON string or path to JSON file")
+    parser.add_argument("--strategy-title", default=None, help="Title for --submit-strategy (optional)")
     args = parser.parse_args()
 
     if args.validate_manifest:
@@ -6099,6 +6499,10 @@ def main() -> int:
         return 0
 
     config = load_config(args.config)
+    if args.submit_strategy:
+        report = submit_cli_strategy(args.submit_strategy, config["artifact-root"], title=args.strategy_title)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report.get("status") != "error" else 1
     if args.ingest_local_strategies:
         local_dir = Path(config["workflow-root"]) / "local-strategies"
         report = ingest_local_strategies(local_dir, config["artifact-root"], run_date=args.run_date)
@@ -6227,6 +6631,15 @@ def main() -> int:
             for line in progress_lines + funnel_lines:
                 print(line)
         report = export_strategy_pipeline_progress(config, dry_run=args.dry_run)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.export_crawled_ideas_influx:
+        lines = collect_crawled_ideas_influx_lines(config["artifact-root"], run_date=args.run_date)
+        if args.print_lines:
+            for line in lines:
+                print(line)
+        report = export_crawled_ideas_to_influx(config, run_date=args.run_date, dry_run=args.dry_run)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
 

@@ -1242,7 +1242,8 @@
   "tags": [
     "lean",
     "grafana",
-    "influxdb"
+    "influxdb",
+    "barracne5v2"
   ],
   "templating": {
     "list": [
@@ -1425,6 +1426,6 @@
   "timezone": "browser",
   "title": "LEAN Results Overview",
   "uid": "lean-results-overview",
-  "version": 14,
+  "version": 15,
   "weekStart": ""
 }

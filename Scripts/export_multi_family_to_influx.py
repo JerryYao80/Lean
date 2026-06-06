@@ -29,6 +29,8 @@ FAMILY_NAMES = [
     "northbound_flow", "multi_factor", "analyst_signal", "macro_rate",
     "barra_momentum", "barra_value", "barra_quality",
     "low_volatility", "size_tilt", "liquidity_premium", "chip_concentration", "rate_sensitivity",
+    "basis_sentiment", "options_pcr", "margin_short_ratio",
+    "barra_beta", "barra_nlsize", "barra_resvol", "barra_liquidity",
 ]
 
 
@@ -90,7 +92,9 @@ def export_daily_summary(csv_path: str, algorithm_id: str, mode: str, dry_run: b
             # lean_metric: summary
             for metric_key in ["turnover", "score_spread", "kelly_scale", "effective_exposure",
                                "regime_adjustment", "eligible_symbols", "selected_symbols",
-                               "stop_loss_exits", "trailing_stop_exits"]:
+                               "stop_loss_exits", "trailing_stop_exits",
+                               "basis_composite", "pcr_composite", "vix_composite",
+                               "dynamic_stop_loss", "dynamic_trailing_stop"]:
                 val = row.get(metric_key, "")
                 if val:
                     cat = "runtime" if metric_key in ("kelly_scale", "effective_exposure",
@@ -164,6 +168,8 @@ def read_lean_summary_stats(summary_json_path: str) -> dict | None:
         if not s:
             return None
         s = str(s).strip().rstrip("%")
+        s = s.lstrip("¥$€£")  # strip currency symbols from LEAN display values
+        s = s.replace(",", "")  # strip thousands separators (e.g. "94,875.29")
         try:
             return float(s)
         except ValueError:
@@ -180,6 +186,11 @@ def read_lean_summary_stats(summary_json_path: str) -> dict | None:
         "Alpha", "Beta", "Annual Standard Deviation", "Annual Variance",
         "Information Ratio", "Tracking Error", "Treynor Ratio",
         "Total Fees", "Portfolio Turnover", "Drawdown Recovery",
+        "Monte Carlo Trials", "Monte Carlo Horizon Days",
+        "Monte Carlo Baseline Loss Probability",
+        "Monte Carlo Combined Loss Probability",
+        "Monte Carlo Combined Median Return",
+        "Monte Carlo Combined P95 Drawdown",
     ]:
         val = statistics.get(key)
         if val is not None:
@@ -202,6 +213,11 @@ def read_lean_summary_stats(summary_json_path: str) -> dict | None:
             parsed = parse_pct(val)
             if parsed is not None:
                 stats[key] = parsed
+
+    # Add CAGR alias (dashboard uses "CAGR" but LEAN writes "Compounding Annual Return")
+    car = stats.get("Compounding Annual Return")
+    if car is not None:
+        stats["CAGR"] = car
 
     return stats
 

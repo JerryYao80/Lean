@@ -41,6 +41,13 @@ namespace QuantConnect.Algorithm.CSharp
         public decimal LiquidityPremiumWeight { get; set; } = 0.5m;
         public decimal ChipConcentrationWeight { get; set; } = 0.8m;
         public decimal RateSensitivityWeight { get; set; } = 0.4m;
+        public decimal BasisSentimentWeight { get; set; } = 0.8m;
+        public decimal OptionsPcrWeight { get; set; } = 0.6m;
+        public decimal MarginShortRatioWeight { get; set; } = 0.5m;
+        public decimal BarraBetaWeight { get; set; } = 0.5m;
+        public decimal BarraNlsizeWeight { get; set; } = 0.3m;
+        public decimal BarraResvolWeight { get; set; } = 0.6m;
+        public decimal BarraLiquidityWeight { get; set; } = 0.4m;
 
         public int TopN { get; set; } = 30;
         public int RetentionBuffer { get; set; } = 6;
@@ -80,7 +87,9 @@ namespace QuantConnect.Algorithm.CSharp
             "chip_cost", "etf_premium", "sector_rotation", "margin_signal",
             "northbound_flow", "multi_factor", "analyst_signal", "macro_rate",
             "barra_momentum", "barra_value", "barra_quality",
-            "low_volatility", "size_tilt", "liquidity_premium", "chip_concentration", "rate_sensitivity"
+            "low_volatility", "size_tilt", "liquidity_premium", "chip_concentration", "rate_sensitivity",
+            "basis_sentiment", "options_pcr", "margin_short_ratio",
+            "barra_beta", "barra_nlsize", "barra_resvol", "barra_liquidity"
         };
 
         public static Dictionary<Symbol, decimal> ComputeScores(
@@ -95,7 +104,8 @@ namespace QuantConnect.Algorithm.CSharp
         public static Dictionary<Symbol, Dictionary<string, decimal>> ComputeFamilyScores(
             IReadOnlyDictionary<Symbol, AShareTushareFactorData> factors,
             AShareMultiFamilySignalSettings settings,
-            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors = null)
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors = null,
+            AShareMarketSentimentData sentimentData = null)
         {
             var result = new Dictionary<Symbol, Dictionary<string, decimal>>();
             if (factors == null || factors.Count == 0)
@@ -121,6 +131,11 @@ namespace QuantConnect.Algorithm.CSharp
             var chipConc = ComputeChipConcentrationScore(factors);
             var rateSens = ComputeRateSensitivityScore(factors);
 
+            // V6: Market sentiment families (all stocks get same market-level score)
+            var basisSentiment = ComputeBasisSentimentScore(factors, sentimentData);
+            var optionsPcr = ComputeOptionsPcrScore(factors, sentimentData);
+            var marginShortRatio = ComputeMarginShortRatioScore(factors, sentimentData);
+
             var allSymbols = factors.Keys.ToHashSet();
             foreach (var symbol in allSymbols)
             {
@@ -144,15 +159,27 @@ namespace QuantConnect.Algorithm.CSharp
                     var barraMomentum = ComputeBarraMomentumScore(barraFactors);
                     var barraValue = ComputeBarraValueScore(barraFactors);
                     var barraQuality = ComputeBarraQualityScore(barraFactors);
+                    var barraBeta = ComputeBarraBetaScore(barraFactors);
+                    var barraNlsize = ComputeBarraNlsizeScore(barraFactors);
+                    var barraResvol = ComputeBarraResvolScore(barraFactors);
+                    var barraLiquidity = ComputeBarraLiquidityScore(barraFactors);
                     scores["barra_momentum"] = barraMomentum.TryGetValue(symbol, out var bm) ? bm : 0m;
                     scores["barra_value"] = barraValue.TryGetValue(symbol, out var bv) ? bv : 0m;
                     scores["barra_quality"] = barraQuality.TryGetValue(symbol, out var bq) ? bq : 0m;
+                    scores["barra_beta"] = barraBeta.TryGetValue(symbol, out var bb) ? bb : 0m;
+                    scores["barra_nlsize"] = barraNlsize.TryGetValue(symbol, out var bn) ? bn : 0m;
+                    scores["barra_resvol"] = barraResvol.TryGetValue(symbol, out var br) ? br : 0m;
+                    scores["barra_liquidity"] = barraLiquidity.TryGetValue(symbol, out var bl) ? bl : 0m;
                 }
                 else
                 {
                     scores["barra_momentum"] = 0m;
                     scores["barra_value"] = 0m;
                     scores["barra_quality"] = 0m;
+                    scores["barra_beta"] = 0m;
+                    scores["barra_nlsize"] = 0m;
+                    scores["barra_resvol"] = 0m;
+                    scores["barra_liquidity"] = 0m;
                 }
 
                 // Barra-inspired mined families (V5+)
@@ -161,6 +188,11 @@ namespace QuantConnect.Algorithm.CSharp
                 scores["liquidity_premium"] = liqPrem.TryGetValue(symbol, out var lp) ? lp : 0m;
                 scores["chip_concentration"] = chipConc.TryGetValue(symbol, out var cc) ? cc : 0m;
                 scores["rate_sensitivity"] = rateSens.TryGetValue(symbol, out var rs) ? rs : 0m;
+
+                // V6: Market sentiment families
+                scores["basis_sentiment"] = basisSentiment.TryGetValue(symbol, out var bs) ? bs : 0m;
+                scores["options_pcr"] = optionsPcr.TryGetValue(symbol, out var op) ? op : 0m;
+                scores["margin_short_ratio"] = marginShortRatio.TryGetValue(symbol, out var msr) ? msr : 0m;
 
                 result[symbol] = scores;
             }
@@ -194,6 +226,13 @@ namespace QuantConnect.Algorithm.CSharp
                 ["liquidity_premium"] = settings.LiquidityPremiumWeight,
                 ["chip_concentration"] = settings.ChipConcentrationWeight,
                 ["rate_sensitivity"] = settings.RateSensitivityWeight,
+                ["basis_sentiment"] = settings.BasisSentimentWeight,
+                ["options_pcr"] = settings.OptionsPcrWeight,
+                ["margin_short_ratio"] = settings.MarginShortRatioWeight,
+                ["barra_beta"] = settings.BarraBetaWeight,
+                ["barra_nlsize"] = settings.BarraNlsizeWeight,
+                ["barra_resvol"] = settings.BarraResvolWeight,
+                ["barra_liquidity"] = settings.BarraLiquidityWeight,
             };
 
             var composite = new Dictionary<Symbol, decimal>();
@@ -364,6 +403,69 @@ namespace QuantConnect.Algorithm.CSharp
             // High dividend yield stocks are more rate-sensitive (benefit from falling rates)
             ApplyFactorDict(eligible, scores, f => f.GetDecimal("dv_ttm"), 1.0m);
             return scores;
+        }
+
+        // V6: Market sentiment family score methods
+
+        private static Dictionary<Symbol, decimal> ComputeBasisSentimentScore(
+            IReadOnlyDictionary<Symbol, AShareTushareFactorData> factors,
+            AShareMarketSentimentData sentimentData)
+        {
+            // Deep 贴水 (negative basis) = high hedging demand = contrarian buy signal
+            // Score = -zscore(basis_composite) — more negative basis = higher score
+            var eligible = factors.Where(p => p.Value != null).ToList();
+            if (eligible.Count == 0 || sentimentData == null || !sentimentData.BasisComposite.HasValue)
+            {
+                return factors.Keys.ToDictionary(k => k, _ => 0m);
+            }
+
+            var basis = sentimentData.BasisComposite.Value;
+            // Typical range: -0.011 to 0.004; mean ~ -0.0005
+            // Invert and scale: deep 贴水 → high score
+            // Use z-score: (basis - mean) / std ≈ (basis - (-0.0005)) / 0.003
+            var zScore = (basis - (-0.0005m)) / 0.003m;
+            var score = -zScore; // Invert: negative z → positive score
+            return factors.Keys.ToDictionary(k => k, _ => Clamp(score, -3m, 3m));
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeOptionsPcrScore(
+            IReadOnlyDictionary<Symbol, AShareTushareFactorData> factors,
+            AShareMarketSentimentData sentimentData)
+        {
+            // High PCR = fear = contrarian buy signal
+            // Score = -zscore(pcr_composite) — higher PCR = higher score
+            var eligible = factors.Where(p => p.Value != null).ToList();
+            if (eligible.Count == 0 || sentimentData == null || !sentimentData.PcrComposite.HasValue)
+            {
+                return factors.Keys.ToDictionary(k => k, _ => 0m);
+            }
+
+            var pcr = sentimentData.PcrComposite.Value;
+            // Typical range: 0.41 to 1.38; mean ~ 0.73
+            // z-score: (pcr - mean) / std ≈ (pcr - 0.73) / 0.15
+            var zScore = (pcr - 0.73m) / 0.15m;
+            var score = -zScore; // Invert: high PCR → high score (contrarian)
+            return factors.Keys.ToDictionary(k => k, _ => Clamp(score, -3m, 3m));
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeMarginShortRatioScore(
+            IReadOnlyDictionary<Symbol, AShareTushareFactorData> factors,
+            AShareMarketSentimentData sentimentData)
+        {
+            // High margin long/short ratio = retail over-leveraged = caution signal
+            // margin_composite is log(rzye/rqye); typical range: 2.3 to 5.3, mean ~ 3.5
+            // High ratio → over-bullish → contrarian caution (negative score)
+            var eligible = factors.Where(p => p.Value != null).ToList();
+            if (eligible.Count == 0 || sentimentData == null || !sentimentData.MarginComposite.HasValue)
+            {
+                return factors.Keys.ToDictionary(k => k, _ => 0m);
+            }
+
+            var margin = sentimentData.MarginComposite.Value;
+            // z-score: (margin - mean) / std ≈ (margin - 3.5) / 0.6
+            var zScore = (margin - 3.5m) / 0.6m;
+            var score = -zScore; // Invert: high ratio → low score (contrarian caution)
+            return factors.Keys.ToDictionary(k => k, _ => Clamp(score, -3m, 3m));
         }
 
         // Helper functions for V5 mined families
@@ -670,6 +772,86 @@ namespace QuantConnect.Algorithm.CSharp
             for (var i = 0; i < indicesWithValues.Count; i++)
             {
                 scores[eligible[indicesWithValues[i]].Key] = zScores[i];
+            }
+            return scores;
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeBarraBetaScore(
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors)
+        {
+            if (barraFactors == null || barraFactors.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+            var eligible = barraFactors.Where(p => p.Value != null && p.Value.Beta.HasValue).ToList();
+            var scores = barraFactors.Keys.ToDictionary(k => k, _ => 0m);
+            if (eligible.Count <= 1) return scores;
+
+            var values = eligible.Select(p => p.Value.Beta.Value).ToList();
+            var zScores = SafeZScores(values);
+            for (var i = 0; i < eligible.Count; i++)
+            {
+                scores[eligible[i].Key] = -zScores[i]; // Invert: low Beta = high score (defensive)
+            }
+            return scores;
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeBarraNlsizeScore(
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors)
+        {
+            if (barraFactors == null || barraFactors.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+            var eligible = barraFactors.Where(p => p.Value != null && p.Value.NonLinearSize.HasValue).ToList();
+            var scores = barraFactors.Keys.ToDictionary(k => k, _ => 0m);
+            if (eligible.Count <= 1) return scores;
+
+            var values = eligible.Select(p => p.Value.NonLinearSize.Value).ToList();
+            var zScores = SafeZScores(values);
+            for (var i = 0; i < eligible.Count; i++)
+            {
+                scores[eligible[i].Key] = zScores[i]; // Positive: mid-cap premium
+            }
+            return scores;
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeBarraResvolScore(
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors)
+        {
+            if (barraFactors == null || barraFactors.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+            var eligible = barraFactors.Where(p => p.Value != null && p.Value.ResidualVolatility.HasValue).ToList();
+            var scores = barraFactors.Keys.ToDictionary(k => k, _ => 0m);
+            if (eligible.Count <= 1) return scores;
+
+            var values = eligible.Select(p => p.Value.ResidualVolatility.Value).ToList();
+            var zScores = SafeZScores(values);
+            for (var i = 0; i < eligible.Count; i++)
+            {
+                scores[eligible[i].Key] = -zScores[i]; // Invert: low residual vol = high score (low-vol anomaly)
+            }
+            return scores;
+        }
+
+        private static Dictionary<Symbol, decimal> ComputeBarraLiquidityScore(
+            IReadOnlyDictionary<Symbol, AShareBarraCNE5FactorData> barraFactors)
+        {
+            if (barraFactors == null || barraFactors.Count == 0)
+            {
+                return new Dictionary<Symbol, decimal>();
+            }
+            var eligible = barraFactors.Where(p => p.Value != null && p.Value.Liquidity.HasValue).ToList();
+            var scores = barraFactors.Keys.ToDictionary(k => k, _ => 0m);
+            if (eligible.Count <= 1) return scores;
+
+            var values = eligible.Select(p => p.Value.Liquidity.Value).ToList();
+            var zScores = SafeZScores(values);
+            for (var i = 0; i < eligible.Count; i++)
+            {
+                scores[eligible[i].Key] = -zScores[i]; // Invert: low liquidity = high score (liquidity premium)
             }
             return scores;
         }

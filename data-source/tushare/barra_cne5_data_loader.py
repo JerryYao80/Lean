@@ -159,7 +159,9 @@ class BarraCNE5DataLoader:
                 data = frame.copy()
                 if "is_open" in data.columns:
                     data = data[data["is_open"].astype(str).isin({"1", "True", "true"})]
-                return sorted(data["cal_date"].astype(str).unique().tolist())
+                dates = sorted(data["cal_date"].astype(str).unique().tolist())
+                if dates and dates[0] <= start_date and dates[-1] >= end_date:
+                    return dates
 
         frame = self.load_dataset("index_daily", symbol=reference_symbol, start_date=start_date, end_date=end_date)
         if frame.empty or "trade_date" not in frame.columns:
@@ -244,6 +246,35 @@ class BarraCNE5DataLoader:
                 "trade_cal": {
                     "path": "trade_cal/data.parquet",
                     "date_field": "cal_date",
+                },
+                "moneyflow": {
+                    "path": "moneyflow/date={symbol}/data.parquet",
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
+                },
+                "fina_indicator": {
+                    "path": "fina_indicator/date={symbol}/data.parquet",
+                    "date_field": "ann_date",
+                    "symbol_field": "ts_code",
+                },
+                "hk_hold": {
+                    "paths": ["hk_hold/year=*/data.parquet"],
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
+                },
+                "moneyflow_hsgt": {
+                    "paths": ["moneyflow_hsgt/year=*/data.parquet"],
+                    "date_field": "trade_date",
+                },
+                "margin_detail": {
+                    "path": "margin_detail/date={symbol}/data.parquet",
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
+                },
+                "cyq_perf": {
+                    "path": "cyq_perf/date={symbol}/data.parquet",
+                    "date_field": "trade_date",
+                    "symbol_field": "ts_code",
                 },
             }
         }

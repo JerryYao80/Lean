@@ -173,6 +173,25 @@ STRATEGY_FAMILY_REGISTRY = {
             "repo_daily": ["close", "amount", "repo_maturity", "ts_code"],
         },
     },
+    "basis_sentiment": {
+        "datasets": ["fut_daily", "index_daily"],
+        "fields": {
+            "fut_daily": ["close", "settle", "oi", "vol"],
+            "index_daily": ["close"],
+        },
+    },
+    "options_pcr": {
+        "datasets": ["opt_daily"],
+        "fields": {
+            "opt_daily": ["vol", "oi", "close"],
+        },
+    },
+    "margin_short_ratio": {
+        "datasets": ["margin"],
+        "fields": {
+            "margin": ["rzye", "rqye", "rzmre", "rzche"],
+        },
+    },
 }
 
 
@@ -302,6 +321,7 @@ def build_symbol_feature_frame(
     macro_frames: dict[str, pd.DataFrame] | None = None,
     hsgt_frame: pd.DataFrame | None = None,
     sector_map: dict[str, str] | None = None,
+    sentiment_data_path: str | None = None,
 ) -> pd.DataFrame:
     # Base: daily + daily_basic + adj_factor
     daily = layer.load_dataset("daily", symbol=ts_code, start_date=start_date, end_date=end_date)
@@ -513,6 +533,28 @@ def build_symbol_feature_frame(
     else:
         base["sector_code"] = None
 
+    # Market sentiment data (V6: basis, PCR, VIX, margin ratio)
+    sentiment_csv = Path(sentiment_data_path) if sentiment_data_path else None
+    if sentiment_csv is None:
+        sentiment_csv = Path(__file__).resolve().parents[1] / "Data" / "alternative" / "ashare-market-sentiment" / "sse" / "daily" / "market_sentiment.csv"
+    if sentiment_csv.exists():
+        sentiment_df = pd.read_csv(sentiment_csv)
+        sentiment_df["trade_date"] = sentiment_df["trade_date"].astype(str).str.strip()
+        # Normalize sentiment trade_date to match base format (YYYY-MM-DD)
+        sentiment_df["trade_date"] = sentiment_df["trade_date"].str.replace(
+            r"^(\d{4})(\d{2})(\d{2})$", r"\1-\2-\3", regex=True
+        )
+        # Add mkt_ prefix to avoid column name conflicts
+        rename_map = {}
+        for c in sentiment_df.columns:
+            if c != "trade_date":
+                rename_map[c] = f"mkt_{c}"
+        sentiment_renamed = sentiment_df.rename(columns=rename_map)
+        base = base.merge(sentiment_renamed, on="trade_date", how="left", suffixes=('', '_dup'))
+        dup_cols = [c for c in base.columns if c.endswith('_dup')]
+        if dup_cols:
+            base = base.drop(columns=dup_cols)
+
     # Derived columns
     if "close" in base.columns and "pre_close" in base.columns:
         base["pct_chg"] = base.get("pct_chg", base["close"] / base["pre_close"] - 1)
@@ -660,6 +702,7 @@ def export_feature_universe(config: dict) -> dict:
                 macro_frames=macro_frames,
                 hsgt_frame=hsgt_frame,
                 sector_map=sector_map,
+                sentiment_data_path=config.get("sentiment-data-path"),
             )
         except Exception as e:
             skipped_symbols.append({"symbol": ts_code, "reason": str(e)})

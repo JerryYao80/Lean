@@ -176,6 +176,25 @@ class PipelineState:
         self.payload.setdefault("stage_timestamps", {})[stage_name] = timestamp
         self.save()
 
+    def should_run(self, stage_name: str, interval_seconds: int, now: datetime | None = None) -> bool:
+        now = now or datetime.now(timezone.utc)
+        last_at = self.stage_last_run_at(stage_name)
+        if not last_at:
+            return True
+        try:
+            last_time = datetime.fromisoformat(str(last_at))
+        except ValueError:
+            return True
+        if last_time.tzinfo is None:
+            last_time = last_time.replace(tzinfo=timezone.utc)
+        return (now.astimezone(timezone.utc) - last_time.astimezone(timezone.utc)).total_seconds() >= max(1, int(interval_seconds))
+
+    def mark_finished(self, stage_name: str, report: dict | None = None, now: datetime | None = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        self.record_stage_run(stage_name, now.astimezone(timezone.utc).isoformat())
+        self.payload.setdefault("stage_reports", {})[stage_name] = report or {}
+        self.save()
+
     def record_run(self, report: dict) -> None:
         runs = self.payload.setdefault("runs", [])
         if not isinstance(runs, list):
@@ -291,6 +310,7 @@ def _lifecycle_to_influx_lines(strategies: list[dict], now: datetime) -> list[st
         if not isinstance(row, dict):
             continue
         sid = orchestrator.escape_influx_key(str(row.get("strategy_id") or "unknown"))
+        origin = orchestrator.escape_influx_key(str(row.get("origin") or "web"))
         best = orchestrator.safe_float(row.get("best_score"), None)
         live = orchestrator.safe_float(row.get("live_score") or row.get("lifecycle_score"), None)
         status = str(row.get("status") or "candidate").lower()
@@ -312,7 +332,7 @@ def _lifecycle_to_influx_lines(strategies: list[dict], now: datetime) -> list[st
         if row.get("retire_reason"):
             fields.append(f'retire_reason="{row["retire_reason"]}"')
 
-        line = f"strategy_lifecycle,strategy_id={sid} {','.join(fields)} {ts_ns}"
+        line = f"strategy_lifecycle,strategy_id={sid},origin={origin} {','.join(fields)} {ts_ns}"
         lines.append(line)
     return lines
 
@@ -904,6 +924,7 @@ class DefaultPipelineServices:
     def export_influx(self, config: dict, run_date: str | None = None) -> dict:
         reports = []
         for args in (
+            ["--export-crawled-ideas-influx"],
             ["--export-research-influx"],
             ["--export-finance-event-graph-influx"],
             ["--export-strategy-results-influx"],

@@ -44,6 +44,8 @@ namespace QuantConnect.Algorithm.CSharp
         private readonly Dictionary<Symbol, Symbol> _factorToUnderlying = new();
         private readonly Dictionary<Symbol, AShareTushareFactorData> _latestFactorsByUnderlying = new();
         private readonly Dictionary<Symbol, AShareBarraCNE5FactorData> _latestBarraFactorsByUnderlying = new();
+        private AShareMarketSentimentData _latestSentimentData;
+        private readonly Dictionary<Symbol, AShareImpliedVolatilityData> _latestIvBySymbol = new();
         private readonly Dictionary<Symbol, decimal> _latestScoresByUnderlying = new();
         private readonly Dictionary<Symbol, decimal> _latestTargetWeightsByUnderlying = new();
         private readonly Dictionary<Symbol, Dictionary<string, decimal>> _latestFamilyScoresByUnderlying = new();
@@ -78,6 +80,16 @@ namespace QuantConnect.Algorithm.CSharp
         private decimal _stopLossPct;
         private decimal _profitActivationPct;
         private decimal _trailingStopPct;
+        private decimal _dynamicStopLossPct;
+        private decimal _dynamicTrailingStopPct;
+        private int _dynamicCooldownDays;
+        private bool _dynamicRiskControls;
+        private decimal _regimeBasisWeight;
+        private decimal _regimePcrWeight;
+        private decimal _regimeVixWeight;
+        private decimal _extremeFearBoost;
+        private decimal _vixHighThreshold;
+        private decimal _vixExtremeThreshold;
         private int _topN;
         private int _minListedDays;
         private int _minPresentFamilies;
@@ -165,6 +177,13 @@ namespace QuantConnect.Algorithm.CSharp
                 LiquidityPremiumWeight = GetDecimalParameter("family-weight-liquidity-premium", 0.5m),
                 ChipConcentrationWeight = GetDecimalParameter("family-weight-chip-concentration", 0.8m),
                 RateSensitivityWeight = GetDecimalParameter("family-weight-rate-sensitivity", 0.4m),
+                BasisSentimentWeight = GetDecimalParameter("family-weight-basis-sentiment", 0.8m),
+                OptionsPcrWeight = GetDecimalParameter("family-weight-options-pcr", 0.6m),
+                MarginShortRatioWeight = GetDecimalParameter("family-weight-margin-short-ratio", 0.5m),
+                BarraBetaWeight = GetDecimalParameter("family-weight-barra-beta", 0.5m),
+                BarraNlsizeWeight = GetDecimalParameter("family-weight-barra-nlsize", 0.3m),
+                BarraResvolWeight = GetDecimalParameter("family-weight-barra-resvol", 0.6m),
+                BarraLiquidityWeight = GetDecimalParameter("family-weight-barra-liquidity", 0.4m),
                 TopN = _topN,
                 MinPresentFamilies = _minPresentFamilies,
                 MinPrice = GetDecimalParameter("min-price", 5m),
@@ -185,13 +204,23 @@ namespace QuantConnect.Algorithm.CSharp
             _latestKellyScale = _kellyFallbackScale;
             _latestEffectiveTargetExposure = _targetPortfolioExposure * _latestKellyScale;
             _latestRegimeAdjustment = 1.0m;
+            _dynamicRiskControls = GetBoolParameter("dynamic-risk-controls", false);
+            _regimeBasisWeight = GetDecimalParameter("regime-basis-weight", 0.25m);
+            _regimePcrWeight = GetDecimalParameter("regime-pcr-weight", 0.20m);
+            _regimeVixWeight = GetDecimalParameter("regime-vix-weight", 0.15m);
+            _extremeFearBoost = GetDecimalParameter("extreme-fear-boost", 0.10m);
+            _vixHighThreshold = GetDecimalParameter("vix-high-threshold", 0.25m);
+            _vixExtremeThreshold = GetDecimalParameter("vix-extreme-threshold", 0.35m);
+            _dynamicStopLossPct = _stopLossPct;
+            _dynamicTrailingStopPct = _trailingStopPct;
+            _dynamicCooldownDays = _riskExitCooldownDays;
 
             SetStartDate(startDate);
             SetEndDate(endDate);
             SetAccountCurrency(Currencies.CNY);
             SetCash(initialCash);
             SetBenchmark(_ => 0m);
-            SetRiskFreeInterestRateModel(new ConstantRiskFreeRateInterestRateModel(0.025m));
+            SetRiskFreeInterestRateModel(new ChinaInterestRateProvider());
             var version = (GetParameter("version") ?? "V1").Trim().ToUpperInvariant();
             _version = version;
             SetAlgorithmId($"AShareMultiFamily{version}");
@@ -212,7 +241,10 @@ namespace QuantConnect.Algorithm.CSharp
 
             var isV3 = string.Equals(version, "V3", StringComparison.OrdinalIgnoreCase);
             var isV4 = string.Equals(version, "V4", StringComparison.OrdinalIgnoreCase);
-            var usesBarra = isV3 || isV4;
+            var isV6 = string.Equals(version, "V6", StringComparison.OrdinalIgnoreCase);
+            var isV51 = version.StartsWith("V5.1", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(version, "V51", StringComparison.OrdinalIgnoreCase);
+            var usesBarra = isV3 || isV4 || isV6 || isV51;
             if (usesBarra)
             {
                 _barraFactorDataPath = ResolveOptionalFactorDataPath(GetParameter("barra-factor-path"));
@@ -244,6 +276,15 @@ namespace QuantConnect.Algorithm.CSharp
                 if (usesBarra && !string.IsNullOrWhiteSpace(_barraFactorDataPath))
                 {
                     var barraSecurity = AddData<AShareBarraCNE5FactorData>(equity.Symbol, Resolution.Daily, TimeZones.Shanghai, false);
+                }
+
+                if (isV6)
+                {
+                    // V6: Subscribe to market sentiment data (single market-wide subscription)
+                    if (_anchorSymbol == equity.Symbol)
+                    {
+                        AddData<AShareMarketSentimentData>(_anchorSymbol, Resolution.Daily, TimeZones.Shanghai, false);
+                    }
                 }
             }
 
@@ -326,6 +367,32 @@ namespace QuantConnect.Algorithm.CSharp
                 }
             }
 
+            // V6: Cache market sentiment data
+            foreach (var pair in slice.Get<AShareMarketSentimentData>())
+            {
+                if (pair.Value != null)
+                {
+                    _latestSentimentData = pair.Value;
+                    if (sessionDate == DateTime.MinValue)
+                    {
+                        sessionDate = pair.Value.EndTime.Date > sessionDate ? pair.Value.EndTime.Date : sessionDate;
+                    }
+                }
+            }
+
+            // V6: Cache IV data
+            foreach (var pair in slice.Get<AShareImpliedVolatilityData>())
+            {
+                if (pair.Value != null)
+                {
+                    var underlying = pair.Key != null && pair.Key.HasUnderlying ? pair.Key.Underlying : pair.Key;
+                    if (underlying != null)
+                    {
+                        _latestIvBySymbol[underlying] = pair.Value;
+                    }
+                }
+            }
+
             if (sessionDate == DateTime.MinValue && _anchorSymbol != null && slice.Bars.TryGetValue(_anchorSymbol, out var anchorBar))
             {
                 sessionDate = anchorBar.EndTime.Date;
@@ -383,8 +450,10 @@ namespace QuantConnect.Algorithm.CSharp
                 return false;
             }
 
-            // V4: Barra data is monthly — accept the most recent snapshot on or before sessionDate
-            if (string.Equals(_version, "V4", StringComparison.OrdinalIgnoreCase))
+            // V4/V5.1: Barra data is monthly — accept the most recent snapshot on or before sessionDate
+            if (string.Equals(_version, "V4", StringComparison.OrdinalIgnoreCase) ||
+                _version.StartsWith("V5.1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(_version, "V51", StringComparison.OrdinalIgnoreCase))
             {
                 return factor.EndTime.Date <= sessionDate.Date;
             }
@@ -424,6 +493,103 @@ namespace QuantConnect.Algorithm.CSharp
             // Normalize: positive macro score → regime > 1 (cap at 1), negative → regime < 1 (floor at MinRegimeAdjustment)
             var rawRegime = 1.0m + macroScore * 0.05m;
             return Clamp(rawRegime, _signalSettings.MinRegimeAdjustment, 1.0m);
+        }
+
+        private decimal ComputeMacroRegimeAdjustmentV6(IReadOnlyDictionary<Symbol, AShareTushareFactorData> factors)
+        {
+            // V6: Enhanced regime with sentiment signals
+            // regime = 0.40*macroScore + 0.25*basisScore + 0.20*pcrScore + 0.15*vixScore
+            var macroRegime = ComputeMacroRegimeAdjustment(factors);
+            var macroWeight = 1.0m - _regimeBasisWeight - _regimePcrWeight - _regimeVixWeight;
+
+            decimal basisScore = 0m;
+            decimal pcrScore = 0m;
+            decimal vixScore = 0m;
+
+            if (_latestSentimentData != null)
+            {
+                // Basis: deep 贴水 → bullish contrarian (high score)
+                if (_latestSentimentData.BasisComposite.HasValue)
+                {
+                    var basis = _latestSentimentData.BasisComposite.Value;
+                    basisScore = -basis * 10m; // Scale: -2% basis → score 0.2
+                    basisScore = Clamp(basisScore, -1m, 1m);
+                }
+
+                // PCR: high PCR → fear → contrarian bullish
+                if (_latestSentimentData.PcrComposite.HasValue)
+                {
+                    var pcr = _latestSentimentData.PcrComposite.Value;
+                    pcrScore = (pcr - 0.9m) * 2m; // PCR > 0.9 → positive
+                    pcrScore = Clamp(pcrScore, -1m, 1m);
+                }
+
+                // VIX: low VIX → calm → bullish; extreme VIX → contrarian boost
+                if (_latestSentimentData.VixComposite.HasValue)
+                {
+                    var vix = _latestSentimentData.VixComposite.Value / 100m; // Convert from percentage
+                    if (vix > _vixExtremeThreshold)
+                    {
+                        vixScore = 0.3m; // Contrarian: extreme fear = potential bottom
+                    }
+                    else if (vix > _vixHighThreshold)
+                    {
+                        vixScore = -0.5m; // High VIX = caution
+                    }
+                    else
+                    {
+                        vixScore = 0.5m; // Low VIX = favorable
+                    }
+                }
+
+                // Extreme fear boost
+                if (_latestSentimentData.IsExtremeFear)
+                {
+                    vixScore += _extremeFearBoost;
+                }
+            }
+
+            var rawRegime = macroWeight * macroRegime + _regimeBasisWeight * (1m + basisScore) + _regimePcrWeight * (1m + pcrScore) + _regimeVixWeight * (1m + vixScore);
+            return Clamp(rawRegime, _signalSettings.MinRegimeAdjustment, 1.0m);
+        }
+
+        private void ComputeDynamicRiskParams()
+        {
+            if (!_dynamicRiskControls || _latestSentimentData == null)
+            {
+                _dynamicStopLossPct = _stopLossPct;
+                _dynamicTrailingStopPct = _trailingStopPct;
+                _dynamicCooldownDays = _riskExitCooldownDays;
+                return;
+            }
+
+            var vixLevel = _latestSentimentData.VixComposite.HasValue
+                ? _latestSentimentData.VixComposite.Value / 100m
+                : 0.20m;
+
+            // VIX-adjusted multipliers
+            decimal vixMultiplier;
+            if (vixLevel > _vixExtremeThreshold)
+            {
+                vixMultiplier = 0.7m; // Tight stops in extreme volatility
+            }
+            else if (vixLevel > _vixHighThreshold)
+            {
+                vixMultiplier = 0.85m;
+            }
+            else
+            {
+                vixMultiplier = 1.0m;
+            }
+
+            // Extreme fear: widen stops (give positions room to recover)
+            var fearMultiplier = _latestSentimentData.IsExtremeFear ? 1.3m : 1.0m;
+
+            _dynamicStopLossPct = _stopLossPct * vixMultiplier * fearMultiplier;
+            _dynamicTrailingStopPct = _trailingStopPct * vixMultiplier * fearMultiplier;
+            _dynamicCooldownDays = vixLevel > 0.30m
+                ? (int)(_riskExitCooldownDays * 1.5m)
+                : _riskExitCooldownDays;
         }
 
         private void RunLiveMonitoringCycle()
@@ -495,6 +661,13 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             PruneExpiredRiskCooldowns(sessionDate);
+
+            // V6: Compute dynamic risk parameters before risk exits
+            if (_dynamicRiskControls && _latestSentimentData != null)
+            {
+                ComputeDynamicRiskParams();
+            }
+
             var prices = BuildPriceMap();
             var riskExitSummary = ApplyRiskManagementExits(sessionDate, prices);
             if (riskExitSummary.TotalExits > 0)
@@ -530,7 +703,7 @@ namespace QuantConnect.Algorithm.CSharp
                             .Where(p => IsFreshBarraFactorSnapshot(p.Value, sessionDate))
                             .ToDictionary(p => p.Key, p => p.Value)
                         : null;
-                    var familyScores = AShareMultiFamilySignalModel.ComputeFamilyScores(eligibleFactors, _signalSettings, barraFactors);
+                    var familyScores = AShareMultiFamilySignalModel.ComputeFamilyScores(eligibleFactors, _signalSettings, barraFactors, _latestSentimentData);
                     var scores = AShareMultiFamilySignalModel.ComputeComposite(familyScores, _signalSettings);
                     ReplaceLatestScores(scores);
                     ReplaceLatestFamilyScores(familyScores);
@@ -540,7 +713,9 @@ namespace QuantConnect.Algorithm.CSharp
                     var kellyState = ComputePortfolioKellyState();
                     _latestKellyScale = kellyState.ExposureScale;
 
-                    _latestRegimeAdjustment = ComputeMacroRegimeAdjustment(eligibleFactors);
+                    _latestRegimeAdjustment = string.Equals(_version, "V6", StringComparison.OrdinalIgnoreCase)
+                        ? ComputeMacroRegimeAdjustmentV6(eligibleFactors)
+                        : ComputeMacroRegimeAdjustment(eligibleFactors);
                     _latestEffectiveTargetExposure = Math.Min(1m, _targetPortfolioExposure * _latestKellyScale * _latestRegimeAdjustment);
 
                     LogSignalRanking(sessionDate, eligibleFactors.Count, scores);
@@ -647,7 +822,12 @@ namespace QuantConnect.Algorithm.CSharp
                 EffectiveExposure = _latestEffectiveTargetExposure,
                 RegimeAdjustment = _latestRegimeAdjustment,
                 StopLossExits = riskExitSummary.StopLossExits,
-                TrailingStopExits = riskExitSummary.TrailingStopExits
+                TrailingStopExits = riskExitSummary.TrailingStopExits,
+                BasisComposite = _latestSentimentData?.BasisComposite,
+                PcrComposite = _latestSentimentData?.PcrComposite,
+                VixComposite = _latestSentimentData?.VixComposite,
+                DynamicStopLoss = _dynamicStopLossPct,
+                DynamicTrailingStop = _dynamicTrailingStopPct
             });
 
             UpsertFamilyExposure(new FamilyExposureRow
@@ -673,7 +853,14 @@ namespace QuantConnect.Algorithm.CSharp
                 SizeTilt = familyExposure["size_tilt"],
                 LiquidityPremium = familyExposure["liquidity_premium"],
                 ChipConcentration = familyExposure["chip_concentration"],
-                RateSensitivity = familyExposure["rate_sensitivity"]
+                RateSensitivity = familyExposure["rate_sensitivity"],
+                BasisSentiment = familyExposure["basis_sentiment"],
+                OptionsPcr = familyExposure["options_pcr"],
+                MarginShortRatio = familyExposure["margin_short_ratio"],
+                BarraBeta = familyExposure["barra_beta"],
+                BarraNlsize = familyExposure["barra_nlsize"],
+                BarraResvol = familyExposure["barra_resvol"],
+                BarraLiquidity = familyExposure["barra_liquidity"]
             });
 
             SetRuntimeStatistic("Syn Equity", equity.ToString("F0", CultureInfo.InvariantCulture));
@@ -808,7 +995,7 @@ namespace QuantConnect.Algorithm.CSharp
                 return null;
             }
 
-            if (_stopLossPct > 0m && currentPrice <= averagePrice * (1m - _stopLossPct))
+            if (_dynamicRiskControls && _stopLossPct > 0m && currentPrice <= averagePrice * (1m - _dynamicStopLossPct))
             {
                 return "STOP_LOSS";
             }
@@ -817,7 +1004,12 @@ namespace QuantConnect.Algorithm.CSharp
                 _profitActivationPct > 0m &&
                 position.HoldingDays >= _minHoldDaysForProfitProtection &&
                 position.PeakPrice >= averagePrice * (1m + _profitActivationPct);
-            if (profitActivated && _trailingStopPct > 0m && currentPrice <= position.PeakPrice * (1m - _trailingStopPct))
+            if (profitActivated && _dynamicRiskControls && _dynamicTrailingStopPct > 0m && currentPrice <= position.PeakPrice * (1m - _dynamicTrailingStopPct))
+            {
+                return "TRAILING_STOP";
+            }
+
+            if (profitActivated && !_dynamicRiskControls && _trailingStopPct > 0m && currentPrice <= position.PeakPrice * (1m - _trailingStopPct))
             {
                 return "TRAILING_STOP";
             }
@@ -2639,7 +2831,7 @@ namespace QuantConnect.Algorithm.CSharp
         private void WriteDailySummary()
         {
             var builder = new StringBuilder();
-            builder.AppendLine("trade_date,equity,cash,invested,gross_return,net_return,holdings,eligible_symbols,selected_symbols,turnover,score_spread,rebalanced,kelly_scale,effective_exposure,regime_adjustment,stop_loss_exits,trailing_stop_exits");
+            builder.AppendLine("trade_date,equity,cash,invested,gross_return,net_return,holdings,eligible_symbols,selected_symbols,turnover,score_spread,rebalanced,kelly_scale,effective_exposure,regime_adjustment,stop_loss_exits,trailing_stop_exits,basis_composite,pcr_composite,vix_composite,dynamic_stop_loss,dynamic_trailing_stop");
             foreach (var row in _dailyRows)
             {
                 builder.AppendLine(string.Join(",",
@@ -2659,7 +2851,12 @@ namespace QuantConnect.Algorithm.CSharp
                     row.EffectiveExposure.ToString("F6", CultureInfo.InvariantCulture),
                     row.RegimeAdjustment.ToString("F6", CultureInfo.InvariantCulture),
                     row.StopLossExits.ToString(CultureInfo.InvariantCulture),
-                    row.TrailingStopExits.ToString(CultureInfo.InvariantCulture)));
+                    row.TrailingStopExits.ToString(CultureInfo.InvariantCulture),
+                    row.BasisComposite.HasValue ? row.BasisComposite.Value.ToString("F8", CultureInfo.InvariantCulture) : "",
+                    row.PcrComposite.HasValue ? row.PcrComposite.Value.ToString("F8", CultureInfo.InvariantCulture) : "",
+                    row.VixComposite.HasValue ? row.VixComposite.Value.ToString("F8", CultureInfo.InvariantCulture) : "",
+                    row.DynamicStopLoss.ToString("F6", CultureInfo.InvariantCulture),
+                    row.DynamicTrailingStop.ToString("F6", CultureInfo.InvariantCulture)));
             }
             WriteFile(_dailySummaryPath, builder.ToString());
         }
@@ -2686,7 +2883,7 @@ namespace QuantConnect.Algorithm.CSharp
         private void WriteFamilyExposureReport()
         {
             var builder = new StringBuilder();
-            builder.AppendLine("trade_date,holdings,momentum_reversal,value_quality,money_flow,earnings_surprise,chip_cost,etf_premium,sector_rotation,margin_signal,northbound_flow,multi_factor,analyst_signal,macro_rate,barra_momentum,barra_value,barra_quality,low_volatility,size_tilt,liquidity_premium,chip_concentration,rate_sensitivity");
+            builder.AppendLine("trade_date,holdings,momentum_reversal,value_quality,money_flow,earnings_surprise,chip_cost,etf_premium,sector_rotation,margin_signal,northbound_flow,multi_factor,analyst_signal,macro_rate,barra_momentum,barra_value,barra_quality,low_volatility,size_tilt,liquidity_premium,chip_concentration,rate_sensitivity,basis_sentiment,options_pcr,margin_short_ratio,barra_beta,barra_nlsize,barra_resvol,barra_liquidity");
             foreach (var row in _familyExposureRows)
             {
                 builder.AppendLine(string.Join(",",
@@ -2711,7 +2908,14 @@ namespace QuantConnect.Algorithm.CSharp
                     row.SizeTilt.ToString("F8", CultureInfo.InvariantCulture),
                     row.LiquidityPremium.ToString("F8", CultureInfo.InvariantCulture),
                     row.ChipConcentration.ToString("F8", CultureInfo.InvariantCulture),
-                    row.RateSensitivity.ToString("F8", CultureInfo.InvariantCulture)));
+                    row.RateSensitivity.ToString("F8", CultureInfo.InvariantCulture),
+                    row.BasisSentiment.ToString("F8", CultureInfo.InvariantCulture),
+                    row.OptionsPcr.ToString("F8", CultureInfo.InvariantCulture),
+                    row.MarginShortRatio.ToString("F8", CultureInfo.InvariantCulture),
+                    row.BarraBeta.ToString("F8", CultureInfo.InvariantCulture),
+                    row.BarraNlsize.ToString("F8", CultureInfo.InvariantCulture),
+                    row.BarraResvol.ToString("F8", CultureInfo.InvariantCulture),
+                    row.BarraLiquidity.ToString("F8", CultureInfo.InvariantCulture)));
             }
             WriteFile(_familyExposureReportPath, builder.ToString());
         }
@@ -2796,6 +3000,11 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal RegimeAdjustment { get; set; }
             public int StopLossExits { get; set; }
             public int TrailingStopExits { get; set; }
+            public decimal? BasisComposite { get; set; }
+            public decimal? PcrComposite { get; set; }
+            public decimal? VixComposite { get; set; }
+            public decimal DynamicStopLoss { get; set; }
+            public decimal DynamicTrailingStop { get; set; }
         }
 
         private sealed class AllocationRow
@@ -2834,6 +3043,13 @@ namespace QuantConnect.Algorithm.CSharp
             public decimal LiquidityPremium { get; set; }
             public decimal ChipConcentration { get; set; }
             public decimal RateSensitivity { get; set; }
+            public decimal BasisSentiment { get; set; }
+            public decimal OptionsPcr { get; set; }
+            public decimal MarginShortRatio { get; set; }
+            public decimal BarraBeta { get; set; }
+            public decimal BarraNlsize { get; set; }
+            public decimal BarraResvol { get; set; }
+            public decimal BarraLiquidity { get; set; }
         }
 
         private sealed class SyntheticOpenLot

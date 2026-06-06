@@ -383,9 +383,9 @@ class BarraCNE5FactorBuilder:
         book_equity = self._to_float(latest.get("total_hldr_eqy_exc_min_int"))
 
         return {
-            "MLEV": (total_mv + long_debt + short_debt) / total_mv if total_mv > 0 else math.nan,
-            "DTOA": total_liab / total_assets if total_assets and total_assets > 0 else math.nan,
-            "BLEV": (book_equity + long_debt + short_debt) / book_equity if book_equity and book_equity > 0 else math.nan,
+            "MLEV": (total_mv + long_debt + short_debt) / total_mv if total_mv and total_mv > 0 else math.nan,
+            "DTOA": total_liab / total_assets if (total_liab is not None and total_assets is not None and total_assets > 0) else math.nan,
+            "BLEV": (book_equity + long_debt + short_debt) / book_equity if (book_equity is not None and book_equity > 0) else math.nan,
         }
 
     def compute_growth(self, ts_code: str, trade_date: str) -> dict[str, float]:
