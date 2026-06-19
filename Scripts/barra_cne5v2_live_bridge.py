@@ -1,14 +1,16 @@
-"""Bridge: export Barra CNE5 V2 live factor exposure and trades to InfluxDB.
+"""Bridge: export Barra CNE5 V2 live data to InfluxDB for dashboard panels.
 
-Reads V2's factor exposure from lean_metric (runtime FX.* metrics) and
-order data from lean_order_event, then writes to lean_family_exposure and
-lean_mf_order so the Live Paper Trading dashboard panels display data.
+Reads V2's runtime metrics (FX.* factors, Kelly, Return, etc.) from lean_metric,
+equity from lean_chart, and order data from lean_order_event, then writes to
+barra_cne5_daily, barra_cne5_factor_exposure, and barra_cne5_trades
+so the Live Paper Trading dashboard panels (51-59) display data.
 
 Run alongside the V2 live paper process.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -19,39 +21,13 @@ from urllib.parse import quote
 INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
-INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN", "")
+INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN", "admin-token-leansystem")
 GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
 GRAFANA_USER = os.environ.get("GRAFANA_ADMIN_USER", "admin")
 GRAFANA_PASS = os.environ.get("GRAFANA_ADMIN_PASS", "")
 
 ALGORITHM_ID = os.environ.get("BARRA_V2_ALGORITHM_ID", "AShareBarraCNE5V2Algorithm")
 MODE = "live"
-
-# Mapping from V2 FX.* metric suffix to dashboard's lean_family_exposure column names
-FACTOR_MAP = {
-    "beta": "barra_beta",
-    "momentum": "barra_momentum",
-    "size": "barra_value",
-    "earnyld": "earnings_surprise",
-    "resvol": "barra_resvol",
-    "growth": "multi_factor",
-    "btop": "value_quality",
-    "leverage": "margin_signal",
-    "liquidity": "barra_liquidity",
-    "nlsize": "barra_nlsize",
-    "moneyflow": "money_flow",
-    "quality": "barra_quality",
-    "northbound": "northbound_flow",
-    "margin": "margin_signal",
-    "chipcost": "chip_cost",
-}
-
-ZERO_FIELDS = [
-    "momentum_reversal", "etf_premium", "sector_rotation",
-    "low_volatility", "size_tilt", "liquidity_premium",
-    "chip_concentration", "rate_sensitivity", "basis_sentiment",
-    "options_pcr", "margin_short_ratio", "macro_rate", "analyst_signal",
-]
 
 
 def esc(s: str) -> str:
@@ -78,10 +54,10 @@ def write_influx(lines: list[str]) -> int:
 
 
 def query_influxql(query: str) -> list[dict]:
-    """Execute InfluxQL query via Grafana proxy and return results."""
-    url = f"{GRAFANA_URL}/api/datasources/proxy/1/query?db={INFLUX_BUCKET}&q={quote(query)}"
+    """Execute InfluxQL query via InfluxDB v1 compatibility API and return results."""
+    url = f"{INFLUX_URL}/query?db={INFLUX_BUCKET}&q={quote(query)}"
     req = request.Request(url)
-    req.add_header("Authorization", f"Basic {__import__('base64').b64encode(f'{GRAFANA_USER}:{GRAFANA_PASS}'.encode()).decode()}")
+    req.add_header("Authorization", f"Token {INFLUX_TOKEN}")
     try:
         with request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
@@ -97,26 +73,182 @@ def query_influxql(query: str) -> list[dict]:
         return []
 
 
-def export_factor_exposure_from_metrics() -> int:
-    """Read V2 FX.* runtime metrics from lean_metric and write to lean_family_exposure."""
-    rows = query_influxql(
-        f'SELECT last("numeric_value") FROM "lean_metric" '
-        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
-        f'AND "category" = \'runtime\' AND "metric" =~ /^FX\\./ '
-        f'GROUP BY "metric"'
+def query_influxql_with_tags(query: str) -> list[dict]:
+    """Execute InfluxQL query and return results with tags included as _tag_* keys."""
+    url = f"{INFLUX_URL}/query?db={INFLUX_BUCKET}&q={quote(query)}"
+    req = request.Request(url)
+    req.add_header("Authorization", f"Token {INFLUX_TOKEN}")
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+            results = []
+            for r in data.get("results", []):
+                for s in r.get("series", []):
+                    cols = s.get("columns", [])
+                    tags = s.get("tags", {})
+                    for v in s.get("values", []):
+                        row = dict(zip(cols, v))
+                        for tk, tv in tags.items():
+                            row[f"_tag_{tk}"] = tv
+                        results.append(row)
+            return results
+    except Exception as e:
+        print(f"Query error: {e}", file=sys.stderr)
+        return []
+
+
+def export_holding_detail() -> int:
+    """Read lean_holding + lean_order_event, compute derived fields, write to barra_cne5_holding_detail."""
+    holding_rows = query_influxql_with_tags(
+        f'SELECT last("quantity") AS "quantity", last("average_price") AS "avg_price", '
+        f'last("market_price") AS "market_price", last("holdings_value") AS "value", '
+        f'last("unrealized_profit") AS "pnl", last("unrealized_profit_percent") AS "pnl_pct" '
+        f'FROM "lean_holding" WHERE time > 0 AND "algorithm_id" = \'{ALGORITHM_ID}\' '
+        f'AND "mode" = \'live\' AND "quantity" > 0 GROUP BY "symbol"'
     )
-    if not rows:
+    if not holding_rows:
         return 0
 
-    # Build a dict of factor_name -> value
-    factor_values = {}
-    for row in rows:
-        # We need the metric tag value, not in the row dict
-        pass
+    fee_rows = query_influxql_with_tags(
+        f'SELECT SUM("fee_amount") AS "total_fees" FROM "lean_order_event" '
+        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'AND "status" = \'Filled\' GROUP BY "symbol"'
+    )
+    fees_by_symbol = {}
+    for row in fee_rows:
+        sym = row.get("_tag_symbol", "")
+        val = row.get("total_fees")
+        if sym and val is not None:
+            fees_by_symbol[sym] = float(val)
 
-    # Re-query with explicit metric names
+    sell_rows = query_influxql_with_tags(
+        f'SELECT "fill_quantity", "fill_price" FROM "lean_order_event" '
+        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'AND "status" = \'Filled\' AND "direction" = \'Sell\' GROUP BY "symbol"'
+    )
+    sale_vol_by_symbol: dict[str, float] = {}
+    for row in sell_rows:
+        sym = row.get("_tag_symbol", "")
+        qty = row.get("fill_quantity")
+        price = row.get("fill_price")
+        if sym and qty is not None and price is not None:
+            sale_vol_by_symbol[sym] = sale_vol_by_symbol.get(sym, 0.0) + abs(float(qty)) * float(price)
+
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
+    lines: list[str] = []
+    tags_base = f",algorithm_id={esc(ALGORITHM_ID)},mode={esc(MODE)}"
+
+    for row in holding_rows:
+        symbol = row.get("_tag_symbol", "")
+        if not symbol:
+            continue
+
+        qty = float(row.get("quantity", 0))
+        avg_price = float(row.get("avg_price", 0))
+        market_price = float(row.get("market_price", 0))
+        value = float(row.get("value", 0))
+        pnl = float(row.get("pnl", 0))
+        pnl_pct = float(row.get("pnl_pct", 0))
+
+        holdings_cost = avg_price * abs(qty)
+        absolute_quantity = abs(qty)
+        leverage = 1.0
+        total_fees = fees_by_symbol.get(symbol, 0.0)
+        total_sale_volume = sale_vol_by_symbol.get(symbol, 0.0)
+        total_dividends = 0.0
+        net_profit = pnl - total_fees
+
+        tags = f"{tags_base},symbol={esc(symbol)}"
+        fields = ",".join([
+            f"quantity={int(qty)}i",
+            f"absolute_quantity={int(absolute_quantity)}i",
+            f"average_price={avg_price}",
+            f"market_price={market_price}",
+            f"holdings_value={value}",
+            f"holdings_cost={holdings_cost}",
+            f"unrealized_profit={pnl}",
+            f"unrealized_profit_percent={pnl_pct}",
+            f"net_profit={net_profit}",
+            f"total_fees={total_fees}",
+            f"total_dividends={int(total_dividends)}i",
+            f"total_sale_volume={total_sale_volume}",
+            f"leverage={leverage}"
+        ])
+        lines.append(f"barra_cne5_holding_detail{tags} {fields} {ts}")
+
+    return write_influx(lines)
+
+
+def export_daily_stats() -> int:
+    """Read V2 runtime metrics and write to barra_cne5_daily for dashboard panels."""
+    # Get equity from lean_chart
+    equity_result = query_influxql(
+        f'SELECT last("value") FROM "lean_chart" '
+        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'AND "chart" = \'Strategy Equity\' AND "series" = \'Equity\''
+    )
+    equity = 0.0
+    if equity_result and equity_result[0].get("last") is not None:
+        equity = float(equity_result[0]["last"])
+
+    # Compute drawdown: (current_equity - peak_equity) / peak_equity * 100
+    drawdown = 0.0
+    if equity > 0:
+        peak_result = query_influxql(
+            f'SELECT max("value") FROM "lean_chart" '
+            f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+            f'AND "chart" = \'Strategy Equity\' AND "series" = \'Equity\''
+        )
+        if peak_result and peak_result[0].get("max") is not None:
+            peak = float(peak_result[0]["max"])
+            if peak > 0:
+                drawdown = (equity - peak) / peak * 100.0
+
+    # Get Return, Kelly, Target Exp from lean_metric
+    metrics_to_get = ["Return", "Kelly", "Target Exp"]
+    metric_values = {}
+    for m in metrics_to_get:
+        result = query_influxql(
+            f'SELECT last("numeric_value") FROM "lean_metric" '
+            f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+            f'AND "metric" = \'{m}\''
+        )
+        if result and result[0].get("last") is not None:
+            metric_values[m] = float(result[0]["last"])
+
+    # Get holdings count and total shares from lean_holding
+    holdings_rows = query_influxql_with_tags(
+        f'SELECT last("quantity") AS "quantity" FROM "lean_holding" '
+        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'AND "quantity" > 0 GROUP BY "symbol"'
+    )
+    holdings_count = len(holdings_rows)
+    total_shares = sum(int(float(r.get("quantity", 0))) for r in holdings_rows)
+
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
+    tags = f",algorithm_id={esc(ALGORITHM_ID)},mode={esc(MODE)}"
+
+    fields = [f"equity={equity}", f"drawdown={drawdown}"]
+    if "Return" in metric_values:
+        fields.append(f"gross_return={metric_values['Return']}")
+    fields.append(f"holdings={holdings_count}i")
+    fields.append(f"total_shares={total_shares}i")
+    if "Kelly" in metric_values:
+        fields.append(f"kelly_scale={metric_values['Kelly']}")
+    if "Target Exp" in metric_values:
+        fields.append(f"effective_exposure={metric_values['Target Exp']}")
+
+    line = f"barra_cne5_daily{tags} {','.join(fields)} {ts}"
+    return write_influx([line])
+
+
+def export_factor_exposure() -> int:
+    """Read V2 FX.* runtime metrics and write to barra_cne5_factor_exposure."""
+    # Get all 15 factors from lean_metric FX.*
     factor_values = {}
-    for fx_name in FACTOR_MAP.keys():
+    for fx_name in ["beta", "momentum", "size", "earnyld", "resvol", "growth",
+                    "btop", "leverage", "liquidity", "nlsize", "moneyflow",
+                    "quality", "northbound", "margin", "chipcost"]:
         metric_name = f"FX.{fx_name}"
         result = query_influxql(
             f'SELECT last("numeric_value") FROM "lean_metric" '
@@ -126,43 +258,36 @@ def export_factor_exposure_from_metrics() -> int:
         if result and result[0].get("last") is not None:
             factor_values[fx_name] = float(result[0]["last"])
 
-    if not factor_values:
-        return 0
-
-    # Also get holdings count
-    holdings_result = query_influxql(
-        f'SELECT last("numeric_value") FROM "lean_metric" '
+    # Get holdings count from lean_holding (actual positions with qty > 0)
+    holdings_rows = query_influxql(
+        f'SELECT COUNT("quantity") FROM "lean_holding" '
         f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
-        f'AND "metric" = \'Holdings\''
+        f'AND "quantity" > 0 GROUP BY "symbol"'
     )
-    holdings_count = 0
-    if holdings_result and holdings_result[0].get("last") is not None:
-        try:
-            holdings_count = int(float(holdings_result[0]["last"]))
-        except (ValueError, TypeError):
-            pass
+    holdings_count = len(holdings_rows)
 
     ts = int(datetime.now(tz=timezone.utc).timestamp())
     tags = f",algorithm_id={esc(ALGORITHM_ID)},mode={esc(MODE)}"
-    fields = [f"holdings_count={holdings_count}i"]
 
-    for v2_name, dashboard_name in FACTOR_MAP.items():
-        val = factor_values.get(v2_name, 0)
-        fields.append(f"{dashboard_name}={val}")
+    fields = [f"holdings={holdings_count}i"]
+    for fx_name, val in factor_values.items():
+        fields.append(f"{fx_name}={val}")
 
-    for zf in ZERO_FIELDS:
-        fields.append(f"{zf}=0")
-
-    line = f"lean_family_exposure{tags} {','.join(fields)} {ts}"
+    line = f"barra_cne5_factor_exposure{tags} {','.join(fields)} {ts}"
     return write_influx([line])
 
 
-def export_trades_from_order_events() -> int:
-    """Read V2 order events from lean_order_event and write to lean_mf_order."""
+def export_trades() -> int:
+    """Read V2 order events and write to barra_cne5_trades.
+
+    Uses order_id as the timestamp to prevent duplicates across bridge cycles.
+    InfluxDB replaces points with the same measurement+tags+timestamp.
+    """
     rows = query_influxql(
-        f'SELECT "symbol", "direction", "fill_quantity", "fill_price", "order_fee" '
+        f'SELECT "symbol", "direction", "fill_quantity", "fill_price", "fee_amount", "status", "order_id", "event_id" '
         f'FROM "lean_order_event" '
         f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'AND "status" = \'Filled\' '
         f'ORDER BY time DESC LIMIT 100'
     )
     if not rows:
@@ -179,19 +304,128 @@ def export_trades_from_order_events() -> int:
         fields = []
         qty = row.get("fill_quantity")
         if qty is not None:
-            fields.append(f"quantity={int(float(qty))}i")
+            fields.append(f"quantity={int(abs(float(qty)))}i")
         price = row.get("fill_price")
         if price is not None:
             fields.append(f"price={float(price)}")
-        fee = row.get("order_fee")
+            qty_val = abs(float(qty)) if qty else 0
+            fields.append(f"trade_value={float(price) * qty_val}")
+        fee = row.get("fee_amount")
         if fee is not None:
             fields.append(f"fee={float(fee)}")
 
         if fields:
-            ts = int(datetime.now(tz=timezone.utc).timestamp())
-            lines.append(f"lean_mf_order{tags} {','.join(fields)} {ts}")
+            # Use order_id as a stable timestamp to prevent duplicates
+            order_id = row.get("order_id", 0)
+            try:
+                ts = int(float(order_id)) + 1700000000  # offset to make valid timestamp
+            except (ValueError, TypeError):
+                ts = int(datetime.now(tz=timezone.utc).timestamp())
+            lines.append(f"barra_cne5_trades{tags} {','.join(fields)} {ts}")
 
     return write_influx(lines)
+
+
+def export_decay() -> int:
+    """Compute rolling performance and decay metrics from equity curve.
+
+    Based on docs/decay.md: Rolling Performances approach.
+    Computes rolling Sharpe, rolling return, and decay indicators
+    (short-window vs long-window divergence) from barra_cne5_daily equity.
+    """
+    # Fetch recent equity series (last 12h = 720 points at ~1/min)
+    rows = query_influxql(
+        f'SELECT "equity" FROM "barra_cne5_daily" '
+        f'WHERE "algorithm_id" = \'{ALGORITHM_ID}\' AND "mode" = \'live\' '
+        f'ORDER BY time DESC LIMIT 720'
+    )
+    if not rows or len(rows) < 10:
+        return 0
+
+    # Parse into (timestamp, equity) pairs, oldest first
+    series = []
+    for row in reversed(rows):
+        eq = row.get("equity")
+        t = row.get("time")
+        if eq is not None and t is not None:
+            series.append((t, float(eq)))
+
+    if len(series) < 10:
+        return 0
+
+    # Compute log returns
+    returns = []
+    for i in range(1, len(series)):
+        prev = max(series[i - 1][1], 0.01)
+        curr = max(series[i][1], 0.01)
+        returns.append(math.log(curr / prev))
+
+    if not returns:
+        return 0
+
+    def _sharpe(rets: list[float]) -> float:
+        if len(rets) < 2:
+            return 0.0
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / len(rets)
+        if var < 1e-12:
+            return 0.0
+        # Annualize: assume ~252*240 = 60480 minute-bars per year
+        return mean / math.sqrt(var) * math.sqrt(60480)
+
+    def _cum_return(rets: list[float]) -> float:
+        if not rets:
+            return 0.0
+        return (math.exp(sum(rets)) - 1.0) * 100.0
+
+    # Window sizes in data points (~1 point per minute)
+    short = min(60, len(returns))       # ~1 hour
+    medium = min(360, len(returns))     # ~6 hours
+    long = len(returns)                 # all available
+
+    sharpe_short = _sharpe(returns[-short:])
+    sharpe_medium = _sharpe(returns[-medium:])
+    sharpe_long = _sharpe(returns[-long:])
+
+    ret_short = _cum_return(returns[-short:])
+    ret_medium = _cum_return(returns[-medium:])
+    ret_long = _cum_return(returns[-long:])
+
+    # Decay indicators: negative = performance deteriorating
+    sharpe_decay = sharpe_short - sharpe_long
+    return_decay = ret_short - ret_long
+
+    # Drawdown from current equity vs peak
+    equities = [s[1] for s in series]
+    current_eq = equities[-1]
+    peak_eq = max(equities)
+    current_dd = (current_eq - peak_eq) / peak_eq * 100.0 if peak_eq > 0 else 0.0
+
+    # Max drawdown in the series
+    max_dd = 0.0
+    running_peak = equities[0]
+    for eq in equities:
+        running_peak = max(running_peak, eq)
+        dd = (eq - running_peak) / running_peak * 100.0 if running_peak > 0 else 0.0
+        max_dd = min(max_dd, dd)
+
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
+    tags = f",algorithm_id={esc(ALGORITHM_ID)},mode={esc(MODE)}"
+
+    fields = ",".join([
+        f"sharpe_1h={sharpe_short:.4f}",
+        f"sharpe_6h={sharpe_medium:.4f}",
+        f"sharpe_all={sharpe_long:.4f}",
+        f"return_1h={ret_short:.4f}",
+        f"return_6h={ret_medium:.4f}",
+        f"return_all={ret_long:.4f}",
+        f"sharpe_decay={sharpe_decay:.4f}",
+        f"return_decay={return_decay:.4f}",
+        f"drawdown={current_dd:.4f}",
+        f"max_drawdown={max_dd:.4f}",
+    ])
+    line = f"barra_cne5_decay{tags} {fields} {ts}"
+    return write_influx([line])
 
 
 def main():
@@ -202,19 +436,25 @@ def main():
     args = parser.parse_args()
 
     if args.once:
-        fe = export_factor_exposure_from_metrics()
-        tr = export_trades_from_order_events()
-        print(json.dumps({"factor_exposure": fe, "trades": tr}))
+        hd = export_holding_detail()
+        daily = export_daily_stats()
+        fe = export_factor_exposure()
+        tr = export_trades()
+        dc = export_decay()
+        print(json.dumps({"holding_detail": hd, "daily": daily, "factor_exposure": fe, "trades": tr, "decay": dc}))
         return
 
     while True:
         try:
-            fe = export_factor_exposure_from_metrics()
-            tr = export_trades_from_order_events()
-            if fe or tr:
-                print(f"{datetime.now():%Y-%m-%d %H:%M:%S} factor_exposure={fe} trades={tr}")
+            hd = export_holding_detail()
+            daily = export_daily_stats()
+            fe = export_factor_exposure()
+            tr = export_trades()
+            dc = export_decay()
+            if daily or fe or tr or hd or dc:
+                print(f"{datetime.now():%Y-%m-%d %H:%M:%S} holding_detail={hd} daily={daily} factor_exposure={fe} trades={tr} decay={dc}", flush=True)
             else:
-                print(f"{datetime.now():%Y-%m-%d %H:%M:%S} no new data")
+                print(f"{datetime.now():%Y-%m-%d %H:%M:%S} no new data", flush=True)
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
         time.sleep(args.interval)

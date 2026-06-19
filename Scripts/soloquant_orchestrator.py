@@ -1283,6 +1283,12 @@ def build_llm_screening_payload(crawled_items: Sequence[dict], model: str = "dee
                     "- 课程大纲/教学页面（如 NYU 课程页面、教程索引）\n"
                     "- 竞赛平台首页（如 Numerai 首页，不含具体策略论文）\n"
                     "- 重复/镜像内容（同一论文的多个版本）\n"
+                    "对每条保留的信息给出 weight_score（0-10浮点数），评分维度：\n"
+                    "1. 信号强度：能否直接转化为交易信号或策略调整？\n"
+                    "2. 时效敏感：信息价值是否随时间快速衰减？\n"
+                    "3. 来源权威：发布机构的可信度和影响力\n"
+                    "4. 稀缺性：该信息是否容易从公开渠道获取？\n"
+                    "评分标准：9-10=央行决议/监管突变/黑天鹅/重大因子发现；7-8=重要经济数据/头部投行策略/高引论文；5-6=常规指标/行业研报/中等论文；3-4=一般评论/教程/平台首页；0-2=营销/课程/无关内容。\n"
                     "输出 JSON，不要输出无关文字。"
                 ),
             },
@@ -1306,6 +1312,7 @@ def build_llm_screening_payload(crawled_items: Sequence[dict], model: str = "dee
                                     "url": "string",
                                     "is_valuable": True,
                                     "confidence_level": "high|medium|low",
+                                    "weight_score": "0-10 float",
                                     "strategy_idea": "string",
                                     "implementation_steps": ["string"],
                                     "evidence": "string",
@@ -1364,6 +1371,8 @@ def build_data_aware_screening_payload(
                     f"你是数据驱动的量化策略筛选器。当前筛选策略族：{family_display}。\n"
                     "你必须验证策略所需数据字段中至少 50% 在可用清单中，否则拒绝。\n"
                     "严格拒绝以下低质量内容：网站首页/导航页/列表页、社交媒体帖、推广文章、课程页面、竞赛首页、重复镜像。\n"
+                    "对每条保留的信息给出 weight_score（0-10浮点数），评分维度：信号强度、时效敏感、来源权威、稀缺性。\n"
+                    "评分标准：9-10=重大因子发现/黑天鹅；7-8=高引论文/投行策略；5-6=中等论文/研报；3-4=一般评论；0-2=营销/无关。\n"
                     "输出 JSON，不要输出无关文字。"
                 ),
             },
@@ -1389,6 +1398,7 @@ def build_data_aware_screening_payload(
                                 "url": "string",
                                 "is_valuable": True,
                                 "confidence_level": "high|medium|low",
+                                "weight_score": "0-10 float",
                                 "strategy_idea": "string",
                                 "implementation_steps": ["string"],
                                 "evidence": "string",
@@ -1422,11 +1432,14 @@ def parse_llm_screening_decisions(payload: dict | str) -> list[dict]:
         if not title and not url:
             continue
         required_fields = item.get("required_fields") if isinstance(item.get("required_fields"), list) else []
+        # Extract weight_score from LLM output; default to rule-based fallback
+        weight_score = _parse_weight_score(item.get("weight_score"), item)
         decisions.append(
             {
                 "title": title,
                 "url": url,
                 "confidence_level": str(item.get("confidence_level") or "medium"),
+                "weight_score": weight_score,
                 "strategy_idea": str(item.get("strategy_idea") or item.get("idea") or ""),
                 "implementation_steps": item.get("implementation_steps") or [],
                 "evidence": str(item.get("evidence") or item.get("backtest_evidence") or ""),
@@ -1435,6 +1448,62 @@ def parse_llm_screening_decisions(payload: dict | str) -> list[dict]:
             }
         )
     return decisions
+
+
+def _parse_weight_score(raw_score: Any, item: dict) -> float:
+    """Parse weight_score from LLM output; fall back to rule-based scoring."""
+    if raw_score is not None:
+        try:
+            score = float(raw_score)
+            if 0 <= score <= 10:
+                return round(score, 1)
+        except (ValueError, TypeError):
+            pass
+    # Rule-based fallback scoring
+    return _rule_based_weight_score(item)
+
+
+def _rule_based_weight_score(item: dict) -> float:
+    """Score item importance using rules when LLM score is unavailable."""
+    score = 3.0  # baseline
+    url = str(item.get("url") or "").lower()
+    title = str(item.get("title") or "").lower()
+    content = str(item.get("content") or item.get("text") or "").lower()
+
+    # Source authority boost
+    authority_sources = {
+        "federalreserve.gov": 3.0, "ecb.europa.eu": 3.0, "pbc.gov.cn": 3.0,
+        "sec.gov": 2.5, "cftc.gov": 2.5, "csrc.gov.cn": 2.5,
+        "arxiv.org": 2.0, "ssrn.com": 2.0, "papers.ssrn.com": 2.0,
+        "aqr.com": 2.5, "mba.tuck.dartmouth.edu": 2.5,
+        "reuters.com": 1.5, "jin10.com": 1.5,
+    }
+    for domain, boost in authority_sources.items():
+        if domain in url:
+            score += boost
+            break
+
+    # Signal keywords boost
+    high_signal = ["降息", "加息", "降准", "rate cut", "rate hike", "fomc", "lpr", "mlf",
+                   "black swan", "黑天鹅", "监管", "regulatory", "emergency", "突发"]
+    mid_signal = ["策略", "strategy", "alpha", "factor", "momentum", "动量", "反转",
+                  "reversal", "backtest", "回测", "研报", "research"]
+    for kw in high_signal:
+        if kw in title or kw in content[:500]:
+            score += 1.5
+            break
+    for kw in mid_signal:
+        if kw in title or kw in content[:500]:
+            score += 0.5
+            break
+
+    # Content length bonus (longer = more substantive)
+    if len(content) > 5000:
+        score += 0.5
+    elif len(content) < 200:
+        score -= 1.0
+
+    return round(max(0.0, min(10.0, score)), 1)
 
 
 def build_reproduction_summary_payload(
@@ -3401,7 +3470,22 @@ def run_crawl_pipeline(
             decisions = parse_llm_screening_decisions(llm_response)
         except Exception as exc:
             import logging as _logging
-            _logging.getLogger(__name__).warning(f"LLM screening failed (crawled items still persisted): {exc}")
+            _logging.getLogger(__name__).warning(f"LLM screening failed, falling back to rule-based filtering: {exc}")
+            # Rule-based fallback: score all crawled items and keep those with weight_score >= 5
+            for item in crawled_items:
+                score = _rule_based_weight_score(item)
+                if score >= 5.0:
+                    decisions.append({
+                        "title": str(item.get("title") or "").strip(),
+                        "url": str(item.get("url") or "").strip(),
+                        "confidence_level": "low",
+                        "weight_score": score,
+                        "strategy_idea": str(item.get("source") or ""),
+                        "implementation_steps": [],
+                        "evidence": "rule-based fallback screening",
+                        "required_fields": [],
+                        "raw": item,
+                    })
 
     screened_report = persist_screened_items(decisions, config["artifact-root"], run_date=run_date) if decisions else {
         "run_date": run_date or utc_run_date(),
@@ -3425,6 +3509,7 @@ def run_crawl_pipeline(
         "query_plan": query_plan,
         "crawled": crawled_report,
         "screened": screened_report,
+        "decisions": decisions,
         "data_requirements": data_requirements,
     }
 
@@ -3489,7 +3574,25 @@ def run_data_driven_crawl_pipeline(
                 all_decisions.extend(decisions)
             except Exception as exc:
                 import logging as _logging
-                _logging.getLogger(__name__).warning(f"Data-aware LLM screening failed for family {family}: {exc}")
+                _logging.getLogger(__name__).warning(f"Data-aware LLM screening failed for family {family}, falling back to rule-based: {exc}")
+                # Rule-based fallback for this family
+                for item in items:
+                    score = _rule_based_weight_score(item)
+                    if score >= 5.0:
+                        all_decisions.append({
+                            "title": str(item.get("title") or "").strip(),
+                            "url": str(item.get("url") or "").strip(),
+                            "confidence_level": "low",
+                            "weight_score": score,
+                            "strategy_idea": str(item.get("source") or ""),
+                            "implementation_steps": [],
+                            "evidence": "rule-based fallback screening",
+                            "required_fields": [],
+                            "data_family": family,
+                            "available_fields": available_fields,
+                            "data_coverage_verified": False,
+                            "raw": item,
+                        })
 
     screened_report = persist_screened_items(all_decisions, config["artifact-root"], run_date=run_date) if all_decisions else {
         "run_date": run_date or utc_run_date(),
@@ -3514,6 +3617,7 @@ def run_data_driven_crawl_pipeline(
         "query_plan": query_plan,
         "crawled": crawled_report,
         "screened": screened_report,
+        "decisions": all_decisions,
         "data_requirements": data_requirements,
     }
 

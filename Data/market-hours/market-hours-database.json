@@ -122785,68 +122785,55 @@
     "Equity-sse-[*]": {
       "dataTimeZone": "Asia/Shanghai",
       "exchangeTimeZone": "Asia/Shanghai",
-      "sunday": [],
+      "sunday": [
+        {
+          "start": "00:00:00",
+          "end": "1.00:00:00",
+          "state": "market"
+        }
+      ],
       "monday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "tuesday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "wednesday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "thursday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "friday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
-      "saturday": [],
+      "saturday": [
+        {
+          "start": "00:00:00",
+          "end": "1.00:00:00",
+          "state": "market"
+        }
+      ],
       "holidays": [],
       "earlyCloses": {},
       "lateOpens": {}
@@ -122854,68 +122841,55 @@
     "Equity-szse-[*]": {
       "dataTimeZone": "Asia/Shanghai",
       "exchangeTimeZone": "Asia/Shanghai",
-      "sunday": [],
+      "sunday": [
+        {
+          "start": "00:00:00",
+          "end": "1.00:00:00",
+          "state": "market"
+        }
+      ],
       "monday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "tuesday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "wednesday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "thursday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
       "friday": [
         {
-          "start": "09:30:00",
-          "end": "11:30:00",
-          "state": "market"
-        },
-        {
-          "start": "13:00:00",
-          "end": "15:00:00",
+          "start": "00:00:00",
+          "end": "1.00:00:00",
           "state": "market"
         }
       ],
-      "saturday": [],
+      "saturday": [
+        {
+          "start": "00:00:00",
+          "end": "1.00:00:00",
+          "state": "market"
+        }
+      ],
       "holidays": [],
       "earlyCloses": {},
       "lateOpens": {}

@@ -1,0 +1,32 @@
+{
+  "strategy_id": "deep-reinforcement-learning-for-dynamic-portfolio-optimization-in-quantitative-f",
+  "class_name": "MlEnhancedMeanVarianceAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/deep-reinforcement-learning-for-dynamic-portfolio-optimization-in-quantitative-f/MlEnhancedMeanVarianceAlgorithm.cs",
+  "description": "模拟ML增强的均值-方差优化策略。使用中短期动量作为机器学习对预期收益的预测，结合历史波动率的倒数作为方差的替代。通过将动量与波动率的比值作为启发式得分，替代复杂的二次规划求解，在A股核心资产池中进行月度动态调仓。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/deep-reinforcement-learning-for-dynamic-portfolio-optimization-in-quantitative-f/MlEnhancedMeanVarianceAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/alpha-architect-c07a3552a163c92a.json",
+  "origin": "web",
+  "parameters": {
+    "start-date": "20200101",
+    "end-date": "20241231",
+    "initial-capital": "1000000",
+    "momentum-period": "120",
+    "volatility-period": "60",
+    "rebalance-days": "30",
+    "stop-loss": "0.15"
+  },
+  "risk_controls": [
+    "15%的移动止损风控",
+    "仅分配正向动量且经过风险调整后得分为正的股票",
+    "动态根据波动率倒数调整仓位比重，高波动降低权重"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "日线行情数据",
+      "field": "close"
+    }
+  ],
+  "generated_at_utc": "2026-06-09T16:03:46.614601+00:00",
+  "data_coverage": 1.0
+}

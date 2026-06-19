@@ -39,7 +39,7 @@ namespace QuantConnect.Algorithm.CSharp
 
         private readonly int _topN;
         private readonly decimal _minScoreSpread;
-        private readonly int _minimumPresentFactors;
+        protected readonly int _minimumPresentFactors;
         private readonly int _minListedDays;
         private readonly int _maxMissingFactorCount;
         private readonly decimal _minTurnoverRate;
@@ -383,7 +383,7 @@ namespace QuantConnect.Algorithm.CSharp
 
         #region Score Computation
 
-        private Dictionary<Symbol, decimal> ComputeScores(
+        protected virtual Dictionary<Symbol, decimal> ComputeScores(
             IReadOnlyDictionary<Symbol, AShareBarraCNE5V2FactorData> factors)
         {
             var eligible = factors
@@ -819,6 +819,33 @@ namespace QuantConnect.Algorithm.CSharp
         {
             if (value.HasValue) result[key] += normalizedWeight * value.Value;
         }
+
+        #endregion
+
+        #region Weight Access
+
+        /// <summary>
+        /// Returns the current effective factor weights (post regime + IR adjustment + normalization).
+        /// Used by derived classes that need access to the adjusted weights.
+        /// </summary>
+        protected Dictionary<string, decimal> GetEffectiveWeights() => new Dictionary<string, decimal>(StringComparer.Ordinal)
+        {
+            ["beta"] = _betaWeight,
+            ["momentum"] = _momentumWeight,
+            ["size"] = _sizeWeight,
+            ["earnyld"] = _earningsYieldWeight,
+            ["resvol"] = _residualVolatilityWeight,
+            ["growth"] = _growthWeight,
+            ["btop"] = _bookToPriceWeight,
+            ["leverage"] = _leverageWeight,
+            ["liquidity"] = _liquidityWeight,
+            ["nlsize"] = _nonLinearSizeWeight,
+            ["moneyflow"] = _moneyFlowWeight,
+            ["quality"] = _qualityWeight,
+            ["northbound"] = _northboundWeight,
+            ["margin"] = _marginWeight,
+            ["chipcost"] = _chipCostWeight
+        };
 
         #endregion
 

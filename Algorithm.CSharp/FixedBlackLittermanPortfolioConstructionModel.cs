@@ -7,7 +7,7 @@
  * You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on on "AS IS" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -18,19 +18,23 @@ using System.Collections.Generic;
 using System.Linq;
 using Accord.Statistics;
 using Accord.Math;
+using QuantConnect;
+using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Data;
 using QuantConnect.Data.UniverseSelection;
 using QuantConnect.Scheduling;
+using NodaTime;
 
-namespace QuantConnect.Algorithm.Framework.Portfolio
+namespace QuantConnect.Algorithm.CSharp
 {
     /// <summary>
-    /// Fixed Black-Litterman portfolio construction model that handles dimension mismatches
-    /// between the returns matrix and the symbol list. When some symbols lack sufficient
-    /// historical return data, FormReturnsMatrix produces fewer columns than symbols,
-    /// causing the optimizer output to have fewer elements. This model filters out
-    /// symbols without data before optimization and assigns zero weight to them.
+    /// Black-Litterman portfolio construction model with defensive fixes for A-share market:
+    /// 1. Retries History() on first rebalance if OnSecuritiesChanged got no data (A-share data starts at algorithm start date)
+    /// 2. Filters symbols without data before optimization to prevent IndexOutOfRangeException
+    /// 3. Validates optimizer output dimensions
+    /// 4. Guards NaN/Infinity from optimizer
+    /// Core BL logic (insight magnitude injection, equilibrium returns, master formula) is identical to LEAN native.
     /// </summary>
     public class FixedBlackLittermanPortfolioConstructionModel : PortfolioConstructionModel
     {
@@ -44,6 +48,8 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
         private readonly int _period;
 
         private readonly Dictionary<Symbol, ReturnsSymbolData> _symbolDataDict;
+        private readonly Dictionary<Symbol, DateTimeZone> _symbolTimeZones;
+        private bool _historyInitialized;
 
         public FixedBlackLittermanPortfolioConstructionModel(TimeSpan timeSpan,
             PortfolioBias portfolioBias = PortfolioBias.LongShort,
@@ -81,6 +87,7 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
             _optimizer = optimizer ?? new MaximumSharpeRatioPortfolioOptimizer(lower, upper, riskFreeRate);
             _portfolioBias = portfolioBias;
             _symbolDataDict = new Dictionary<Symbol, ReturnsSymbolData>();
+            _symbolTimeZones = new Dictionary<Symbol, DateTimeZone>();
         }
 
         protected override bool ShouldCreateTargetForInsight(Insight insight)
@@ -97,7 +104,23 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                 return targets;
             }
 
-            // Update ReturnsSymbolData with insight magnitudes
+            // If OnSecuritiesChanged got no history (A-share data starts at algorithm start date),
+            // populate from history once we have enough data available.
+            if (!_historyInitialized)
+            {
+                InitializeHistoryFromFeed(activeInsights);
+                if (!_historyInitialized)
+                {
+                    // Not enough data yet — return zero weights
+                    foreach (var insight in activeInsights)
+                    {
+                        targets[insight] = 0;
+                    }
+                    return targets;
+                }
+            }
+
+            // Update ReturnsSymbolData with insight magnitudes (identical to LEAN native BL)
             foreach (var insight in activeInsights)
             {
                 if (_symbolDataDict.TryGetValue(insight.Symbol, out var symbolData))
@@ -112,15 +135,15 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                 }
             }
 
+            // Get symbols' returns
             var symbols = activeInsights.Select(x => x.Symbol).Distinct().ToList();
 
-            // FIX: Only include symbols that have sufficient return data in _symbolDataDict
+            // FIX: Only include symbols that have sufficient return data
             var validSymbols = symbols.Where(s =>
                 _symbolDataDict.ContainsKey(s) && _symbolDataDict[s].Returns.Count >= _lookback).ToList();
 
             if (validSymbols.Count == 0)
             {
-                // Not enough data for any symbol — assign zero to all
                 foreach (var insight in activeInsights)
                 {
                     targets[insight] = 0;
@@ -128,13 +151,13 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                 return targets;
             }
 
-            // Filter insights to only those with valid symbols
+            // Filter insights and P matrix to valid symbols only
             var validInsights = activeInsights.Where(i => validSymbols.Contains(i.Symbol)).ToList();
             var validP = FilterMatrixColumns(P, symbols, validSymbols);
 
             var returns = _symbolDataDict.FormReturnsMatrix(validSymbols);
 
-            // Guard: if returns matrix is empty, assign zero to all
+            // Guard: empty returns matrix
             if (returns.GetLength(0) == 0 || returns.GetLength(1) == 0)
             {
                 foreach (var insight in activeInsights)
@@ -144,15 +167,16 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                 return targets;
             }
 
+            // Calculate posterior estimate of the mean and uncertainty in the mean
             var Π = GetEquilibriumReturns(returns, out var Σ);
             ApplyBlackLittermanMasterFormula(ref Π, ref Σ, validP, Q);
 
+            // Create portfolio targets from the specified insights
             var W = _optimizer.Optimize(returns, Π, Σ);
 
             // FIX: Validate optimizer output length matches validSymbols count
             if (W.Length != validSymbols.Count)
             {
-                // Optimizer returned wrong dimension — fall back to equal weight
                 var equalW = 1.0 / validSymbols.Count;
                 W = validSymbols.Select(_ => equalW).ToArray();
             }
@@ -162,7 +186,11 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
             for (var i = 0; i < validSymbols.Count; i++)
             {
                 var weight = W[i];
-                if (_portfolioBias != PortfolioBias.LongShort
+                if (double.IsNaN(weight) || double.IsInfinity(weight))
+                {
+                    weight = 0;
+                }
+                else if (_portfolioBias != PortfolioBias.LongShort
                     && Math.Sign(weight) != (int)_portfolioBias)
                 {
                     weight = 0;
@@ -201,9 +229,16 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                     _symbolDataDict[symbol].Reset();
                     _symbolDataDict.Remove(symbol);
                 }
+                _symbolTimeZones.Remove(symbol);
             }
 
+            // initialize data for added securities (identical to LEAN native BL)
             var addedSymbols = changes.AddedSecurities.ToDictionary(x => x.Symbol, x => x.Exchange.TimeZone);
+            foreach (var kvp in addedSymbols)
+            {
+                _symbolTimeZones[kvp.Key] = kvp.Value;
+            }
+
             algorithm.History(addedSymbols.Keys, _lookback * _period, _resolution)
                 .PushThrough(bar =>
                 {
@@ -213,9 +248,59 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
                         symbolData = new ReturnsSymbolData(bar.Symbol, _lookback, _period);
                         _symbolDataDict.Add(bar.Symbol, symbolData);
                     }
-                    var utcTime = bar.EndTime.ConvertToUtc(addedSymbols[bar.Symbol]);
+                    var tz = addedSymbols[bar.Symbol];
+                    var utcTime = bar.EndTime.ConvertToUtc(tz);
                     symbolData.Update(utcTime, bar.Value);
                 });
+
+            // Check if we actually got data
+            if (_symbolDataDict.Count > 0)
+            {
+                _historyInitialized = true;
+            }
+        }
+
+        /// <summary>
+        /// One-time initialization: populate _symbolDataDict from history for active insight symbols.
+        /// Needed for A-share where data starts at algorithm start date, so OnSecuritiesChanged
+        /// gets no pre-start history. Called only once; after success, _historyInitialized = true.
+        /// </summary>
+        private void InitializeHistoryFromFeed(List<Insight> activeInsights)
+        {
+            var algo = Algorithm as QCAlgorithm;
+            if (algo == null) return;
+
+            var symbols = activeInsights.Select(x => x.Symbol).Distinct().ToList();
+            if (symbols.Count == 0) return;
+
+            try
+            {
+                algo.History(symbols, _lookback * _period, _resolution)
+                    .PushThrough(bar =>
+                    {
+                        ReturnsSymbolData symbolData;
+                        if (!_symbolDataDict.TryGetValue(bar.Symbol, out symbolData))
+                        {
+                            symbolData = new ReturnsSymbolData(bar.Symbol, _lookback, _period);
+                            _symbolDataDict.Add(bar.Symbol, symbolData);
+                        }
+                        DateTimeZone tz;
+                        if (_symbolTimeZones.TryGetValue(bar.Symbol, out tz))
+                        {
+                            var utcTime = bar.EndTime.ConvertToUtc(tz);
+                            symbolData.Update(utcTime, bar.Value);
+                        }
+                    });
+
+                if (_symbolDataDict.Count > 0)
+                {
+                    _historyInitialized = true;
+                }
+            }
+            catch
+            {
+                // Will retry on next rebalance
+            }
         }
 
         /// <summary>

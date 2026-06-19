@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -343,6 +345,8 @@ def run_due_tasks(
             }
             logger.error("task_error", name=task_name, error=str(exc))
         state.mark_finished(task_name, now=now, report=report)
+        # Write crawl metrics to InfluxDB for Grafana visualization
+        _write_crawl_metrics(task, report, config, now=now)
         reports.append(report)
     return reports
 
@@ -418,6 +422,128 @@ def main() -> int:
     logger.info("scheduler_complete", reports=len(reports))
     print(json.dumps({"reports": reports}, ensure_ascii=False, indent=2))
     return 0
+
+
+# ─── Crawl Metrics → InfluxDB ────────────────────────────────────────────────
+
+def _escape_influx_key(value: str) -> str:
+    """Escape InfluxDB tag key/value characters."""
+    return str(value).replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+
+
+def _infer_category(task: dict) -> str:
+    mode = str(task.get("mode") or "").strip()
+    if mode == "data_driven":
+        return "data_driven"
+    return str(task.get("category") or "strategy")
+
+
+def _write_crawl_metrics(
+    task: dict,
+    report: dict,
+    config: dict,
+    now: datetime | None = None,
+) -> None:
+    """Write soloquant_crawl_source measurement to InfluxDB after each crawl task."""
+    now = now or datetime.now(timezone.utc)
+    ts_ns = int(now.timestamp() * 1e9)
+
+    crawled = report.get("crawled") if isinstance(report.get("crawled"), dict) else {}
+    screened = report.get("screened") if isinstance(report.get("screened"), dict) else {}
+    decisions = report.get("decisions") or []
+
+    task_name = str(task.get("name") or task.get("category") or "unknown")
+    source_type = "searxng"
+    source_name = _escape_influx_key(task_name)
+    category = _escape_influx_key(_infer_category(task))
+    status = str(report.get("status") or "unknown")
+
+    # Compute lag and weight from decisions
+    lag_values = []
+    weight_values = []
+    for d in decisions:
+        if isinstance(d, dict):
+            ws = d.get("weight_score")
+            if ws is not None:
+                try:
+                    weight_values.append(float(ws))
+                except (ValueError, TypeError):
+                    pass
+            lag = d.get("lag_minutes")
+            if lag is not None:
+                try:
+                    lag_values.append(float(lag))
+                except (ValueError, TypeError):
+                    pass
+
+    avg_lag = round(sum(lag_values) / len(lag_values), 1) if lag_values else 0.0
+    max_lag = round(max(lag_values), 1) if lag_values else 0.0
+    avg_weight = round(sum(weight_values) / len(weight_values), 1) if weight_values else 0.0
+    max_weight = round(max(weight_values), 1) if weight_values else 0.0
+
+    status_code = {"ok": 1, "skipped": 0, "degraded": 2, "error": 3}.get(status, -1)
+
+    fields = [
+        f"crawled_count={crawled.get('written_count', 0)}i",
+        f"duplicate_count={crawled.get('duplicate_count', 0)}i",
+        f"rejected_count={crawled.get('rejected_count', 0)}i",
+        f"screened_count={screened.get('written_count', 0)}i",
+        f"avg_lag_minutes={avg_lag}",
+        f"max_lag_minutes={int(max_lag)}i",
+        f"avg_weight_score={avg_weight}",
+        f"max_weight_score={max_weight}",
+        f"status_code={status_code}i",
+        f'status_text="{status}"',
+    ]
+
+    line = f"soloquant_crawl_source,source_type={source_type},source_name={source_name},category={category} {','.join(fields)} {ts_ns}"
+
+    # Build item-level lines for soloquant_crawl_item
+    item_lines = []
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        title_hash = hashlib.md5(str(d.get("title") or "").encode()).hexdigest()[:6]
+        ws = d.get("weight_score", 0.0)
+        try:
+            ws = float(ws)
+        except (ValueError, TypeError):
+            ws = 0.0
+        weight_tier = "high" if ws >= 7 else ("medium" if ws >= 4 else "low")
+        lag = d.get("lag_minutes", 0)
+        try:
+            lag = int(float(lag))
+        except (ValueError, TypeError):
+            lag = 0
+        screened_val = 1 if d.get("screened", True) else 0
+        is_dup = 1 if d.get("is_duplicate", False) else 0
+        item_fields = [
+            f"lag_minutes={lag}i",
+            f"weight_score={round(ws, 1)}",
+            f"screened={screened_val}i",
+            f"is_duplicate={is_dup}i",
+        ]
+        item_line = f"soloquant_crawl_item,source_type={source_type},source_name={source_name},category={category},weight_tier={weight_tier},title_hash={title_hash} {','.join(item_fields)} {ts_ns}"
+        item_lines.append(item_line)
+
+    all_lines = [line] + item_lines
+
+    # Write to InfluxDB using orchestrator's helper
+    influx_config = config.get("influxdb") or {}
+    url = str(influx_config.get("url") or "http://localhost:8086")
+    org = str(influx_config.get("org") or "lean")
+    bucket = str(influx_config.get("bucket") or "quant")
+    token_env = str(influx_config.get("token-env-var") or "INFLUXDB_TOKEN")
+    token = os.getenv(token_env, "").strip()
+    if not token:
+        token = str(influx_config.get("token-default") or "").strip()
+    if not token:
+        return  # No InfluxDB token, skip silently
+
+    try:
+        orchestrator.write_lines_to_influx(all_lines, url, org, bucket, token)
+    except Exception:
+        pass  # Non-critical; don't fail crawl if InfluxDB write fails
 
 
 if __name__ == "__main__":

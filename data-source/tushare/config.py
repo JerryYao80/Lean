@@ -9,9 +9,9 @@ from datetime import datetime
 # =====================================================
 TUSHARE_TOKEN = os.getenv(
     "TUSHARE_TOKEN",
-    "c735900235cd005d4a32c7fad8ef9bec4dbec1e4df8030d49f3c050a53bf"
+    "eFyJJb1kIfjHor30N0zGk311M3jiUVs4I0nAAUiIO3jaEosJI9muUXifOBjCEz3TOlD0QMz3McDPM35VOdTqlC9"
 )
-TUSHARE_API_URL = "http://106.54.191.157:5000"
+TUSHARE_API_URL = "https://fastapic.stockai888.top"
 TUSHARE_TIMEOUT_SECONDS = int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "15"))
 
 # =====================================================

@@ -12,6 +12,7 @@
 import argparse
 import json
 import logging
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,9 @@ CORE_SCHEDULED_APIS = [
     "suspend_d",
     "stk_limit",
 ]
+LEAN_CONVERT_SCRIPT = Path(__file__).resolve().parent / "convert_to_lean.py"
+ETF_EXPORT_SCRIPT = Path(__file__).resolve().parents[2] / "Scripts" / "tushare_lean_export.py"
+TUSHARE_DATA_DIR = Path("/home/project/tushare-downloader/tushare_data")
 
 
 def parse_list_argument(value: Optional[str]) -> Optional[Sequence[str]]:
@@ -79,6 +83,8 @@ class IncrementalScheduler:
         cutoff_hour: int = 16,
         poll_seconds: int = 60,
         retry_interval_minutes: int = 30,
+        convert_to_lean: bool = True,
+        download_announcements: bool = True,
     ):
         self.api_names = list(api_names) if api_names else None
         self.categories = categories
@@ -90,6 +96,76 @@ class IncrementalScheduler:
         self.poll_seconds = poll_seconds
         self.retry_interval_minutes = retry_interval_minutes
         self.state = SchedulerState(SCHEDULER_STATE_FILE)
+        self.convert_to_lean = convert_to_lean
+        self.download_announcements = download_announcements
+
+    def _run_lean_conversion(self) -> None:
+        """After successful incremental download, convert parquet → LEAN CSV."""
+        if not self.convert_to_lean:
+            return
+
+        lean_data = str(Path(__file__).resolve().parents[2] / "Data")
+
+        # Step 1: A-share daily + factor_files + map_files
+        if LEAN_CONVERT_SCRIPT.exists():
+            LOGGER.info("Running convert_to_lean.py ...")
+            try:
+                result = subprocess.run(
+                    ["python3", str(LEAN_CONVERT_SCRIPT),
+                     "--tushare-data", str(TUSHARE_DATA_DIR),
+                     "--lean-data", lean_data],
+                    capture_output=True, text=True, timeout=1800,
+                )
+                if result.returncode == 0:
+                    LOGGER.info("convert_to_lean.py completed")
+                else:
+                    LOGGER.warning("convert_to_lean.py failed (exit=%d): %s",
+                                   result.returncode, result.stderr[:500])
+            except Exception as exc:
+                LOGGER.warning("convert_to_lean.py error: %s", exc)
+        else:
+            LOGGER.warning("convert_to_lean.py not found at %s", LEAN_CONVERT_SCRIPT)
+
+        # Step 2: ETF export
+        if ETF_EXPORT_SCRIPT.exists():
+            LOGGER.info("Running tushare_lean_export.py ...")
+            try:
+                result = subprocess.run(
+                    ["python3", str(ETF_EXPORT_SCRIPT)],
+                    capture_output=True, text=True, timeout=1800,
+                    cwd=str(ETF_EXPORT_SCRIPT.resolve().parents[1]),
+                )
+                if result.returncode == 0:
+                    LOGGER.info("tushare_lean_export.py completed")
+                else:
+                    LOGGER.warning("tushare_lean_export.py failed (exit=%d): %s",
+                                   result.returncode, result.stderr[:500])
+            except Exception as exc:
+                LOGGER.warning("tushare_lean_export.py error: %s", exc)
+
+    def _run_announcement_download(self) -> None:
+        """Download corporate cooperation announcements (non-critical)."""
+        if not self.download_announcements:
+            return
+
+        ANNOUNCEMENT_SCRIPT = Path(__file__).resolve().parent / "announcement_downloader.py"
+        if not ANNOUNCEMENT_SCRIPT.exists():
+            LOGGER.warning("announcement_downloader.py not found at %s", ANNOUNCEMENT_SCRIPT)
+            return
+
+        LOGGER.info("Running announcement_downloader.py ...")
+        try:
+            result = subprocess.run(
+                ["python3", str(ANNOUNCEMENT_SCRIPT), "--force"],
+                capture_output=True, text=True, timeout=600,
+            )
+            if result.returncode == 0:
+                LOGGER.info("announcement_downloader.py completed")
+            else:
+                LOGGER.warning("announcement_downloader.py failed (exit=%d): %s",
+                               result.returncode, result.stderr[:500])
+        except Exception as exc:
+            LOGGER.warning("announcement_downloader.py error: %s", exc)
 
     def _build_updater(self) -> IncrementalUpdater:
         return IncrementalUpdater(
@@ -152,9 +228,13 @@ class IncrementalScheduler:
 
             if status == "success":
                 LOGGER.info("Incremental run completed successfully for %s", target_date)
+                self._run_lean_conversion()
+                self._run_announcement_download()
                 return True
 
             LOGGER.warning("Incremental run finished with partial failures for %s", target_date)
+            self._run_lean_conversion()
+            self._run_announcement_download()
             return True
         except Exception as exc:
             LOGGER.exception("Incremental run crashed for %s", target_date)
@@ -183,6 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cutoff-hour", type=int, default=16, help="默认 16 点后触发")
     parser.add_argument("--poll-seconds", type=int, default=60, help="轮询间隔秒数")
     parser.add_argument("--retry-interval-minutes", type=int, default=30, help="失败后的最小重试间隔")
+    parser.add_argument("--no-convert", action="store_true", help="不执行 LEAN 格式转换")
+    parser.add_argument("--no-announce", action="store_true", help="不执行公告下载")
     return parser
 
 
@@ -199,6 +281,8 @@ def main() -> None:
         cutoff_hour=args.cutoff_hour,
         poll_seconds=args.poll_seconds,
         retry_interval_minutes=args.retry_interval_minutes,
+        convert_to_lean=not args.no_convert,
+        download_announcements=not args.no_announce,
     )
     scheduler.run_forever()
 

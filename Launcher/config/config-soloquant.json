@@ -34,6 +34,11 @@
     "field-mapping-path": "/home/project/tushare-downloader/tushare_field_mapping.json",
     "field-cache-root": "local_data/soloquant-field-cache"
   },
+  "prefect": {
+    "api-url": "http://localhost:4200/api",
+    "work-pool": "soloquant-pool",
+    "server-port": 4200
+  },
   "pipeline": {
     "poll-seconds": 300,
     "crawl-interval-seconds": 28800,

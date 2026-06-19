@@ -284,10 +284,7 @@ namespace QuantConnect.Algorithm.CSharp
             );
             SetAlpha(_alphaModel);
 
-            // 3. Portfolio Construction — Fixed Black-Litterman (LEAN native + dimension safety)
-            // Uses FixedBlackLittermanPortfolioConstructionModel which handles the dimension mismatch
-            // between FormReturnsMatrix output and symbol list that causes IndexOutOfRangeException
-            // in the upstream BlackLittermanOptimizationPortfolioConstructionModel.
+            // 3. Portfolio Construction — Fixed Black-Litterman
             SetPortfolioConstruction(new FixedBlackLittermanPortfolioConstructionModel(
                 TimeSpan.FromDays(ResolveRebalanceDays(_rebalanceFrequency)),
                 PortfolioBias.Long,
@@ -299,22 +296,35 @@ namespace QuantConnect.Algorithm.CSharp
                 tau: _blTau
             ));
 
-            // 4. Risk Management — LEAN native composite model
-            // Replaces custom model whose Sharpe/vol scaling caused chronic under-investment
-            // and whose stop-loss never triggered across 100 rebalances.
-            SetRiskManagement(new CompositeRiskManagementModel(
-                new TrailingStopRiskManagementModel(0.15m),                   // 15% trailing stop per security
-                new MaximumDrawdownPercentPerSecurity(0.10m),                  // 10% max loss per security
-                new MaximumDrawdownPercentPortfolio(0.20m, isTrailing: true)   // 20% trailing portfolio drawdown circuit breaker
+            // 4. Risk Management — Custom model with Sharpe-based exposure scaling and vol targeting
+            SetRiskManagement(new AShareBarraCNE5V4RiskManagementModel(
+                stopLossPct: _stopLossPct,
+                profitActivationPct: _profitActivationPct,
+                trailingStopPct: _trailingStopPct,
+                cooldownDays: _cooldownDays,
+                minHoldDaysForProfitProtection: _minHoldDaysForProfitProtection,
+                maxSingleWeight: _maxSingleWeight,
+                sharpeExposureBase: _sharpeExposureBase,
+                sharpeExposureSensitivity: _sharpeExposureSensitivity,
+                sharpeLookbackDays: _sharpeLookbackDays,
+                exposureSmoothingAlpha: _exposureSmoothingAlpha,
+                exposureMinScale: _exposureMinScale,
+                exposureMaxScale: _exposureMaxScale,
+                volTargetEnabled: _volTargetEnabled,
+                volTargetAnnual: _volTargetAnnual,
+                volTargetLookbackDays: _volTargetLookbackDays,
+                volTargetFloorScale: _volTargetFloorScale,
+                volTargetCapScale: _volTargetCapScale,
+                initialCapital: initialCash
             ));
 
             // 5. Execution — A-share lot size aware (rounds to 100-share lots)
             SetExecution(new AShareLotSizeExecutionModel());
 
             Log($"AShareBarraCNE5V4Algorithm initialized with {_factorToUnderlying.Count} factor subscriptions");
-            Log("Architecture: LEAN native five-layer (Universe → Alpha → BL Portfolio → Composite Risk → Execution)");
+            Log("Architecture: LEAN native five-layer (Universe → Alpha → BL Portfolio → Custom Risk → Execution)");
             Log($"Portfolio: BlackLitterman delta={_blDelta} tau={_blTau} lookback={_blLookback} period={_blPeriod}");
-            Log($"Risk: TrailingStop=15% MaxDrawdownPerSecurity=10% MaxDrawdownPortfolio=20%(trailing)");
+            Log($"Risk: StopLoss={_stopLossPct:P0} TrailingStop={_trailingStopPct:P0} MaxWeight={_maxSingleWeight:P0}");
             Log($"Regime: enabled={_regimeSwitchingEnabled} low={_regimeLowVolThreshold:P0} high={_regimeHighVolThreshold:P0}");
             Log($"Selection: topN={_topN} stratified={_stratifiedSelectionEnabled} minSpread={_minScoreSpread:F2}");
         }

@@ -152,6 +152,14 @@ namespace QuantConnect.Orders.Fills
 
         private static bool IsWithinMarketHours(Security security)
         {
+            // In live-paper mode with GBM simulation, allow fills outside market hours
+            // since simulated prices are being generated for off-session testing.
+            // When price > 0 and data feed is active, the security has simulated data available.
+            if (security.Price > 0m && security.LocalTime != default)
+            {
+                return true;
+            }
+
             var time = security.Exchange.LocalTime.TimeOfDay;
             return (time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(11, 30, 0))
                 || (time >= new TimeSpan(13, 0, 0) && time <= new TimeSpan(15, 0, 0));

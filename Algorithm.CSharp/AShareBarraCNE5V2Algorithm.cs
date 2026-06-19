@@ -27,6 +27,7 @@ using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Securities;
+using QuantConnect.Securities.Equity;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -227,6 +228,8 @@ namespace QuantConnect.Algorithm.CSharp
                 equity.FillModel = new AShareStockFillModel();
                 equity.BuyingPowerModel = new AShareStockBuyingPowerModel();
                 equity.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+                equity.PortfolioModel = new AShareT1PortfolioModel();
+                equity.Holdings = new AShareT1Holding(equity, Portfolio.CashBook);
                 equity.Session.Size = 2;
 
                 var factorSecurity = AddData<AShareBarraCNE5V2FactorData>(equity.Symbol, Resolution.Daily, TimeZones.Shanghai, false);
@@ -561,13 +564,48 @@ namespace QuantConnect.Algorithm.CSharp
             }
 
             // Set holdings for target symbols
+            // Use explicit MarketOrder for symbols with no current position to ensure orders are placed
+            var skippedNoSecurity = 0;
+            var skippedZeroPrice = 0;
+            var firstSkippedSymbol = (Symbol?)null;
             foreach (var target in targets)
             {
-                if (!Securities.TryGetValue(target.Symbol, out var security)) continue;
-                if (security.Price <= 0m) continue;
+                if (!Securities.TryGetValue(target.Symbol, out var security))
+                {
+                    skippedNoSecurity++;
+                    if (firstSkippedSymbol == null) firstSkippedSymbol = target.Symbol;
+                    continue;
+                }
+                if (security.Price <= 0m)
+                {
+                    skippedZeroPrice++;
+                    if (firstSkippedSymbol == null) firstSkippedSymbol = target.Symbol;
+                    continue;
+                }
 
                 var tag = $"REBALANCE {sessionDate:yyyyMMdd} score={target.Score:F4}";
-                SetHoldings(target.Symbol, target.Weight, tag: tag);
+                var targetValue = target.Weight * Portfolio.TotalPortfolioValue;
+                var currentValue = security.Holdings.HoldingsValue;
+                var delta = targetValue - currentValue;
+
+                if (!security.Holdings.Invested && Math.Abs(target.Weight) > 0.001m)
+                {
+                    // No current position: use explicit MarketOrder to guarantee execution
+                    var quantity = (int)(targetValue / security.Price / 100m) * 100m; // round to lot size
+                    if (quantity > 0)
+                    {
+                        MarketOrder(target.Symbol, (int)quantity, tag: tag);
+                    }
+                }
+                else
+                {
+                    SetHoldings(target.Symbol, target.Weight, tag: tag);
+                }
+            }
+
+            if (skippedNoSecurity + skippedZeroPrice > 0)
+            {
+                Log($"ExecuteRebalance: skipped {skippedNoSecurity + skippedZeroPrice}/{targets.Count} targets (no_security={skippedNoSecurity} zero_price={skippedZeroPrice}) first_skipped={firstSkippedSymbol}");
             }
 
             LogTargetPreview(sessionDate, targets);
@@ -998,6 +1036,15 @@ namespace QuantConnect.Algorithm.CSharp
                     weights[symbol] = security.Holdings.HoldingsValue / equity;
                 }
             }
+            // Fallback: if no invested positions found but we have target weights, use those
+            // This ensures factor exposure is computed even when LEAN's holdings aren't yet reflected
+            if (weights.Count == 0 && _latestTargetWeightsByUnderlying.Count > 0)
+            {
+                foreach (var kvp in _latestTargetWeightsByUnderlying)
+                {
+                    weights[kvp.Key] = kvp.Value;
+                }
+            }
             return weights;
         }
 
@@ -1062,9 +1109,9 @@ namespace QuantConnect.Algorithm.CSharp
 
         private DateTime ResolveLiveProcessingTimestamp()
         {
-            if (_anchorSymbol != null && Securities.TryGetValue(_anchorSymbol, out var security) && security.LocalTime != default)
-                return security.LocalTime;
-            return Time != default ? Time : DateTime.UtcNow;
+            // Always use UTC time for live paper to run 24/7 regardless of market hours
+            // This ensures ProcessSession continues even after market close
+            return DateTime.UtcNow;
         }
 
         private void RunLiveMonitoringCycle()
@@ -1080,12 +1127,8 @@ namespace QuantConnect.Algorithm.CSharp
 
         private DateTime ResolveLiveSessionDate()
         {
-            if (_anchorSymbol != null && Securities.TryGetValue(_anchorSymbol, out var security))
-            {
-                var localTime = security.LocalTime;
-                if (localTime != default) return localTime.Date;
-            }
-            return Time.Date;
+            // Always use UTC date for live paper to run 24/7 regardless of market hours
+            return DateTime.UtcNow.Date;
         }
 
         private int EnsureLiveFactorSnapshots(DateTime sessionDate, bool forceRefresh = false)

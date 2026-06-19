@@ -190,7 +190,9 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true,
+            "sortable": true
           },
           "mappings": [],
           "thresholds": {
@@ -203,11 +205,204 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "symbol"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "股票代码"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "quantity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "数量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_price"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "均价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "market_price"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "现价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "市值"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pnl"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "浮盈亏"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": -999999
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.01
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pnl_pct"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "盈亏%"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": -999999
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.01
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 8
       },
@@ -223,7 +418,12 @@
           "show": false
         },
         "showHeader": true,
-        "sortBy": []
+        "sortBy": [
+          {
+            "displayName": "市值",
+            "desc": true
+          }
+        ]
       },
       "pluginVersion": "10.2.0",
       "targets": [
@@ -232,10 +432,11 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(*) FROM \"lean_holding\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live'",
+          "query": "SELECT last(\"quantity\") AS \"quantity\", last(\"average_price\") AS \"avg_price\", last(\"market_price\") AS \"market_price\", last(\"holdings_value\") AS \"value\", last(\"unrealized_profit\") AS \"pnl\", last(\"unrealized_profit_percent\") AS \"pnl_pct\" FROM \"lean_holding\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"quantity\" > 0 GROUP BY \"symbol\"",
           "refId": "A",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "resultFormat": "table"
         }
       ],
       "title": "Current Positions",
@@ -256,7 +457,9 @@
             "cellOptions": {
               "type": "auto"
             },
-            "inspect": false
+            "inspect": false,
+            "filterable": true,
+            "sortable": true
           },
           "mappings": [],
           "thresholds": {
@@ -269,13 +472,214 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "symbol"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "股票代码"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "direction"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              },
+              {
+                "id": "displayName",
+                "value": "方向"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Buy": {
+                        "color": "green",
+                        "text": "买"
+                      },
+                      "Sell": {
+                        "color": "red",
+                        "text": "卖"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "market"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 50
+              },
+              {
+                "id": "displayName",
+                "value": "市场"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "sse": {
+                        "color": "blue",
+                        "text": "SH"
+                      },
+                      "szse": {
+                        "color": "green",
+                        "text": "SZ"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "order_qty"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "委托量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fill_qty"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "成交量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fill_price"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "成交价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fee"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "手续费"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "order_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "订单号"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "成交时间"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 8
+        "w": 24,
+        "x": 0,
+        "y": 16
       },
       "id": 4,
       "options": {
@@ -289,7 +693,12 @@
           "show": false
         },
         "showHeader": true,
-        "sortBy": []
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "订单号"
+          }
+        ]
       },
       "pluginVersion": "10.2.0",
       "targets": [
@@ -298,10 +707,11 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT * FROM \"lean_order\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 20",
+          "query": "SELECT \"fill_quantity\" AS \"fill_qty\", \"fill_price\" AS \"fill_price\", \"fee_amount\" AS \"fee\", \"quantity\" AS \"order_qty\", \"order_id\" AS \"order_id\" FROM \"lean_order_event\" WHERE time > 0 AND \"algorithm_id\" = '${algorithm_id}' AND \"mode\" = 'live' AND \"status\" = 'Filled' ORDER BY time DESC LIMIT 50",
           "refId": "A",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "resultFormat": "table"
         }
       ],
       "title": "Order Flow",
@@ -341,7 +751,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 24
       },
       "id": 5,
       "options": {
@@ -409,7 +819,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 16
+        "y": 24
       },
       "id": 6,
       "options": {
@@ -470,7 +880,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 16
+        "y": 24
       },
       "id": 7,
       "options": {
@@ -561,7 +971,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 28
       },
       "id": 8,
       "options": {
@@ -597,7 +1007,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "id": 50,
       "panels": [],
@@ -662,7 +1072,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 25
+        "y": 33
       },
       "id": 51,
       "options": {
@@ -683,7 +1093,7 @@
       },
       "targets": [
         {
-          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval) fill(none)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
@@ -724,7 +1134,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 25
+        "y": 33
       },
       "id": 52,
       "options": {
@@ -814,7 +1224,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 33
+        "y": 41
       },
       "id": 53,
       "options": {
@@ -833,7 +1243,7 @@
       },
       "targets": [
         {
-          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval) fill(none)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
@@ -888,7 +1298,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 33
+        "y": 41
       },
       "id": 54,
       "options": {
@@ -960,7 +1370,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "id": 55,
       "options": {
@@ -1031,7 +1441,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 41
+        "y": 49
       },
       "id": 56,
       "options": {
@@ -1094,7 +1504,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 41
+        "y": 49
       },
       "id": 57,
       "options": {
@@ -1163,7 +1573,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 41
+        "y": 49
       },
       "id": 58,
       "options": {
@@ -1229,7 +1639,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 53
       },
       "id": 59,
       "options": {
@@ -1271,7 +1681,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 61
       },
       "id": 80,
       "panels": [],
@@ -1336,7 +1746,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 54
+        "y": 62
       },
       "id": 81,
       "options": {
@@ -1357,7 +1767,7 @@
       },
       "targets": [
         {
-          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "query": "SELECT mean(\"equity\") FROM \"barra_cne5v2_1_daily\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval) fill(none)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
@@ -1398,7 +1808,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 54
+        "y": 62
       },
       "id": 82,
       "options": {
@@ -1488,7 +1898,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 62
+        "y": 70
       },
       "id": 83,
       "options": {
@@ -1507,7 +1917,7 @@
       },
       "targets": [
         {
-          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_1_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "query": "SELECT mean(\"beta\"), mean(\"momentum\"), mean(\"size\"), mean(\"earnyld\"), mean(\"resvol\"), mean(\"growth\"), mean(\"btop\"), mean(\"leverage\"), mean(\"liquidity\"), mean(\"nlsize\"), mean(\"moneyflow\"), mean(\"quality\"), mean(\"northbound\"), mean(\"margin\"), mean(\"chipcost\") FROM \"barra_cne5v2_1_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = 'AShareBarraCNE5V2_1Algorithm' AND \"mode\" = 'live' GROUP BY time($__interval) fill(none)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
@@ -1562,7 +1972,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 62
+        "y": 70
       },
       "id": 84,
       "options": {
@@ -1634,7 +2044,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 70
+        "y": 78
       },
       "id": 85,
       "options": {
@@ -1705,7 +2115,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 70
+        "y": 78
       },
       "id": 86,
       "options": {
@@ -1768,7 +2178,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 70
+        "y": 78
       },
       "id": 87,
       "options": {
@@ -1837,7 +2247,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 70
+        "y": 78
       },
       "id": 88,
       "options": {
@@ -1903,7 +2313,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 82
       },
       "id": 89,
       "options": {

@@ -32,7 +32,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -82,7 +82,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -132,7 +132,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -182,7 +182,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -295,17 +295,6 @@
           "queryType": "influxql",
           "rawQuery": true,
           "alias": "权益"
-        },
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "lean-influxdb"
-          },
-          "query": "SELECT \"value\" FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"chart\" = 'Benchmark'",
-          "refId": "B",
-          "queryType": "influxql",
-          "rawQuery": true,
-          "alias": "基准"
         }
       ]
     },
@@ -324,7 +313,7 @@
             "fixedColor": "red",
             "mode": "fixed"
           },
-          "unit": "short"
+          "unit": "percent"
         },
         "overrides": []
       },
@@ -356,11 +345,11 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"value\" FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"chart\" = 'Drawdown'",
+          "query": "SELECT \"drawdown\" FROM \"barra_cne5_daily\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
-          "alias": "Drawdown"
+          "alias": "Drawdown %"
         }
       ]
     },
@@ -512,7 +501,7 @@
           "mode": "multi"
         }
       },
-      "title": "持仓数量 / 证券数量",
+      "title": "持仓数量 / 股票数量",
       "type": "timeseries",
       "targets": [
         {
@@ -520,22 +509,22 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"holdings_count\" FROM \"lean_portfolio\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "query": "SELECT \"holdings\" FROM \"barra_cne5_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true,
-          "alias": "holdings_count"
+          "alias": "持仓数量"
         },
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"security_count\" FROM \"lean_portfolio\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "query": "SELECT \"total_shares\" FROM \"barra_cne5_daily\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
           "refId": "B",
           "queryType": "influxql",
           "rawQuery": true,
-          "alias": "security_count"
+          "alias": "股票数量"
         }
       ]
     },
@@ -558,9 +547,27 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "custom": {
-            "align": "left",
-            "filterable": true
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "sortable": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           }
         },
         "overrides": [
@@ -572,7 +579,11 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 80
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "股票代码"
               }
             ]
           },
@@ -584,19 +595,35 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 80
+                "value": 60
+              },
+              {
+                "id": "displayName",
+                "value": "数量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "average_price"
+              "options": "avg_price"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "均价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
               }
             ]
           },
@@ -608,31 +635,249 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 90
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "现价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "unrealized_profit"
+              "options": "value"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "市值"
+              },
+              {
+                "id": "decimals",
+                "value": 0
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "market_value"
+              "options": "pnl"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "浮盈亏"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": -999999
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.01
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pnl_pct"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              },
+              {
+                "id": "displayName",
+                "value": "盈亏%"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": -999999
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.01
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cost"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "持仓成本"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "net_profit"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "净利润"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": -999999
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.01
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_fees"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "手续费"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sale_vol"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "卖出金额"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -646,11 +891,20 @@
       },
       "id": 30,
       "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
           {
             "desc": true,
-            "displayName": "market_value"
+            "displayName": "市值"
           }
         ]
       },
@@ -662,10 +916,23 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"quantity\"), last(\"average_price\"), last(\"market_price\"), last(\"unrealized_profit\"), last(\"unrealized_profit_percent\"), last(\"market_value\"), last(\"leverage\") FROM \"lean_holding\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' GROUP BY \"symbol\"",
-          "refId": "A",
+          "query": "SELECT last(\"quantity\") AS \"quantity\", last(\"average_price\") AS \"avg_price\", last(\"market_price\") AS \"market_price\", last(\"holdings_value\") AS \"value\", last(\"unrealized_profit\") AS \"pnl\", last(\"unrealized_profit_percent\") AS \"pnl_pct\", last(\"holdings_cost\") AS \"cost\", last(\"net_profit\") AS \"net_profit\", last(\"total_fees\") AS \"total_fees\", last(\"total_sale_volume\") AS \"sale_vol\" FROM \"barra_cne5_holding_detail\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"quantity\" > 0 GROUP BY \"symbol\"",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "time": true
+            },
+            "indexByName": {},
+            "renameByName": {}
+          }
         }
       ]
     },
@@ -688,9 +955,27 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "custom": {
-            "align": "left",
-            "filterable": true
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "sortable": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           }
         },
         "overrides": [
@@ -702,7 +987,11 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 80
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "股票代码"
               }
             ]
           },
@@ -715,18 +1004,178 @@
               {
                 "id": "custom.width",
                 "value": 60
+              },
+              {
+                "id": "displayName",
+                "value": "方向"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Buy": {
+                        "color": "green",
+                        "text": "买"
+                      },
+                      "Sell": {
+                        "color": "red",
+                        "text": "卖"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "status"
+              "options": "market"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 50
+              },
+              {
+                "id": "displayName",
+                "value": "市场"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "sse": {
+                        "color": "blue",
+                        "text": "SH"
+                      },
+                      "szse": {
+                        "color": "green",
+                        "text": "SZ"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "order_qty"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "委托量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fill_qty"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "成交量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fill_price"
             },
             "properties": [
               {
                 "id": "custom.width",
                 "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "成交价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fee"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "手续费"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "order_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "订单号"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "成交时间"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
               }
             ]
           }
@@ -740,11 +1189,20 @@
       },
       "id": 40,
       "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
           {
             "desc": true,
-            "displayName": "Time"
+            "displayName": "订单号"
           }
         ]
       },
@@ -756,10 +1214,11 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"symbol\", \"direction\", \"status\", \"order_type\", \"fill_quantity\", \"fill_price\", \"order_fee\" FROM \"lean_order_event\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 100",
-          "refId": "A",
+          "query": "SELECT \"fill_quantity\" AS \"fill_qty\", \"fill_price\" AS \"fill_price\", \"fee_amount\" AS \"fee\", \"quantity\" AS \"order_qty\", \"order_id\" AS \"order_id\" FROM \"lean_order_event\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"status\" = 'Filled' GROUP BY \"symbol\", \"direction\" ORDER BY time DESC LIMIT 50",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "table"
         }
       ]
     },
@@ -785,23 +1244,26 @@
           "color": {
             "mode": "thresholds"
           },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "red",
-                "value": null
+                "value": -999999
               },
               {
-                "color": "yellow",
+                "color": "text",
                 "value": 0
               },
               {
                 "color": "green",
-                "value": 1
+                "value": 0.01
               }
             ]
-          }
+          },
+          "unit": "percent",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -815,22 +1277,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "Sharpe Ratio",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Sharpe Ratio'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Return'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "累计收益率",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -842,24 +1315,26 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "percent",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 50
-              },
-              {
                 "color": "red",
-                "value": 70
+                "value": -999999
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.01
               }
             ]
-          }
+          },
+          "unit": "currencyCNY",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -873,22 +1348,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "最大回撤",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Drawdown'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Net Profit'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "净利润",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -900,24 +1386,18 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "percent",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.5
-              },
-              {
                 "color": "green",
-                "value": 0.6
+                "value": null
               }
             ]
-          }
+          },
+          "unit": "currencyCNY",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -931,22 +1411,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "胜率",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Win Rate'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Total Fees'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "总手续费",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -958,24 +1449,17 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "percent",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0
-              },
-              {
                 "color": "green",
-                "value": 10
+                "value": null
               }
             ]
-          }
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -989,22 +1473,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "净利润率",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Net Profit'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Kelly'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Kelly比例",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -1016,24 +1511,17 @@
           "color": {
             "mode": "thresholds"
           },
-          "unit": "currencyCNY",
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10000
-              },
-              {
-                "color": "red",
-                "value": 50000
               }
             ]
-          }
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -1047,22 +1535,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "总手续费",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Total Fees'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Target Exp'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "目标暴露度",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -1074,16 +1573,17 @@
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 0,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "green",
                 "value": null
               }
             ]
-          }
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -1097,22 +1597,33 @@
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center"
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "总订单数",
-      "type": "stat",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"metric\" = 'Total Orders'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Score Spr'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "Sharpe评分",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -1121,50 +1632,61 @@
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "align": "left",
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "metric"
-            },
-            "properties": [
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "id": "custom.width",
-                "value": 200
+                "color": "green",
+                "value": null
               }
             ]
-          }
-        ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 4,
+        "w": 4,
         "x": 0,
         "y": 47
       },
       "id": 56,
       "options": {
-        "showHeader": true
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "运行统计详情",
-      "type": "table",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT last(\"numeric_value\"), last(\"text_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' GROUP BY \"metric\"",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Probabilistic Sharpe Ratio'",
           "queryType": "influxql",
-          "rawQuery": true
+          "rawQuery": true,
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "概率化Sharpe",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -1173,90 +1695,629 @@
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "lineWidth": 2
+          "color": {
+            "mode": "thresholds"
           },
-          "unit": "short"
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Exposure"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "purple",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Portfolio Turnover"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "orange",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
+        "h": 4,
+        "w": 4,
+        "x": 4,
         "y": 47
       },
       "id": 57,
       "options": {
-        "legend": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
           "calcs": [
-            "mean",
-            "last"
+            "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom"
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi"
-        }
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "title": "暴露度 / 换手率",
-      "type": "timeseries",
+      "pluginVersion": "10.2.0",
       "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"value\" FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"chart\" = 'Exposure' AND \"series\" = 'Base - Long Ratio'",
-          "refId": "A",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Holdings'",
           "queryType": "influxql",
           "rawQuery": true,
-          "alias": "Exposure"
+          "refId": "A"
+        }
+      ],
+      "title": "持仓标记",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
         },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 47
+      },
+      "id": 58,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
         {
           "datasource": {
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"value\" FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"chart\" = 'Portfolio Turnover'",
-          "refId": "B",
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Signals'",
           "queryType": "influxql",
           "rawQuery": true,
-          "alias": "Portfolio Turnover"
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "信号计数",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 47
+      },
+      "id": 59,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Fees'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "当期手续费",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": -999999
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
+            ]
+          },
+          "unit": "currencyCNY",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 47
+      },
+      "id": 60,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Unrealized'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "未实现盈亏",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 47
+      },
+      "id": 61,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Volume'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "成交量",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 51
+      },
+      "id": 62,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'MC'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Monte Carlo",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 51
+      },
+      "id": 63,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'OOS'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "样本外",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 51
+      },
+      "id": 64,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'OOS Period'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "OOS周期",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 51
+      },
+      "id": 65,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"numeric_value\") FROM \"lean_metric\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"category\" = 'runtime' AND \"metric\" = 'Last Session'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "最后会话",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyCNY",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 51
+      },
+      "id": 66,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"value\") FROM \"lean_chart\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"chart\" = 'Strategy Equity' AND \"series\" = 'Equity'",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "策略权益",
+      "type": "stat"
     },
     {
       "collapsed": false,
@@ -1290,11 +2351,11 @@
       },
       "gridPos": {
         "h": 10,
-        "w": 16,
+        "w": 24,
         "x": 0,
         "y": 56
       },
-      "id": 60,
+      "id": 160,
       "options": {
         "legend": {
           "calcs": [
@@ -1316,64 +2377,7 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"barra_beta\", \"barra_nlsize\", \"barra_resvol\", \"barra_liquidity\", \"barra_momentum\", \"barra_value\", \"barra_quality\", \"size_tilt\", \"low_volatility\", \"liquidity_premium\", \"chip_concentration\", \"rate_sensitivity\", \"money_flow\", \"chip_cost\", \"margin_signal\", \"northbound_flow\" FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
-          "refId": "A",
-          "queryType": "influxql",
-          "rawQuery": true
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "lean-influxdb"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "left"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Time"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 180
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 8,
-        "x": 16,
-        "y": 56
-      },
-      "id": 61,
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "desc": true,
-            "displayName": "Time"
-          }
-        ]
-      },
-      "title": "最新因子暴露度",
-      "type": "table",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "lean-influxdb"
-          },
-          "query": "SELECT last(\"barra_beta\"), last(\"barra_nlsize\"), last(\"barra_resvol\"), last(\"barra_liquidity\"), last(\"barra_momentum\"), last(\"barra_value\"), last(\"barra_quality\"), last(\"size_tilt\"), last(\"low_volatility\"), last(\"liquidity_premium\"), last(\"chip_concentration\"), last(\"rate_sensitivity\"), last(\"money_flow\"), last(\"chip_cost\"), last(\"margin_signal\"), last(\"northbound_flow\") FROM \"lean_family_exposure\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "query": "SELECT mean(\"beta\") AS \"Beta\", mean(\"momentum\") AS \"动量\", mean(\"size\") AS \"规模\", mean(\"earnyld\") AS \"盈利收益率\", mean(\"resvol\") AS \"残差波动率\", mean(\"growth\") AS \"成长性\", mean(\"btop\") AS \"价值\", mean(\"leverage\") AS \"杠杆\", mean(\"liquidity\") AS \"流动性\", mean(\"nlsize\") AS \"非线性规模\", mean(\"moneyflow\") AS \"资金流\", mean(\"quality\") AS \"质量\", mean(\"northbound\") AS \"北向资金\", mean(\"margin\") AS \"边际信号\", mean(\"chipcost\") AS \"筹码成本\" FROM \"barra_cne5_factor_exposure\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' GROUP BY time(1m)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true
@@ -1400,8 +2404,23 @@
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "left",
-            "filterable": true
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "sortable": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           }
         },
         "overrides": [
@@ -1414,78 +2433,140 @@
               {
                 "id": "custom.width",
                 "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "股票代码"
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "action"
+              "options": "direction"
             },
             "properties": [
               {
                 "id": "custom.width",
                 "value": 60
+              },
+              {
+                "id": "displayName",
+                "value": "方向"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Buy": {
+                        "color": "green",
+                        "text": "买"
+                      },
+                      "Sell": {
+                        "color": "red",
+                        "text": "卖"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "quantity"
+              "options": "fill_qty"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "成交量"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fill_price"
             },
             "properties": [
               {
                 "id": "custom.width",
                 "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "成交价"
+              },
+              {
+                "id": "decimals",
+                "value": 2
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "price"
+              "options": "fee"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 80
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "手续费"
+              },
+              {
+                "id": "decimals",
+                "value": 2
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "trade_value"
+              "options": "order_id"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 70
+              },
+              {
+                "id": "displayName",
+                "value": "订单号"
+              },
+              {
+                "id": "decimals",
+                "value": 0
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "score"
+              "options": "time"
             },
             "properties": [
               {
-                "id": "custom.width",
-                "value": 80
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "reason"
-            },
-            "properties": [
+                "id": "displayName",
+                "value": "成交时间"
+              },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 160
               }
             ]
           }
@@ -1499,11 +2580,20 @@
       },
       "id": 70,
       "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
           {
             "desc": true,
-            "displayName": "Time"
+            "displayName": "成交时间"
           }
         ]
       },
@@ -1515,7 +2605,482 @@
             "type": "influxdb",
             "uid": "lean-influxdb"
           },
-          "query": "SELECT \"symbol\", \"action\", \"quantity\", \"price\", \"trade_value\", \"fee\", \"score\", \"reason\" FROM \"lean_mf_order\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' ORDER BY time DESC LIMIT 100",
+          "query": "SELECT \"fill_quantity\" AS \"fill_qty\", \"fill_price\" AS \"fill_price\", \"fee_amount\" AS \"fee\", \"order_id\" AS \"order_id\" FROM \"lean_order_event\" WHERE time > 0 AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' AND \"status\" = 'Filled' GROUP BY \"symbol\", \"direction\" ORDER BY time DESC LIMIT 100",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "resultFormat": "table"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      },
+      "id": 80,
+      "title": "衰减检测",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": -0.5
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 76
+      },
+      "id": 81,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "title": "Sharpe 衰减",
+      "description": "短期(1h) Sharpe - 长期 Sharpe，负值表示性能衰减",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"sharpe_decay\") FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": -1
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 76
+      },
+      "id": 82,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "title": "收益率衰减",
+      "description": "短期(1h) 收益率 - 长期收益率，负值表示性能衰减",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"return_decay\") FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": -3
+              },
+              {
+                "color": "red",
+                "value": -7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 76
+      },
+      "id": 83,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "title": "当前回撤",
+      "description": "当前权益相对历史峰值的回撤百分比",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"drawdown\") FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": -5
+              },
+              {
+                "color": "red",
+                "value": -10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 76
+      },
+      "id": 84,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "title": "最大回撤",
+      "description": "历史最大回撤百分比",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"max_drawdown\") FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sharpe_1h"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "1小时"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sharpe_6h"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "6小时"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sharpe_all"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "全周期"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "id": 85,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "滚动 Sharpe Ratio",
+      "description": "不同时间窗口的年化 Sharpe Ratio，短期下降表示策略衰减",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"sharpe_1h\") AS \"sharpe_1h\", mean(\"sharpe_6h\") AS \"sharpe_6h\", mean(\"sharpe_all\") AS \"sharpe_all\" FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' GROUP BY time($__interval)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "decimals": 2,
+          "unit": "percent"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "return_1h"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "1小时"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "return_6h"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "6小时"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "return_all"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "全周期"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 80
+      },
+      "id": 86,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "滚动收益率",
+      "description": "不同时间窗口的累计收益率(%)，短期低于长期表示策略衰减",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"return_1h\") AS \"return_1h\", mean(\"return_6h\") AS \"return_6h\", mean(\"return_all\") AS \"return_all\" FROM \"barra_cne5_decay\" WHERE $timeFilter AND \"algorithm_id\" = '$algorithm_id' AND \"mode\" = 'live' GROUP BY time($__interval)",
           "refId": "A",
           "queryType": "influxql",
           "rawQuery": true
@@ -1560,7 +3125,6 @@
   },
   "timepicker": {},
   "timezone": "Asia/Shanghai",
-  "title": "Live Paper Trading",
   "uid": "barra-cne5-live-paper",
   "version": 1,
   "weekStart": "monday"

@@ -27,6 +27,7 @@ using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Securities;
+using QuantConnect.Securities.Equity;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -305,6 +306,8 @@ namespace QuantConnect.Algorithm.CSharp
                 equity.FillModel = new AShareStockFillModel();
                 equity.BuyingPowerModel = new AShareStockBuyingPowerModel();
                 equity.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+                equity.PortfolioModel = new AShareT1PortfolioModel();
+                equity.Holdings = new AShareT1Holding(equity, Portfolio.CashBook);
                 equity.Session.Size = 2;
 
                 var factorSecurity = AddData<AShareBarraCNE5V2FactorData>(equity.Symbol, Resolution.Daily, TimeZones.Shanghai, false);
@@ -718,6 +721,23 @@ namespace QuantConnect.Algorithm.CSharp
             SetRuntimeStatistic("OOS Period", _inOosTestPeriod ? "test" : "training");
             SetRuntimeStatistic("Regime", _currentRegime ?? "mid_vol");
             SetRuntimeStatistic("VolScale", _currentVolScale.ToString("F2", CultureInfo.InvariantCulture));
+
+            SetRuntimeStatistic("Return", (Portfolio.TotalPortfolioValue / _previousEquity - 1m).ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.beta", exposure["beta"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.momentum", exposure["momentum"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.size", exposure["size"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.earnyld", exposure["earnyld"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.resvol", exposure["resvol"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.growth", exposure["growth"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.btop", exposure["btop"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.leverage", exposure["leverage"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.liquidity", exposure["liquidity"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.nlsize", exposure["nlsize"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.moneyflow", exposure["moneyflow"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.quality", exposure["quality"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.northbound", exposure["northbound"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.margin", exposure["margin"].ToString("F4", CultureInfo.InvariantCulture));
+            SetRuntimeStatistic("FX.chipcost", exposure["chipcost"].ToString("F4", CultureInfo.InvariantCulture));
 
             if (firstUpdateOfSession)
             {

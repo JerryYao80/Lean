@@ -11,6 +11,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Description>QuantConnect LEAN Engine: Algorithm.CSharp Project - A collection of C# algorithm demonstrations for how to use the API</Description>
     <NoWarn>CS0618;CA1062;CA1002</NoWarn>
+    <DefaultItemExcludes>$(DefaultItemExcludes);SoloQuantGenerated\**</DefaultItemExcludes>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <OutputPath>bin\Debug\</OutputPath>

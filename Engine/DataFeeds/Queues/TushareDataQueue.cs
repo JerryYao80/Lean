@@ -151,6 +151,30 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
             _pollTimer.Interval = TimeSpan.FromSeconds(_refreshIntervalSeconds).TotalMilliseconds;
 
             _converter = new TushareDataConverter(_dataPath, _livePriceSnapshotPath);
+
+            // Configure GBM intraday simulation from job parameters
+            if (job?.Parameters != null)
+            {
+                var gbmSourceMode = job.Parameters.TryGetValue("live-price-source-mode", out var sm) ? sm : "auto";
+                var gbmPollInterval = job.Parameters.TryGetValue("live-price-refresh-interval-seconds", out var pi) && int.TryParse(pi, out var piv) ? piv : 60;
+                var gbmTradingMinutes = job.Parameters.TryGetValue("simulated-live-price-trading-minutes-per-day", out var tm) && int.TryParse(tm, out var tmv) ? tmv : 240;
+                var gbmVolScale = job.Parameters.TryGetValue("simulated-live-price-volatility-scale", out var vs) && double.TryParse(vs, out var vsv) ? vsv : 8.0;
+                var gbmMinVol = job.Parameters.TryGetValue("simulated-live-price-min-daily-volatility", out var mv) && double.TryParse(mv, out var mvv) ? mvv : 0.80;
+                var gbmJumpP = job.Parameters.TryGetValue("simulated-live-price-jump-probability", out var jp) && double.TryParse(jp, out var jpv) ? jpv : 0.22;
+                var gbmJumpS = job.Parameters.TryGetValue("simulated-live-price-jump-scale", out var js) && double.TryParse(js, out var jsv) ? jsv : 0.10;
+                var gbmSeed = job.Parameters.TryGetValue("simulated-live-price-random-seed", out var rs) && int.TryParse(rs, out var rsv) ? rsv : 42;
+
+                _converter.ConfigureGbmSimulation(
+                    sourceMode: gbmSourceMode,
+                    pollIntervalSeconds: gbmPollInterval,
+                    tradingMinutesPerDay: gbmTradingMinutes,
+                    volatilityScale: gbmVolScale,
+                    minDailyVolatility: gbmMinVol,
+                    jumpProbability: gbmJumpP,
+                    jumpScale: gbmJumpS,
+                    randomSeed: gbmSeed);
+            }
+
             Log.Trace(
                 $"TushareDataQueue.SetJob(): Initialized with data path: {_dataPath} " +
                 $"live_price_snapshot={_livePriceSnapshotPath ?? "-"} refresh_interval_seconds={_refreshIntervalSeconds}");
@@ -202,7 +226,9 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
                 return string.Empty;
             }
 
-            return $"{tradeBar.Open:F4}|{tradeBar.High:F4}|{tradeBar.Low:F4}|{tradeBar.Close:F4}|{tradeBar.Volume:F0}";
+            // Include EndTime in signature so GBM-advanced bars with new timestamps
+            // are treated as changed even if OHLCV happens to be similar
+            return $"{tradeBar.EndTime:O}|{tradeBar.Open:F4}|{tradeBar.High:F4}|{tradeBar.Low:F4}|{tradeBar.Close:F4}|{tradeBar.Volume:F0}";
         }
 
         private void EnsurePolling_NoLock()
@@ -297,9 +323,20 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Queues
                 return PublishStatus.Unchanged;
             }
 
-            var clone = new TradeBar(latestBar);
             Interlocked.Increment(ref _emissionSequence);
-            _aggregator.Update(clone);
+            // The AggregationManager creates TickConsolidator/MarketHourAwareConsolidator
+            // for live subscriptions, which expects Tick input, not TradeBar.
+            // Convert the TradeBar to 4 Ticks (Open, High, Low, Close) so the
+            // consolidator can reconstruct OHLC correctly.
+            var bar = latestBar;
+            var tradeTime = bar.EndTime;
+
+            _aggregator.Update(new Tick(tradeTime, bar.Symbol, "", "", 0m, bar.Open));
+            _aggregator.Update(new Tick(tradeTime, bar.Symbol, "", "", 0m, bar.High));
+            _aggregator.Update(new Tick(tradeTime, bar.Symbol, "", "", 0m, bar.Low));
+            var closeTick = new Tick(tradeTime, bar.Symbol, "", "", bar.Volume, bar.Close);
+            _aggregator.Update(closeTick);
+
             return PublishStatus.Published;
         }
 

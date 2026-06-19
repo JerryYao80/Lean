@@ -40,6 +40,22 @@ namespace QuantConnect.Data
         private readonly Dictionary<string, TradeBar> _liveSnapshotBarsBySymbol = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
         private readonly object _liveSnapshotLock = new object();
         private DateTime _liveSnapshotLastWriteTimeUtc;
+        private bool _snapshotWasReloaded;
+        private string _snapshotSourceMode;
+
+        // GBM intraday simulation state
+        private bool _gbmEnabled;
+        private string _gbmSourceMode = "auto";
+        private int _gbmPollIntervalSeconds = 60;
+        private int _gbmTradingMinutesPerDay = 240;
+        private double _gbmVolatilityScale = 8.0;
+        private double _gbmMinDailyVolatility = 0.80;
+        private double _gbmJumpProbability = 0.22;
+        private double _gbmJumpScale = 0.10;
+        private Random _gbmRandom = new Random(42);
+        private readonly Dictionary<string, GbmSymbolState> _gbmStateByTsCode = new Dictionary<string, GbmSymbolState>(StringComparer.OrdinalIgnoreCase);
+        private int _gbmAdvanceCount;
+
         private static readonly DateTimeZone ChinaTimeZone = DateTimeZoneProviders.Tzdb["Asia/Shanghai"];
 
         /// <summary>
@@ -56,6 +72,35 @@ namespace QuantConnect.Data
             _dataPath = dataPath;
             _livePriceSnapshotPath = livePriceSnapshotPath;
             _cache = new TushareDataCache(dataPath);
+        }
+
+        /// <summary>
+        /// Configure GBM intraday simulation parameters.
+        /// Called by TushareDataQueue after reading job parameters.
+        /// </summary>
+        public void ConfigureGbmSimulation(
+            string sourceMode = "auto",
+            int pollIntervalSeconds = 60,
+            int tradingMinutesPerDay = 240,
+            double volatilityScale = 8.0,
+            double minDailyVolatility = 0.80,
+            double jumpProbability = 0.22,
+            double jumpScale = 0.10,
+            int randomSeed = 42)
+        {
+            _gbmSourceMode = sourceMode ?? "auto";
+            _gbmPollIntervalSeconds = Math.Max(1, pollIntervalSeconds);
+            _gbmTradingMinutesPerDay = Math.Max(1, tradingMinutesPerDay);
+            _gbmVolatilityScale = Math.Max(1.0, volatilityScale);
+            _gbmMinDailyVolatility = Math.Max(0.05, minDailyVolatility);
+            _gbmJumpProbability = Math.Max(0.0, Math.Min(1.0, jumpProbability));
+            _gbmJumpScale = Math.Max(0.0, jumpScale);
+            _gbmRandom = new Random(randomSeed);
+            _gbmEnabled = true;
+            Log.Trace(
+                $"TushareDataConverter.ConfigureGbmSimulation(): source={_gbmSourceMode} poll={_gbmPollIntervalSeconds}s " +
+                $"vol_scale={_gbmVolatilityScale} min_vol={_gbmMinDailyVolatility} " +
+                $"jump_p={_gbmJumpProbability} jump_s={_gbmJumpScale} seed={randomSeed}");
         }
 
         /// <summary>
@@ -245,16 +290,145 @@ namespace QuantConnect.Data
                 if (_liveSnapshotBarsBySymbol.TryGetValue(tsCode, out var cachedBar))
                 {
                     tradeBar = new TradeBar(cachedBar);
+                    // Apply GBM intraday simulation if snapshot is stale and mode allows
+                    if (_gbmEnabled && ShouldApplyGbmSimulation())
+                    {
+                        tradeBar = AdvanceBarWithGbm(tsCode, tradeBar);
+                    }
                     return true;
                 }
             }
             return false;
         }
 
+        /// <summary>
+        /// Whether GBM intraday simulation should be applied.
+        /// Active when source_mode is gbm-simulated and the snapshot was NOT just reloaded
+        /// (fresh reloads already contain new prices from the Python GBM client).
+        /// </summary>
+        private bool ShouldApplyGbmSimulation()
+        {
+            if (_snapshotWasReloaded)
+            {
+                return false;
+            }
+
+            if (string.Equals(_gbmSourceMode, "simulate", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // auto mode: apply GBM when snapshot source is gbm-simulated
+            if (string.Equals(_gbmSourceMode, "auto", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_snapshotSourceMode, "gbm-simulated", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Advance a TradeBar's prices using GBM intraday simulation.
+        /// Each call represents one poll interval's worth of price movement.
+        /// </summary>
+        private TradeBar AdvanceBarWithGbm(string tsCode, TradeBar baseBar)
+        {
+            if (baseBar == null || baseBar.Close <= 0)
+            {
+                return baseBar;
+            }
+
+            GbmSymbolState state;
+            lock (_liveSnapshotLock)
+            {
+                if (!_gbmStateByTsCode.TryGetValue(tsCode, out state))
+                {
+                    state = new GbmSymbolState
+                    {
+                        Open = baseBar.Open,
+                        High = baseBar.High,
+                        Low = baseBar.Low,
+                        Close = baseBar.Close,
+                        PreClose = baseBar.Close,
+                        AccumVol = baseBar.Volume,
+                        AccumAmount = 0m,
+                        Drift = 0.0,
+                        Volatility = 0.02,
+                        AvgDailyVolume = (double)baseBar.Volume,
+                        Calibrated = false
+                    };
+                    _gbmStateByTsCode[tsCode] = state;
+                }
+            }
+
+            // Step fraction: how much of the trading day this poll interval represents
+            var stepFraction = (double)_gbmPollIntervalSeconds / 60.0 / (double)_gbmTradingMinutesPerDay;
+
+            // Scale volatility for intraday step
+            var stepVolatility = Math.Max(0.001, state.Volatility * _gbmVolatilityScale * Math.Sqrt(stepFraction));
+            var stepDrift = state.Drift * stepFraction;
+
+            // GBM step: S(t+1) = S(t) * exp((mu - sigma^2/2) + sigma * Z + jump)
+            double shock, jumpReturn = 0.0;
+            lock (_liveSnapshotLock)
+            {
+                shock = NextGaussian(_gbmRandom);
+                if (_gbmJumpProbability > 0 && _gbmRandom.NextDouble() < _gbmJumpProbability)
+                {
+                    jumpReturn = NextGaussian(_gbmRandom) * _gbmJumpScale;
+                }
+            }
+
+            var exponent = (stepDrift - 0.5 * stepVolatility * stepVolatility) + stepVolatility * shock + jumpReturn;
+            var currentClose = (double)state.Close;
+            var nextClose = Math.Max(0.01, currentClose * Math.Exp(exponent));
+
+            // Update high/low to encompass the new close
+            var newHigh = Math.Max((double)state.High, nextClose);
+            var newLow = Math.Min((double)state.Low, Math.Max(0.01, nextClose));
+
+            // Volume increment
+            var volIncrement = Math.Max(0.0, state.AvgDailyVolume * stepFraction * (0.5 + _gbmRandom.NextDouble()));
+
+            state.Close = (decimal)nextClose;
+            state.High = (decimal)newHigh;
+            state.Low = (decimal)newLow;
+            state.AccumVol += (decimal)volIncrement * 100m;
+
+            // Create new bar with updated prices and current timestamp
+            var nowUtc = DateTime.UtcNow;
+            var barPeriod = TimeSpan.FromDays(1);
+
+            var advancedBar = new TradeBar
+            {
+                Symbol = baseBar.Symbol,
+                Time = nowUtc - barPeriod,
+                EndTime = nowUtc,
+                Open = state.Open,
+                High = state.High,
+                Low = state.Low,
+                Close = state.Close,
+                Volume = state.AccumVol,
+                Period = barPeriod
+            };
+
+            return advancedBar;
+        }
+
+        private static double NextGaussian(Random random)
+        {
+            double u1, u2;
+            do { u1 = random.NextDouble(); } while (u1 <= 0.0);
+            u2 = random.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        }
+
         private void LoadLiveSnapshotIfNeeded()
         {
             if (string.IsNullOrWhiteSpace(_livePriceSnapshotPath) || !File.Exists(_livePriceSnapshotPath))
             {
+                _snapshotWasReloaded = false;
                 return;
             }
 
@@ -263,6 +437,7 @@ namespace QuantConnect.Data
             {
                 if (_liveSnapshotLastWriteTimeUtc == lastWriteTimeUtc)
                 {
+                    _snapshotWasReloaded = false;
                     return;
                 }
             }
@@ -271,6 +446,7 @@ namespace QuantConnect.Data
             {
                 var payloadText = File.ReadAllText(_livePriceSnapshotPath);
                 var payload = JsonConvert.DeserializeObject<LivePriceSnapshotPayload>(payloadText) ?? new LivePriceSnapshotPayload();
+                _snapshotSourceMode = payload.SourceMode;
                 var snapshotBars = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
                 foreach (var row in payload.Quotes ?? new List<LivePriceSnapshotRow>())
                 {
@@ -294,11 +470,20 @@ namespace QuantConnect.Data
                     _liveSnapshotLastWriteTimeUtc = lastWriteTimeUtc;
                 }
 
-                Log.Trace($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Loaded {snapshotBars.Count} realtime bars from {_livePriceSnapshotPath} write_time_utc={lastWriteTimeUtc:O}");
+                // Reset GBM states when snapshot is reloaded with fresh data
+                lock (_liveSnapshotLock)
+                {
+                    _gbmStateByTsCode.Clear();
+                    _gbmAdvanceCount = 0;
+                }
+
+                _snapshotWasReloaded = true;
+                Log.Trace($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Loaded {snapshotBars.Count} realtime bars from {_livePriceSnapshotPath} source_mode={_snapshotSourceMode} write_time_utc={lastWriteTimeUtc:O}");
             }
             catch (Exception ex)
             {
                 Log.Error($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Failed to parse {_livePriceSnapshotPath}: {ex.Message}");
+                _snapshotWasReloaded = false;
             }
         }
 
@@ -576,6 +761,9 @@ else:
             [JsonProperty("generated_at")]
             public string GeneratedAt { get; set; }
 
+            [JsonProperty("source_mode")]
+            public string SourceMode { get; set; }
+
             [JsonProperty("quotes")]
             public List<LivePriceSnapshotRow> Quotes { get; set; } = new List<LivePriceSnapshotRow>();
         }
@@ -617,6 +805,21 @@ else:
 
             [JsonProperty("fetch_timestamp")]
             public string FetchTimestamp { get; set; }
+        }
+
+        private sealed class GbmSymbolState
+        {
+            public decimal Open;
+            public decimal High;
+            public decimal Low;
+            public decimal Close;
+            public decimal PreClose;
+            public decimal AccumVol;
+            public decimal AccumAmount;
+            public double Drift;
+            public double Volatility;
+            public double AvgDailyVolume;
+            public bool Calibrated;
         }
     }
 }
