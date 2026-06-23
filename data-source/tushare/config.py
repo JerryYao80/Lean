@@ -17,7 +17,7 @@ TUSHARE_TIMEOUT_SECONDS = int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "15"))
 # =====================================================
 # 数据存储配置
 # =====================================================
-DATA_DIR = "/home/project/tushare-downloader/tushare_data"
+DATA_DIR = "/home/project/tushare-downloader/tushare_data_v2"
 
 # =====================================================
 # 限流配置
