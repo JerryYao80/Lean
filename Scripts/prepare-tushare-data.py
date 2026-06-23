@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 # Tushare data path
-TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data"
+TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data_v2"
 
 def load_etf_metadata():
     """Load ETF basic metadata"""

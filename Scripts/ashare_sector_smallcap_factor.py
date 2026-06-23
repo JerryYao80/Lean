@@ -6,7 +6,7 @@ Generates the factor CSV consumed by AShareSectorSmallCapAlgorithm.
 
 Output columns: trade_date, ts_code, sector, total_mv, pb, momentum_20d
 
-Data sources (all from /home/project/tushare-downloader/tushare_data/):
+Data sources (all from /home/project/tushare-downloader/tushare_data_v2/):
   - daily_basic/   : total_mv, pb  (partitioned by ts_code)
   - daily/         : close prices for momentum  (partitioned by ts_code)
   - index_member/  : stock → Shenwan L1 sector mapping
@@ -15,7 +15,7 @@ Data sources (all from /home/project/tushare-downloader/tushare_data/):
 
 Usage:
   python Scripts/ashare_sector_smallcap_factor.py \
-      --tushare-data /home/project/tushare-downloader/tushare_data \
+      --tushare-data /home/project/tushare-downloader/tushare_data_v2 \
       --output local_data/ashare-sector-smallcap-factors.csv \
       --start-date 2019-01-01 \
       --end-date 2025-12-31
@@ -177,7 +177,7 @@ def build_factor_table(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate A-share sector small-cap factor CSV")
-    parser.add_argument("--tushare-data", default="/home/project/tushare-downloader/tushare_data")
+    parser.add_argument("--tushare-data", default="/home/project/tushare-downloader/tushare_data_v2")
     parser.add_argument("--output", default="/home/project/hope/Lean/local_data/ashare-sector-smallcap-factors.csv")
     parser.add_argument("--start-date", default="2019-01-01")
     parser.add_argument("--end-date", default="2025-12-31")

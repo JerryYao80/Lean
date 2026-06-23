@@ -43,7 +43,7 @@ def repo_root() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        'tushare-data-path': '/home/project/tushare-downloader/tushare_data',
+        'tushare-data-path': '/home/project/tushare-downloader/tushare_data_v2',
         'dataset-catalog': str(root / 'Launcher' / 'config' / 'config-ashare-dataset-catalog.json'),
         'start-date': '20200101',
         'end-date': '20251231',
@@ -130,7 +130,7 @@ def build_dataset_catalog(config: dict) -> dict:
     datasets.setdefault(
         'index_weight',
         {
-            'path': 'index_weight/date=*/data.parquet',
+            'path': 'index_weight/trade_date=*/data.parquet',
             'date_field': 'trade_date',
             'symbol_field': 'con_code',
         },

@@ -700,7 +700,7 @@ class DefaultPipelineServices:
 
     def prepare_iv_data(self, config: dict, run_date: str | None = None) -> dict:
         data_config = config.get("data") if isinstance(config.get("data"), dict) else {}
-        tushare_path = data_config.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data"
+        tushare_path = data_config.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data_v2"
         output_root = str(orchestrator.repo_root() / "Data" / "alternative" / "ashare-implied-volatility")
         command = [
             sys.executable, str(CURRENT_DIR / "export_ashare_implied_volatility_data.py"),
@@ -860,7 +860,7 @@ class DefaultPipelineServices:
         now = now or datetime.now(timezone.utc)
         data_config = config.get("data") if isinstance(config.get("data"), dict) else {}
         market_config = {
-            "tushare-data-path": data_config.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data",
+            "tushare-data-path": data_config.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data_v2",
             "timezone": "Asia/Shanghai",
             "shared-live-market-snapshot-file": str(orchestrator.repo_root() / "Results" / "shared-live-market" / "ashare-live-price-snapshot.json"),
             "shared-live-market-report-file": str(orchestrator.repo_root() / "Results" / "shared-live-market" / "ashare-live-market-report.json"),

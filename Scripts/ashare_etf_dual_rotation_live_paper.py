@@ -70,7 +70,7 @@ def load_runtime_config(config_path: str | Path | None = None) -> dict:
         "live-rebalance-interval-minutes": max(1, plan_runner.safe_int(parameters.get("live-rebalance-interval-minutes"), 3)),
         "shared-live-market-refresh-interval-seconds": max(1, plan_runner.safe_int(parameters.get("shared-live-market-refresh-interval-seconds"), 60)),
         "live-price-source-mode": str(parameters.get("live-price-source-mode") or "auto"),
-        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data"),
+        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data_v2"),
     }
 
 

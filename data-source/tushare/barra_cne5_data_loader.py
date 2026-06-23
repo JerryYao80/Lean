@@ -229,7 +229,7 @@ class BarraCNE5DataLoader:
                 },
                 "index_weight": {
                     "paths": [
-                        "index_weight/date=*/data.parquet",
+                        "index_weight/trade_date=*/data.parquet",
                         "index_weight/year=*/data.parquet",
                         "index_weight/data.parquet",
                     ],
@@ -248,12 +248,12 @@ class BarraCNE5DataLoader:
                     "date_field": "cal_date",
                 },
                 "moneyflow": {
-                    "path": "moneyflow/date={symbol}/data.parquet",
+                    "path": "moneyflow/ts_code={symbol}/data.parquet",
                     "date_field": "trade_date",
                     "symbol_field": "ts_code",
                 },
                 "fina_indicator": {
-                    "path": "fina_indicator/date={symbol}/data.parquet",
+                    "path": "fina_indicator/ts_code={symbol}/data.parquet",
                     "date_field": "ann_date",
                     "symbol_field": "ts_code",
                 },
@@ -267,12 +267,12 @@ class BarraCNE5DataLoader:
                     "date_field": "trade_date",
                 },
                 "margin_detail": {
-                    "path": "margin_detail/date={symbol}/data.parquet",
+                    "path": "margin_detail/ts_code={symbol}/data.parquet",
                     "date_field": "trade_date",
                     "symbol_field": "ts_code",
                 },
                 "cyq_perf": {
-                    "path": "cyq_perf/date={symbol}/data.parquet",
+                    "path": "cyq_perf/ts_code={symbol}/data.parquet",
                     "date_field": "trade_date",
                     "symbol_field": "ts_code",
                 },

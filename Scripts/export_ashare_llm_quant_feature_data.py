@@ -63,7 +63,7 @@ def default_config() -> dict:
     root = repo_root()
     feature_root = root / 'Data' / 'alternative' / 'ashare-llm-quant-features'
     return {
-        'tushare-data-path': '/home/project/tushare-downloader/tushare_data',
+        'tushare-data-path': '/home/project/tushare-downloader/tushare_data_v2',
         'dataset-catalog': str(root / 'Launcher' / 'config' / 'config-ashare-dataset-catalog.json'),
         'feature-data-path': str(feature_root),
         'benchmark-file': str(feature_root / 'benchmark' / '000300.SH.csv'),

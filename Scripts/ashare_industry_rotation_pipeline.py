@@ -40,7 +40,7 @@ def default_config() -> dict:
     root = repo_root()
     plan_root = root / "Data" / "alternative" / "ashare-industry-rotation"
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "dataset-catalog": str(root / "Launcher" / "config" / "config-ashare-dataset-catalog.json"),
         "start-date": "20200101",
         "end-date": "20251231",
@@ -170,7 +170,7 @@ def build_dataset_catalog(config: dict) -> dict:
     datasets.setdefault(
         "fina_indicator",
         {
-            "path": "fina_indicator/date={symbol}/data.parquet",
+            "path": "fina_indicator/ts_code={symbol}/data.parquet",
             "date_field": "ann_date",
             "symbol_field": "ts_code",
         },
@@ -178,7 +178,7 @@ def build_dataset_catalog(config: dict) -> dict:
     datasets.setdefault(
         "forecast",
         {
-            "path": "forecast/date={symbol}/data.parquet",
+            "path": "forecast/ts_code={symbol}/data.parquet",
             "date_field": "ann_date",
             "symbol_field": "ts_code",
         },

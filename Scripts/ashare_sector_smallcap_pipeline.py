@@ -53,7 +53,7 @@ def default_registry_path() -> Path:
 def run_preprocess_factors(config: dict) -> dict:
     import subprocess
     script = repo_root() / 'Scripts' / 'ashare_sector_smallcap_factor.py'
-    tushare = config.get('tushare-data-path', '/home/project/tushare-downloader/tushare_data')
+    tushare = config.get('tushare-data-path', '/home/project/tushare-downloader/tushare_data_v2')
     output = config.get('factor-output', str(default_factor_csv()))
     start = config.get('start-date', '2019-01-01')
     end = config.get('end-date', '2025-12-31')
@@ -185,7 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--backtest-config', default=str(default_backtest_config()))
     parser.add_argument('--live-config', default=str(default_live_config()))
     parser.add_argument('--registry-file', default=str(default_registry_path()))
-    parser.add_argument('--tushare-data-path', default='/home/project/tushare-downloader/tushare_data')
+    parser.add_argument('--tushare-data-path', default='/home/project/tushare-downloader/tushare_data_v2')
     parser.add_argument('--factor-output', default=str(default_factor_csv()))
     parser.add_argument('--start-date', default='2019-01-01')
     parser.add_argument('--end-date', default='2025-12-31')

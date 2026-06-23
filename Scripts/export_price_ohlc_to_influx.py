@@ -19,7 +19,7 @@ import pandas as pd
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_MEASUREMENT = "lean_price_ohlc"
-DEFAULT_TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data"
+DEFAULT_TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data_v2"
 DEFAULT_ARCHIVE_PATH = str(Path(__file__).resolve().parents[1] / "Data" / "archive" / "barra-cne5-live-daily-quotes")
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")

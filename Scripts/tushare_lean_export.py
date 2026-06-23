@@ -23,7 +23,7 @@ def default_config() -> dict:
     root = repo_root()
     return {
         "registry-file": str(root / "Common" / "Securities" / "Equity" / "AShareETFMetadata.cs"),
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "lean-data-path": str(root / "Data"),
         "start-date": "20180101",
         "end-date": "20251231",

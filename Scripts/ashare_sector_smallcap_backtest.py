@@ -38,7 +38,7 @@ def run_factor_preprocessing(
     end_date: str = '2025-12-31',
 ) -> int:
     script = repo_root() / 'Scripts' / 'ashare_sector_smallcap_factor.py'
-    tushare = str(tushare_data_path or '/home/project/tushare-downloader/tushare_data')
+    tushare = str(tushare_data_path or '/home/project/tushare-downloader/tushare_data_v2')
     output = str(output_path or default_factor_csv_path())
     command = [
         sys.executable, str(script),
@@ -86,7 +86,7 @@ def print_backtest_report(summary: dict) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='A-share Sector SmallCap backtest runner')
     parser.add_argument('--config', default=str(default_backtest_config_path()))
-    parser.add_argument('--tushare-data', default='/home/project/tushare-downloader/tushare_data')
+    parser.add_argument('--tushare-data', default='/home/project/tushare-downloader/tushare_data_v2')
     parser.add_argument('--factor-output', default=str(default_factor_csv_path()))
     parser.add_argument('--start-date', default='2019-01-01')
     parser.add_argument('--end-date', default='2025-12-31')

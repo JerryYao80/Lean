@@ -61,7 +61,7 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         'shared-live-market-archive-path': resolve_path(parameters.get('shared-live-market-archive-path'), root / 'Data' / 'archive' / 'ashare-live-market-daily-quotes'),
         'shared-live-market-refresh-interval-seconds': max(1, safe_int(parameters.get('shared-live-market-refresh-interval-seconds'), 60)),
         'live-price-source-mode': str(parameters.get('live-price-source-mode') or 'auto'),
-        'tushare-data-path': str(parameters.get('tushare-data-path') or '/home/project/tushare-downloader/tushare_data'),
+        'tushare-data-path': str(parameters.get('tushare-data-path') or '/home/project/tushare-downloader/tushare_data_v2'),
     }
 
 

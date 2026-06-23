@@ -77,7 +77,7 @@ def load_live_bridge_config(config_path: str | Path | None = None) -> dict:
 
     root = repo_root()
     return {
-        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data"),
+        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data_v2"),
         "factor-data-path": str(resolve_path(parameters.get("factor-data-path"), root / "Data" / "alternative" / "ashare-multi-family-live-factors", data_base)),
         "external-factor-path": str(resolve_path(parameters.get("external-factor-path"), root / "Data" / "alternative" / "ashare-multi-family-features", data_base)),
         "live-factor-report-file": str(resolve_path(parameters.get("live-factor-report-file"), root / "Results" / "multi-family-live-bridge-report.json", results_base)),

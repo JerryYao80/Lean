@@ -9,7 +9,7 @@ Usage:
   python3 data-source/tushare/convert_to_lean.py [--tushare-data DIR] [--lean-data DIR] [--start-date YYYYMMDD]
 
 Defaults:
-  --tushare-data  /home/project/tushare-downloader/tushare_data
+  --tushare-data  /home/project/tushare-downloader/tushare_data_v2
   --lean-data     ./Data
   --start-date    20160102
 """
@@ -22,7 +22,7 @@ import numpy as np
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-TUSHARE_DATA = "/home/project/tushare-downloader/tushare_data"
+TUSHARE_DATA = "/home/project/tushare-downloader/tushare_data_v2"
 LEAN_DATA = "./Data"
 START_DATE = "20160102"
 

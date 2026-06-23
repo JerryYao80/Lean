@@ -126,7 +126,7 @@ def load_live_paper_runtime_config(config_path: str | Path | None = None) -> dic
         "rebalance-frequency": str(parameters.get("rebalance-frequency") or "monthly"),
         "top-n": str(parameters.get("top-n") or "30"),
         "target-portfolio-exposure": str(parameters.get("target-portfolio-exposure") or "0.95"),
-        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data"),
+        "tushare-data-path": str(parameters.get("tushare-data-path") or "/home/project/tushare-downloader/tushare_data_v2"),
     }
 
 

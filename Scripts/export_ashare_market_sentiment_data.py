@@ -30,7 +30,7 @@ def repo_root() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "iv-data-path": str(root / "Data" / "alternative" / "ashare-implied-volatility" / "sse" / "daily"),
         "output-path": str(root / "Data" / "alternative" / "ashare-market-sentiment" / "sse" / "daily" / "market_sentiment.csv"),
         "start-date": "20200101",
@@ -103,9 +103,9 @@ def load_options_data(tushare_path: str | Path, start_date: str, end_date: str) 
     path = Path(tushare_path) / "opt_daily"
     frames = []
     for date_dir in sorted(path.iterdir()):
-        if not date_dir.is_dir() or not date_dir.name.startswith("date="):
+        if not date_dir.is_dir() or not date_dir.name.startswith("trade_date="):
             continue
-        date_val = date_dir.name.split("=")[1]
+        date_val = date_dir.name.split("=", 1)[1]
         if date_val < start_date or date_val > end_date:
             continue
         parquet = date_dir / "data.parquet"

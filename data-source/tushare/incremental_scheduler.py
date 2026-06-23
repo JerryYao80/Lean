@@ -34,7 +34,7 @@ CORE_SCHEDULED_APIS = [
 ]
 LEAN_CONVERT_SCRIPT = Path(__file__).resolve().parent / "convert_to_lean.py"
 ETF_EXPORT_SCRIPT = Path(__file__).resolve().parents[2] / "Scripts" / "tushare_lean_export.py"
-TUSHARE_DATA_DIR = Path("/home/project/tushare-downloader/tushare_data")
+TUSHARE_DATA_DIR = Path("/home/project/tushare-downloader/tushare_data_v2")
 
 
 def parse_list_argument(value: Optional[str]) -> Optional[Sequence[str]]:

@@ -75,7 +75,7 @@ def repo_root() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "output-path": str(root / "Data" / "alternative" / "barra-cne5-factors"),
         "report-file": str(root / "Results" / "barra-cne5-factor-bridge-report.json"),
         "factor-source-mode": "auto",

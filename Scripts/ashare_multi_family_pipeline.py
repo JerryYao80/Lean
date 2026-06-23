@@ -42,7 +42,7 @@ def default_pipeline_config_path() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "field-mapping-path": "/home/project/tushare-downloader/tushare_field_mapping.json",
         "factor-output-path": str(root / "Data" / "alternative" / "ashare-multi-family-features"),
         "factor-report-file": str(root / "Results" / "multi-family-export-report.json"),

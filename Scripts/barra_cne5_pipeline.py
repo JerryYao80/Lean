@@ -57,7 +57,7 @@ def default_config() -> dict:
         "factor-source-mode": "auto",
         "random-factor-seed": 42,
         "external-factor-path": None,
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "factor-output-path": str(root / "Data" / "alternative" / "barra-cne5-factors"),
         "factor-report-file": str(root / "Results" / "barra-cne5-factor-bridge-report.json"),
         "backtest-config": str(root / "Launcher" / "config" / "config-barra-cne5-backtest.json"),

@@ -84,7 +84,7 @@ def launcher_workdir() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "historical-feature-path": str(root / "Data" / "alternative" / "ashare-llm-quant-features"),
         "feature-data-path": str(root / "Data" / "alternative" / "ashare-llm-quant-live-features"),
         "historical-benchmark-file": str(root / "Data" / "alternative" / "ashare-llm-quant-features" / "benchmark" / "000300.SH.csv"),

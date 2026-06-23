@@ -398,7 +398,7 @@ def default_config() -> dict:
             "launcher-dll": str(default_launcher_dll()),
         },
         "data": {
-            "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+            "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
             "field-mapping-path": "/home/project/tushare-downloader/tushare_field_mapping.json",
             "field-cache-root": str(root / "local_data" / "soloquant-field-cache"),
         },
@@ -3877,7 +3877,7 @@ def _base_lean_config(
         "parameters": {
             "start-date": start_date,
             "end-date": end_date,
-            "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+            "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
             **{str(key): str(value) for key, value in parameters.items()},
         },
     }

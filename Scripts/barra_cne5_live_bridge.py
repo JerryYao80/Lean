@@ -68,7 +68,7 @@ def default_external_factor_path() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "factor-data-path": str(root / "Data" / "alternative" / "barra-cne5-live-factors"),
         "live-factor-report-file": str(root / "Results" / "barra-cne5-live-bridge-report.json"),
         "live-price-snapshot-file": str(root / "Results" / "barra-cne5-live-price-snapshot.json"),

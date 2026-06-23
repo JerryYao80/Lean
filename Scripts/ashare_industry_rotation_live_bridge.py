@@ -66,7 +66,7 @@ def default_live_config_path() -> Path:
 def default_config() -> dict:
     root = repo_root()
     return {
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "dataset-catalog": str(root / "Launcher" / "config" / "config-ashare-dataset-catalog.json"),
         "pipeline-config": str(root / "Launcher" / "config" / "config-ashare-industry-rotation-pipeline.json"),
         "plan-directory": str(root / "Data" / "alternative" / "ashare-industry-rotation-live"),

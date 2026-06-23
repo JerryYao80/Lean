@@ -26,7 +26,7 @@ import pandas as pd
 from scipy.stats import norm
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
-DEFAULT_TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data"
+DEFAULT_TUSHARE_DATA_PATH = "/home/project/tushare-downloader/tushare_data_v2"
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
@@ -299,8 +299,8 @@ def load_opt_basic(tushare_data_path: str) -> pd.DataFrame:
 def load_opt_daily(tushare_data_path: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
     opt_dir = Path(tushare_data_path) / "opt_daily"
     frames = []
-    for date_dir in sorted(opt_dir.glob("date=*")):
-        date_str = date_dir.name.removeprefix("date=")
+    for date_dir in sorted(opt_dir.glob("trade_date=*")):
+        date_str = date_dir.name.removeprefix("trade_date=")
         if start_date and date_str < start_date:
             continue
         if end_date and date_str > end_date:

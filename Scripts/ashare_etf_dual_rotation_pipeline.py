@@ -103,7 +103,7 @@ def default_config() -> dict:
     plan_root = root / "Data" / "alternative" / "ashare-etf-dual-rotation"
     return {
         "registry-file": str(root / "Common" / "Securities" / "Equity" / "AShareETFMetadata.cs"),
-        "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+        "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
         "dataset-catalog": str(root / "Launcher" / "config" / "config-ashare-dataset-catalog.json"),
         "start-date": DEFAULT_START_DATE,
         "end-date": DEFAULT_END_DATE,
