@@ -953,3 +953,21 @@ cp /home/project/hope/Lean/data-source/tushare/config.py.bak_precutover_20260623
 **Placeholder scan:** none — all steps contain concrete code or exact commands.
 
 **Name consistency:** `classify_partition` → kinds `ts_code|year|quarter|date|residue_date|unknown`, used consistently in `target_rel_path`, `migrate_table`, `_canonical_row_count`. `migrate_table(src_root, dst_root, api, strategy)` consistent across tests + impl. `target_rel_path(kind, value)` returns path-relative-to-`<api>/`, consistent in tests + `migrate_table`.
+
+---
+
+## Implementation Addendum (post-execution fixes)
+
+During execution (Tasks 1-8), four issues were found and fixed. These are part of the delivered implementation:
+
+1. **STOCK rescue rule (data-loss fix).** Two STOCK-strategy tables — `cyq_chips` (5476 symbols) and `cyq_perf` (5477) — have their live data ONLY under legacy `date=<symbol>/` with no `ts_code=` copy. The original migration classified `date=<non-8digit>` as residue and dropped it → 0 rows migrated = data loss. Fixed in `_canonical_partitions`: for STOCK strategy, a `date=<symbol>` with no existing `ts_code=<symbol>` is **rescued** (copied to `ts_code=<symbol>`); only dropped when a `ts_code=` copy already exists (true residue). `_source_file_for` falls back from `ts_code=` to `date=` when reading. Verified: `cyq_chips`→5476, `cyq_perf`→5477 now migrate. Tests: `test_migrate_table_stock_rescues_date_only_symbol`, `test_migrate_table_stock_prefers_ts_code_when_both_exist`.
+
+2. **`migrate_to_v2.py --api` comma split.** Original `apis=[args.api]` treated the whole string as one name. Fixed to `args.api.split(",")` (matches `incremental_update.py` behavior). Verified: `--api fund_portfolio,cyq_perf` selects both.
+
+3. **`convert_tushare_to_lean.py:30`** (a separate ETF converter, distinct from `convert_to_lean.py`) read `fund_daily/date={ts_code}` residue. Fixed to `ts_code={ts_code}`. Committed `634f50578`.
+
+4. **Test execution env.** `test_file_path.py` imports `downloader` → `tushare`; `quant` env lacks tushare, `ohmyquant` lacked pytest. Installed `pytest` into `ohmyquant` (has tushare). Final: `test_migrate_v2.py` + `test_get_stock_list.py` run in `quant` (15 pass); `test_file_path.py` runs in `ohmyquant` (7 pass). 22 tests green.
+
+**Implementation commits (Lean repo, branch `fix/price-scaling-10000x`):** `cc216a387` (`_get_file_path`), `634f50578` (`convert_tushare_to_lean`). The `tushare-downloader/` files (`migrate_to_v2.py`, tests, `downloader.py`, analysis scripts) are NOT in a git repo — they live on disk and are consumed directly by the daemon.
+
+**Gap-fill note for cutover (Task 9 Step 9):** `incremental_update.py --api` DOES split commas (verified at `:560`), so the comma-separated gap-fill command is correct as written. `cyq_chips`/`cyq_perf` are now in the new layout after migration (rescued); they still need gap-fill from their stale dates (`cyq_chips` to ~20260129) to 20260623.
