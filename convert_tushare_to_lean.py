@@ -27,7 +27,7 @@ for etf in t0_etfs:
     market = etf['market'].lower()  # sse or szse
 
     # Check if tushare data exists
-    tushare_path = f'/home/project/tushare-downloader/tushare_data/fund_daily/date={ts_code}/data.parquet'
+    tushare_path = f'/home/project/tushare-downloader/tushare_data/fund_daily/ts_code={ts_code}/data.parquet'
 
     if not os.path.exists(tushare_path):
         missing_count += 1
