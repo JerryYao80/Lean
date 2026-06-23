@@ -119,8 +119,12 @@ class TushareDownloader:
         - 无分块: {data_dir}/{api_name}/data.parquet
         - 按年: {data_dir}/{api_name}/year={year}/data.parquet
         - 按季度: {data_dir}/{api_name}/quarter={quarter}/data.parquet
-        - 按日期: {data_dir}/{api_name}/date={date}/data.parquet
+        - 按交易日: {data_dir}/{api_name}/trade_date={date}/data.parquet
         - 按代码: {data_dir}/{api_name}/ts_code={ts_code}/data.parquet
+
+        Note: DATE-strategy partitions use the `trade_date=` key (not `date=`) to
+        disambiguate from historical residue where `date=<symbol>` directories were
+        created by an old call pattern. `date` must be an 8-digit YYYYMMDD string.
         """
         base_path = self.data_dir / api_name
 
@@ -131,7 +135,11 @@ class TushareDownloader:
         elif quarter is not None:
             return base_path / f"quarter={quarter}" / "data.parquet"
         elif date is not None:
-            return base_path / f"date={date}" / "data.parquet"
+            if not (isinstance(date, str) and len(date) == 8 and date.isdigit()):
+                raise ValueError(
+                    f"date must be an 8-digit YYYYMMDD string, got: {date!r}"
+                )
+            return base_path / f"trade_date={date}" / "data.parquet"
         else:
             return base_path / "data.parquet"
             
