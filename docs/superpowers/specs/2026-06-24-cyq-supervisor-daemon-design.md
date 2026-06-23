@@ -118,14 +118,36 @@ systemctl start cron 2>/dev/null || true             # 确保 cron 在跑
 
 ---
 
-## 4. 不在范围
+## 4. 初始回补策略（前置条件）
+
+在启用 `tushare_cyq_worker` 之前，**必须先完成一次性全量回补**（把 cyq_chips/cyq_perf 补到最新交易日）。否则 daemon 的"当天已跑过"判定会跳过回补，导致数据长期落后。
+
+**现状**（2026-06-24）：
+- 初始回补进程 PID 1734383 仍在跑（`backfill_cyq.py`，workers=1 顺序），进度 cyq_chips ~1850/5477、cyq_perf 尚未开始
+- 按 0.35 sym/s 估算，两表合计约 9 小时，预计 06-24 下午完成（早于 daemon 的 17:00 cutoff）
+
+**回补方式**：
+- 方案 A（现状继续）：等 PID 1734383 自然跑完 → 验证两表已补到最新日 → 再启 daemon
+- 方案 B（手动加速）：杀 PID → 用 `--workers 8` 重跑（~2 小时）
+
+**验证回补完成**：
+```bash
+cd /home/project/tushare-downloader && python3 status.py --missing | grep -E 'cyq_chips|cyq_perf'
+# 期望：两表状态为 OK 或 N/A（无 STALE）
+```
+
+**daemon 启用时机**：回补完成（两表不再 STALE）后，再跑 `install_cyq_supervisor.sh`；否则 daemon 会误判"当天已跑过"而跳过回补。
+
+---
+
+## 5. 不在范围
 
 - 不修改 `backfill_cyq.py`（它已是"被调度方"的正确接口）
 - 不修改 `tushare_worker`（核心 16 表）
 - 不引入 systemd timer（本系统未用 timer 调度下载）
 - 不移除 cron/crond 功能（仅清空 root crontab 行；无其他条目后可停用 cron.service）
 
-## 5. 测试
+## 6. 测试
 
 1. `cyq_scheduler.py --dry-run`：不实际调 backfill，仅打印"would trigger backfill for target=YYYYMMDD"并退出
 2. 写 `cyq.conf` + `supervisorctl update` 验证 `tushare_cyq_worker` RUNNING
