@@ -186,6 +186,54 @@ def get_uptime_seconds(pid: int) -> Optional[int]:
         pass
     return None
 
+# ─── Process Resources (for GET /api/strategies) ──────────────────────────────
+
+_proc_cpu_prev: dict = {}  # pid -> (utime+stime jiffies, monotonic seconds)
+try:
+    _CLK_TCK = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+except (ValueError, AttributeError, OSError):
+    _CLK_TCK = 100
+
+def get_cpu_percent(pid: int) -> Optional[float]:
+    """Instantaneous CPU% from two /proc/<pid>/stat samples.
+
+    Returns None on the first sample (no baseline) or any read failure.
+    Module-level cache holds the previous (jiffies, ts) per pid.
+    """
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().split()
+        utime = int(fields[13])
+        stime = int(fields[14])
+        total = utime + stime
+        now = time.monotonic()
+        prev = _proc_cpu_prev.get(pid)
+        _proc_cpu_prev[pid] = (total, now)
+        if prev is None:
+            return None
+        dticks = total - prev[0]
+        dtime = now - prev[1]
+        if dtime <= 0:
+            return None
+        return round((dticks / _CLK_TCK) / dtime * 100.0, 2)
+    except Exception:
+        return None
+
+def get_rss_mb(pid: int) -> Optional[int]:
+    """Resident set size in MB from /proc/<pid>/status VmRSS (kB)."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) // 1024
+    except Exception:
+        return None
+    return None
+
+def _resources_for(pid: Optional[int]) -> tuple:
+    """(cpu_percent, rss_mb) for a pid, (None, None) if pid falsy."""
+    if not pid:
+        return None, None
+    return get_cpu_percent(pid), get_rss_mb(pid)
+
 def find_pids_matching(pattern: str) -> list:
     """Find all PIDs matching a pattern (like pgrep -f)."""
     try:
@@ -285,6 +333,9 @@ class StrategyInfo(BaseModel):
     config_path: Optional[str] = None
     bridge: Optional[str] = None
     started_at_utc: Optional[str] = None
+    cpu_percent: Optional[float] = None
+    rss_mb: Optional[int] = None
+    manual_hold: bool = False
 
 class StrategiesResponse(BaseModel):
     strategies: list
@@ -318,6 +369,7 @@ def _build_strategy_registry() -> list:
     strategies = []
     lean_procs = discover_lean_processes()
     running_configs = {p["config"]: p["pid"] for p in lean_procs if p["config"]}
+    control_state = _load_control_state()
 
     # -- SoloQuant live-paper strategies --
     if LIVEPAPER_DIR.exists():
@@ -349,6 +401,7 @@ def _build_strategy_registry() -> list:
                 alive = True
                 uptime = get_uptime_seconds(actual_pid)
 
+            cpu, rss = _resources_for(actual_pid)
             strategies.append(StrategyInfo(
                 strategy_id=sid,
                 algorithm_id=alg_id or sid,
@@ -358,6 +411,9 @@ def _build_strategy_registry() -> list:
                 uptime_seconds=uptime,
                 config_path=config_path,
                 started_at_utc=started_at,
+                cpu_percent=cpu,
+                rss_mb=rss,
+                manual_hold=bool(control_state.get(sid, {}).get("manual_hold", False)),
             ))
 
     # -- Legacy live-paper strategies --
@@ -387,6 +443,7 @@ def _build_strategy_registry() -> list:
         # Find matching bridge
         bridge_name = CONFIG_TO_BRIDGE.get(base_name)
 
+        cpu, rss = _resources_for(running_pid)
         strategies.append(StrategyInfo(
             strategy_id=alg_id or base_name,
             algorithm_id=alg_id or base_name,
@@ -396,6 +453,9 @@ def _build_strategy_registry() -> list:
             uptime_seconds=uptime,
             config_path=config_path,
             bridge=bridge_name,
+            cpu_percent=cpu,
+            rss_mb=rss,
+            manual_hold=bool(control_state.get(alg_id or base_name, {}).get("manual_hold", False)),
         ))
 
     # -- Bridge processes --
@@ -404,6 +464,7 @@ def _build_strategy_registry() -> list:
         alive = pid is not None and pid_alive(pid)
         uptime = get_uptime_seconds(pid) if alive else None
 
+        cpu, rss = _resources_for(pid if alive else None)
         strategies.append(StrategyInfo(
             strategy_id=f"bridge:{bname}",
             algorithm_id=None,
@@ -411,6 +472,8 @@ def _build_strategy_registry() -> list:
             status="running" if alive else "stopped",
             pid=pid if alive else None,
             uptime_seconds=uptime,
+            cpu_percent=cpu,
+            rss_mb=rss,
         ))
 
     # -- Core processes --
@@ -423,6 +486,7 @@ def _build_strategy_registry() -> list:
         alive = pid is not None and pid_alive(pid)
         uptime = get_uptime_seconds(pid) if alive else None
 
+        cpu, rss = _resources_for(pid if alive else None)
         strategies.append(StrategyInfo(
             strategy_id=f"core:{cname}",
             algorithm_id=None,
@@ -430,6 +494,8 @@ def _build_strategy_registry() -> list:
             status="running" if alive else "stopped",
             pid=pid if alive else None,
             uptime_seconds=uptime,
+            cpu_percent=cpu,
+            rss_mb=rss,
         ))
 
     return strategies
