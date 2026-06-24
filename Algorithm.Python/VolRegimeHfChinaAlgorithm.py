@@ -16,7 +16,9 @@ class VolRegimeHfChinaAlgorithm(QCAlgorithm):
     def initialize(self):
         self.set_start_date(2018, 1, 1)
         self.set_end_date(2025, 12, 31)
-        self.set_cash(1_000_000)
+        # A-share: account currency must be CNY (AShareStockFeeModel settles in CNY).
+        self.set_account_currency("CNY")
+        self.set_cash("CNY", 1_000_000)
 
         # A-share ETF: 510300 (Shanghai). Plain ticker; market inferred SSE.
         self.symbol = self.add_equity("510300", Resolution.DAILY, Market.SSE).symbol

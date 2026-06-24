@@ -58,12 +58,13 @@ class RegimeVolGatedAlphaModel(AlphaModel):
         scaled = max(-self.W_MAX, min(self.W_MAX, c_wf * signal))
         self._prev_signal = scaled
 
-        if abs(scaled) < 1e-4:
+        # A-share ETFs cannot be shorted: implement long-flat (paper's "Long-Flat"
+        # variant). Only go long when the signal is positive; otherwise stay flat.
+        if scaled <= 1e-4:
             return []
 
-        direction = InsightDirection.UP if scaled > 0 else InsightDirection.DOWN
         insight = Insight.price(self.symbol, timedelta(days=7),
-                                direction, abs(scaled), None)
+                                InsightDirection.UP, float(scaled), None)
         return [insight]
 
     def _load_features(self, algorithm):
