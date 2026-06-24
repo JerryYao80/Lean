@@ -42,8 +42,13 @@ def test_algorithm_id_variable_preserved():
     assert "algorithm_id" in names
 
 
-def test_button_panel_appended_once():
+def test_no_leftover_control_button_panel():
+    """The volkovlabs-button-panel was delisted from the Grafana registry (404), so we
+    do NOT ship a dashboard button panel — a broken 'plugin not found' panel would violate
+    the 'do not modify the dashboard' constraint. Manual control is delivered via the API
+    (POST /api/strategies/{id}/stop|start) + a follow-up Business Forms panel wiring.
+    This assertion guards against accidentally re-introducing a stale button panel.
+    """
     db = json.loads(DASHBOARD.read_text())
-    control = [p for p in db["panels"] if p.get("title") == "Manual Control"]
-    assert len(control) == 1, "exactly one Manual Control button panel expected"
-    assert control[0]["type"] == "volkovlabs-button-panel"
+    stale = [p for p in db["panels"] if p.get("type") == "volkovlabs-button-panel"]
+    assert not stale, "stale volkovlabs-button-panel present — remove it (plugin delisted)"

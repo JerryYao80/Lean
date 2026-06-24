@@ -3086,63 +3086,6 @@
           "rawQuery": true
         }
       ]
-    },
-    {
-      "id": 900,
-      "type": "volkovlabs-button-panel",
-      "title": "Manual Control",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "strategy-control-api"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 88
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "buttons": [
-          {
-            "name": "Start",
-            "type": "API",
-            "enable": true,
-            "icon": "play",
-            "background": "green",
-            "api": {
-              "method": "POST",
-              "url": "/api/strategies/by-algorithm/${algorithm_id}/start",
-              "datasource": {
-                "type": "yesoreyeram-infinity-datasource",
-                "uid": "strategy-control-api"
-              },
-              "data": "",
-              "headers": []
-            }
-          },
-          {
-            "name": "Stop",
-            "type": "API",
-            "enable": true,
-            "icon": "stop",
-            "background": "red",
-            "api": {
-              "method": "POST",
-              "url": "/api/strategies/by-algorithm/${algorithm_id}/stop",
-              "datasource": {
-                "type": "yesoreyeram-infinity-datasource",
-                "uid": "strategy-control-api"
-              },
-              "data": "",
-              "headers": []
-            }
-          }
-        ]
-      }
     }
   ],
   "refresh": "30s",

@@ -105,36 +105,48 @@ python3 Scripts/soloquant_orchestrator.py --config config-soloquant.json --stage
 
 ## 手动启停 live-paper 策略
 
-当服务器资源吃紧，需要手动控制 live-paper 策略时，在 **Live Paper Trading** 看板
-(`/d/barra-cne5-live-paper/`) 底部的 **"Manual Control"** 面板操作（追加 panel #44，
-原 43 个面板一字未改，有回归测试 `Scripts/test_barra_dashboard_regression.py` 守护）：
+当服务器资源吃紧，需要手动控制 live-paper 策略时，通过 **Strategy Control API**
+（FastAPI :5000）对任意策略做粘性启停——停掉后 pipeline 后续 tick **不会**自动重启它
+（sticky stop），再启动才恢复。
 
-- 选定顶部 `algorithm_id` 变量 → 点 **Stop**（红）：立即停进程，并写入粘性
-  `manual_hold=true`，pipeline 后续 tick **不会**自动重启该策略（sticky stop）。
-- 点 **Start**（绿）：清除 `manual_hold=false` 并启动，pipeline 恢复正常维护。
-- 按钮经 `yesoreyeram-infinity-datasource`（uid `strategy-control-api`）代理 POST，
-  Authorization Bearer 由数据源 `secureJsonData` 自动注入，看板 JSON 内不含明文 token。
+**当前用法（API / curl，已上线并通过 E2E 验证）：**
 
-后端：
+```bash
+TOKEN=$(cat Results/soloquant/.strategy-api-token)
+# 列出策略 + 每进程 cpu_percent/rss_mb/manual_hold
+curl -s "http://localhost:5000/api/strategies?group=soloquant-lp" | python3 -m json.tool
+# 停（粘性，pipeline 不再自动拉起）
+curl -X POST http://localhost:5000/api/strategies/<strategy_id>/stop  -H "Authorization: Bearer $TOKEN"
+# 启（清除粘性，pipeline 恢复维护）
+curl -X POST http://localhost:5000/api/strategies/<strategy_id>/start -H "Authorization: Bearer $TOKEN"
+```
+
+> `<strategy_id>` 用 `/api/strategies` 返回的 `strategy_id`（如 `2002-04304-...`），
+> 不是 `algorithm_id`。可用 `GET /api/strategies/by-algorithm/<algorithm_id>` 反查。
+
+后端实现（均已上线）：
 
 - 粘性状态文件：`Results/soloquant/live-paper-control.json`（按 `strategy_id` 记录，
   字段 `manual_hold` / `last_action` / `last_action_at` / `last_actor`）。
-- 控制端点：`POST /api/strategies/{strategy_id}/stop|start`（Bearer token，
-  见 `Results/soloquant/.strategy-api-token`）；stop→`manual_hold=true`，start/restart→`false`。
+- 控制端点：`POST /api/strategies/{strategy_id}/stop|start|restart`（Bearer token）；
+  stop→`manual_hold=true`，start/restart→`false`。
 - 状态查询：`GET /api/strategies` 每项含每进程 `cpu_percent`（瞬时，/proc 双采样）、
   `rss_mb`、`manual_hold`。
 - 守卫：`Scripts/soloquant_pipeline_runner.py::start_registered_live_paper_strategies`
   跳过 `manual_hold=true` 的策略（默认无条目=false，完全向后兼容）。
+- 单测：`Scripts/test_strategy_control_api.py`、`Scripts/test_live_paper_manual_hold.py`、
+  `Scripts/test_barra_dashboard_regression.py`（守护 barra 看板原 43 面板不变）。
 
-部署（含 volkovlabs-button-panel 插件安装）：
+**Grafana 看板按钮（待后续在 UI 配置）：**
 
-```bash
-bash monitoring/grafana/install_strategy_control.sh
-cp monitoring/grafana/dashboards/lean/barra-cne5-live-paper.json \
-   /home/project/curiocity/Lean/grafana/dashboards/barra-cne5-live-paper.json
-```
+原计划的 `volkovlabs-button-panel` 已从 Grafana 插件 registry 下架（安装返回 404），
+其继任者 `volkovlabs-form-panel`（Business Forms）schema 不同，盲配会出"插件未找到"
+红框，违反"不动看板"硬约束，故**先不上看板按钮**，保持 `barra-cne5-live-paper`
+原 43 面板完全不变。`volkovlabs-form-panel` 已安装（`docker exec lean-grafana
+grafana-cli plugins ls` 可见）。后续可在 Grafana UI 里用 Business Forms 面板配
+Start/Stop 按钮：经 `yesoreyeram-infinity-datasource`（uid `strategy-control-api`，
+其 `secureJsonData` 自动注入 Bearer token）POST 到
+`/api/strategies/<strategy_id>/start|stop`，配好后导出回填 JSON 并跑回归测试。
 
-> 注：`install_strategy_control.sh` 含 Grafana 凭据，已被 `.gitignore` 忽略（本地脚本）。
-> 若已安装插件的版本按钮字段 schema 与本仓库 JSON 略有差异，在 Grafana 编辑器里
-> 校准按钮的 API 请求（method=POST + URL + 数据源=Strategy Control API）后导出回填 JSON，
-> 再跑 `pytest Scripts/test_barra_dashboard_regression.py` 确认 43 面板不变。
+> 注：`monitoring/grafana/install_strategy_control.sh` 含 Grafana 凭据，已被
+> `.gitignore` 忽略（本地脚本）。
