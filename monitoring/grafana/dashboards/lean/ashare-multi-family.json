@@ -2489,14 +2489,14 @@
           "type": "influxdb",
           "uid": "lean-influxdb"
         },
-        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily|AShareBarraCNE5/",
+        "definition": "SHOW TAG VALUES FROM \"live_paper_strategy_catalog\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /MultiFamily|BarraCNE5/ AND time > now() - 1h",
         "hide": 0,
         "includeAll": false,
         "label": "Algorithm",
         "multi": false,
         "name": "algorithm_id",
         "options": [],
-        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /AShareMultiFamily|AShareBarraCNE5/",
+        "query": "SHOW TAG VALUES FROM \"live_paper_strategy_catalog\" WITH KEY = \"algorithm_id\" WHERE \"algorithm_id\" =~ /MultiFamily|BarraCNE5/ AND time > now() - 1h",
         "refresh": 1,
         "sort": 1,
         "type": "query"
