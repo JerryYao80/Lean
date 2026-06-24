@@ -32,7 +32,11 @@ def rolling_realized_quarticity(returns: pd.Series, window: int = 5) -> pd.Serie
 
 
 def signed_jump(returns: pd.Series, vol_window: int = 22) -> pd.Series:
-    """Signed jump proxy: sign(r_t) * |r_t - rolling_mean_vol|."""
+    """Signed jump proxy: sign(r_t) * rolling_std_vol.
+
+    Direction of the daily return signed onto the rolling volatility magnitude,
+    a daily-frequency proxy for the paper's SignedJump_t = CJ_t * sign(r_t).
+    """
     vol = returns.rolling(vol_window).std()
     return np.sign(returns) * vol.abs()
 
