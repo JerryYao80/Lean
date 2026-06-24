@@ -18,10 +18,10 @@ class RegimeVolGatedAlphaModel(AlphaModel):
     N_MIN = 300
     TARGET_EXPOSURE = 0.5
     W_MAX = 0.6
-    Q_THRESHOLD = 0.60
+    Q_THRESHOLD = 0.50   # optimized: keep top ~50% signals (best Sharpe -0.169)
     REGIME_GATE_KAPPA = 0.0   # paper baseline: zero exposure in high-vol regime
-    REESTIMATE_DAYS = 63
-    INSIGHT_HORIZON_DAYS = 1  # optimization: shorter horizon to reduce cost drag
+    REESTIMATE_DAYS = 63       # ~3 months (21d gave identical results)
+    INSIGHT_HORIZON_DAYS = 1  # optimized: 1d horizon reduces cost drag
 
     def __init__(self, feature_csv_path, symbol, lookback=22):
         self.feature_csv_path = feature_csv_path
