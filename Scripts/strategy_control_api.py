@@ -41,6 +41,7 @@ CONDA_ENV = os.environ.get("CONDA_ENV", "/root/miniconda3/envs/quant311/bin/pyth
 API_PORT = int(os.environ.get("STRATEGY_API_PORT", "5000"))
 TOKEN_FILE = SOLOQUANT_DIR / ".strategy-api-token"
 AUDIT_LOG = SOLOQUANT_DIR / "strategy-control-audit.log"
+CONTROL_STATE_FILE = SOLOQUANT_DIR / "live-paper-control.json"
 
 # Bridge name -> script mapping (mirrors sqctl.sh BRIDGE_PROCS)
 BRIDGE_MAP = {
@@ -132,6 +133,45 @@ def pid_alive(pid: int) -> bool:
     except (ProcessLookupError, PermissionError, FileNotFoundError):
         pass
     return False
+
+# ─── Manual Control State ─────────────────────────────────────────────────────
+
+def _load_control_state() -> dict:
+    """Load the sticky manual-control state.
+
+    Returns {} when the file is missing/corrupt (treat as no holds → backward compatible).
+    """
+    try:
+        if CONTROL_STATE_FILE.exists():
+            data = json.loads(CONTROL_STATE_FILE.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        log.warning(f"control state load failed ({CONTROL_STATE_FILE}): {e}")
+    return {}
+
+
+def _save_control_state(strategy_id: str, action: str, actor: str = "grafana") -> None:
+    """Record a sticky manual-control action.
+
+    action == "stop"  → manual_hold=True  (orchestrator must not auto-restart)
+    action == "start" → manual_hold=False (release hold)
+    Never raises — a write failure must not block the underlying start/stop of the process.
+    """
+    try:
+        state = _load_control_state()
+        state[strategy_id] = {
+            "manual_hold": action == "stop",
+            "last_action": action,
+            "last_action_at": datetime.now(timezone.utc).isoformat(),
+            "last_actor": actor,
+        }
+        CONTROL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONTROL_STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        tmp.replace(CONTROL_STATE_FILE)
+    except Exception as e:
+        log.warning(f"control state save failed ({strategy_id}={action}): {e}")
 
 def get_uptime_seconds(pid: int) -> Optional[int]:
     """Get process uptime in seconds."""
