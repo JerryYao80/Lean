@@ -585,6 +585,8 @@ async def start_strategy(strategy_id: str, _=Depends(verify_token)):
 
     success, msg, new_pid = start_strategy_by_config(config_path)
     audit_log("start", strategy_id, "success" if success else "failed", msg)
+    if success:
+        _save_control_state(strategy_id, "start")
 
     # Also start matching bridge
     if target.bridge:
@@ -614,6 +616,7 @@ async def stop_strategy(strategy_id: str, _=Depends(verify_token)):
     ok = graceful_stop(target.pid, strategy_id, timeout=20)
     msg = f"Stopped PID {target.pid}" if ok else f"Failed to stop PID {target.pid}"
     audit_log("stop", strategy_id, "success" if ok else "failed", msg)
+    _save_control_state(strategy_id, "stop")
 
     # Also stop matching bridge
     if target.bridge:
@@ -647,6 +650,8 @@ async def restart_strategy(strategy_id: str, _=Depends(verify_token)):
 
     success, msg, new_pid = start_strategy_by_config(config_path)
     audit_log("restart", strategy_id, "success" if success else "failed", msg)
+    if success:
+        _save_control_state(strategy_id, "start")
 
     if target.bridge:
         b_ok, b_msg = start_bridge_by_name(target.bridge)
