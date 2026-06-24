@@ -457,12 +457,31 @@ def load_pid_file(path: str | Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _is_strategy_manually_held(strategy_id: str, control_state_path: str | Path | None) -> bool:
+    """True if the operator manually stopped this strategy (sticky hold).
+
+    Missing file / missing entry / read error → False (backward compatible).
+    """
+    if not control_state_path:
+        return False
+    path = Path(control_state_path)
+    try:
+        if path.exists():
+            data = json.loads(path.read_text())
+            if isinstance(data, dict):
+                return bool(data.get(strategy_id, {}).get("manual_hold", False))
+    except Exception:
+        pass
+    return False
+
+
 def start_registered_live_paper_strategies(
     registry_path: str | Path,
     process_root: str | Path | None = None,
     popen=subprocess.Popen,
     process_alive: Callable[[int], bool] = process_alive,
     extra_env: dict | None = None,
+    control_state_path: str | Path | None = None,
 ) -> dict:
     if not Path(registry_path).exists():
         return {
@@ -477,6 +496,8 @@ def start_registered_live_paper_strategies(
     strategies = registry.get("strategies") if isinstance(registry.get("strategies"), list) else []
     root = Path(process_root or (Path(registry_path).resolve().parent / "live-paper-processes"))
     root.mkdir(parents=True, exist_ok=True)
+    if control_state_path is None:
+        control_state_path = Path(registry_path).resolve().parent / "live-paper-control.json"
     started: list[dict] = []
     skipped: list[dict] = []
 
@@ -491,6 +512,9 @@ def start_registered_live_paper_strategies(
             continue
         if status == "retired":
             skipped.append({"strategy_id": strategy_id, "reason": "retired"})
+            continue
+        if _is_strategy_manually_held(strategy_id, control_state_path):
+            skipped.append({"strategy_id": strategy_id, "reason": "manual_hold"})
             continue
 
         pid_file = root / f"{orchestrator.safe_slug(strategy_id, 'strategy')}.pid.json"
