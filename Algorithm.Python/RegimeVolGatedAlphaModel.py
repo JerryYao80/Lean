@@ -112,7 +112,7 @@ class RegimeVolGatedAlphaModel(AlphaModel):
             return
         try:
             import xgboost as xgb
-        except Exception as e:
+        except BaseException as e:
             algorithm.error(f'[vol-regime] xgboost unavailable: {e}')
             return
 
