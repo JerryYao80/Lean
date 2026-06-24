@@ -100,3 +100,41 @@ python3 Scripts/soloquant_orchestrator.py --config config-soloquant.json --stage
 - **pipeline 必须常驻**：编辑任何 pipeline 脚本后，`./sqctl.sh restart core`。
 - **LEAN native only**：回测/组合/统计全部用 LEAN 原生输出，不自算 LEAN 已提供的指标。
 - **A 股 ticker**：用纯代码（`600519`），不是 `600519.SSE`；6xx=SSE，0xx/3xx=SZSE。
+
+---
+
+## 手动启停 live-paper 策略
+
+当服务器资源吃紧，需要手动控制 live-paper 策略时，在 **Live Paper Trading** 看板
+(`/d/barra-cne5-live-paper/`) 底部的 **"Manual Control"** 面板操作（追加 panel #44，
+原 43 个面板一字未改，有回归测试 `Scripts/test_barra_dashboard_regression.py` 守护）：
+
+- 选定顶部 `algorithm_id` 变量 → 点 **Stop**（红）：立即停进程，并写入粘性
+  `manual_hold=true`，pipeline 后续 tick **不会**自动重启该策略（sticky stop）。
+- 点 **Start**（绿）：清除 `manual_hold=false` 并启动，pipeline 恢复正常维护。
+- 按钮经 `yesoreyeram-infinity-datasource`（uid `strategy-control-api`）代理 POST，
+  Authorization Bearer 由数据源 `secureJsonData` 自动注入，看板 JSON 内不含明文 token。
+
+后端：
+
+- 粘性状态文件：`Results/soloquant/live-paper-control.json`（按 `strategy_id` 记录，
+  字段 `manual_hold` / `last_action` / `last_action_at` / `last_actor`）。
+- 控制端点：`POST /api/strategies/{strategy_id}/stop|start`（Bearer token，
+  见 `Results/soloquant/.strategy-api-token`）；stop→`manual_hold=true`，start/restart→`false`。
+- 状态查询：`GET /api/strategies` 每项含每进程 `cpu_percent`（瞬时，/proc 双采样）、
+  `rss_mb`、`manual_hold`。
+- 守卫：`Scripts/soloquant_pipeline_runner.py::start_registered_live_paper_strategies`
+  跳过 `manual_hold=true` 的策略（默认无条目=false，完全向后兼容）。
+
+部署（含 volkovlabs-button-panel 插件安装）：
+
+```bash
+bash monitoring/grafana/install_strategy_control.sh
+cp monitoring/grafana/dashboards/lean/barra-cne5-live-paper.json \
+   /home/project/curiocity/Lean/grafana/dashboards/barra-cne5-live-paper.json
+```
+
+> 注：`install_strategy_control.sh` 含 Grafana 凭据，已被 `.gitignore` 忽略（本地脚本）。
+> 若已安装插件的版本按钮字段 schema 与本仓库 JSON 略有差异，在 Grafana 编辑器里
+> 校准按钮的 API 请求（method=POST + URL + 数据源=Strategy Control API）后导出回填 JSON，
+> 再跑 `pytest Scripts/test_barra_dashboard_regression.py` 确认 43 面板不变。
