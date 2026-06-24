@@ -40,3 +40,10 @@ def test_algorithm_id_variable_preserved():
     db = json.loads(DASHBOARD.read_text())
     names = [v.get("name") for v in db.get("templating", {}).get("list", [])]
     assert "algorithm_id" in names
+
+
+def test_button_panel_appended_once():
+    db = json.loads(DASHBOARD.read_text())
+    control = [p for p in db["panels"] if p.get("title") == "Manual Control"]
+    assert len(control) == 1, "exactly one Manual Control button panel expected"
+    assert control[0]["type"] == "volkovlabs-button-panel"
