@@ -19,8 +19,8 @@ class RegimeVolGatedAlphaModel(AlphaModel):
     TARGET_EXPOSURE = 0.5
     W_MAX = 0.6
     Q_THRESHOLD = 0.60
-    REGIME_GATE_KAPPA = 0.0   # exposure multiplier in high-vol regime
-    REESTIMATE_DAYS = 63       # ~3 months
+    REGIME_GATE_KAPPA = 1.0   # optimization: disable regime gating to test baseline signal
+    REESTIMATE_DAYS = 63
 
     def __init__(self, feature_csv_path, symbol, lookback=22):
         self.feature_csv_path = feature_csv_path
