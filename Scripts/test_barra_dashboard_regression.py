@@ -43,12 +43,29 @@ def test_algorithm_id_variable_preserved():
 
 
 def test_no_leftover_control_button_panel():
-    """The volkovlabs-button-panel was delisted from the Grafana registry (404), so we
-    do NOT ship a dashboard button panel — a broken 'plugin not found' panel would violate
-    the 'do not modify the dashboard' constraint. Manual control is delivered via the API
-    (POST /api/strategies/{id}/stop|start) + a follow-up Business Forms panel wiring.
-    This assertion guards against accidentally re-introducing a stale button panel.
+    """volkovlabs-button-panel was delisted from the Grafana registry (404), so the
+    dashboard uses volkovlabs-form-panel (Business Forms) for the control buttons instead.
+    This assertion guards against accidentally re-introducing the stale delisted plugin.
     """
     db = json.loads(DASHBOARD.read_text())
     stale = [p for p in db["panels"] if p.get("type") == "volkovlabs-button-panel"]
     assert not stale, "stale volkovlabs-button-panel present — remove it (plugin delisted)"
+
+
+def test_manual_control_form_panels_present():
+    """The Manual Control row + Start/Stop Business Forms panels are appended after the
+    original 43. They POST via the authenticated Infinity datasource (no token in JSON).
+    """
+    db = json.loads(DASHBOARD.read_text())
+    types_titles = [(p.get("type"), p.get("title")) for p in db["panels"]]
+    assert ("row", "Manual Control") in types_titles
+    start = [p for p in db["panels"] if p.get("title") == "Start Strategy"]
+    stop = [p for p in db["panels"] if p.get("title") == "Stop Strategy"]
+    assert len(start) == 1 and start[0]["type"] == "volkovlabs-form-panel"
+    assert len(stop) == 1 and stop[0]["type"] == "volkovlabs-form-panel"
+    # Start/Stop POST via the Infinity datasource (auth injected server-side)
+    for p in start + stop:
+        upd = p.get("options", {}).get("update", {})
+        assert upd.get("method") == "POST"
+        assert "/api/strategies/by-algorithm/" in upd.get("url", "")
+        assert upd.get("datasource", {}).get("uid") == "strategy-control-api"

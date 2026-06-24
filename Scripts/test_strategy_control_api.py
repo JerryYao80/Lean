@@ -92,6 +92,38 @@ def test_restart_clears_manual_hold(client, control_file, monkeypatch):
     assert state["alpha-123"]["manual_hold"] is False
 
 
+def test_stop_by_algorithm_sets_manual_hold(client, control_file, monkeypatch):
+    # strategy_id "alpha-123" but algorithm_id "AlphaAlgo" — resolve by algorithm
+    info = api.StrategyInfo(strategy_id="alpha-123", algorithm_id="AlphaAlgo",
+                            group="soloquant-lp", status="running", pid=99999, config_path="/tmp/cfg.json")
+    monkeypatch.setattr(api, "get_strategies", lambda: [info])
+    monkeypatch.setattr(api, "graceful_stop", lambda p, n, timeout=20: True)
+    r = client.post("/api/strategies/by-algorithm/AlphaAlgo/stop", headers={"Authorization": "Bearer test-token"})
+    assert r.status_code == 200
+    assert r.json()["strategy_id"] == "alpha-123"
+    state = json.loads(control_file.read_text())
+    assert state["alpha-123"]["manual_hold"] is True
+
+
+def test_start_by_algorithm_clears_manual_hold(client, control_file, monkeypatch):
+    api._save_control_state("alpha-123", "stop")
+    info = api.StrategyInfo(strategy_id="alpha-123", algorithm_id="AlphaAlgo",
+                            group="soloquant-lp", status="stopped", pid=None, config_path="/tmp/cfg.json")
+    monkeypatch.setattr(api, "get_strategies", lambda: [info])
+    monkeypatch.setattr(api, "start_strategy_by_config", lambda cp: (True, "ok", 12345))
+    r = client.post("/api/strategies/by-algorithm/AlphaAlgo/start", headers={"Authorization": "Bearer test-token"})
+    assert r.status_code == 200
+    assert r.json()["strategy_id"] == "alpha-123"
+    state = json.loads(control_file.read_text())
+    assert state["alpha-123"]["manual_hold"] is False
+
+
+def test_by_algorithm_404_when_unknown(client, monkeypatch):
+    monkeypatch.setattr(api, "get_strategies", lambda: [])
+    r = client.post("/api/strategies/by-algorithm/Nope/stop", headers={"Authorization": "Bearer test-token"})
+    assert r.status_code == 404
+
+
 import os
 import time
 

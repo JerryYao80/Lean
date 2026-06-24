@@ -3086,6 +3086,163 @@
           "rawQuery": true
         }
       ]
+    },
+    {
+      "id": 900,
+      "type": "row",
+      "title": "Manual Control",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 88
+      },
+      "panels": []
+    },
+    {
+      "id": 910,
+      "type": "volkovlabs-form-panel",
+      "title": "Start Strategy",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "strategy-control-api"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 89
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "sync": true,
+        "manipulate": false,
+        "buttonGroup": {
+          "orientation": 1,
+          "submit": "Start Strategy",
+          "reset": "",
+          "options": {
+            "submit": {
+              "variant": "primary",
+              "icon": "play",
+              "size": "lg"
+            }
+          }
+        },
+        "layout": {
+          "orientation": 0,
+          "padding": 0,
+          "sectionPadding": 10,
+          "variant": 0,
+          "sectionVariant": 0
+        },
+        "initial": {
+          "method": "GET",
+          "url": "",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "strategy-control-api"
+          },
+          "headers": [],
+          "params": [],
+          "data": "",
+          "code": ""
+        },
+        "update": {
+          "method": "POST",
+          "url": "/api/strategies/by-algorithm/${algorithm_id}/start",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "strategy-control-api"
+          },
+          "contentType": "application/json",
+          "headers": [],
+          "params": [],
+          "data": "",
+          "code": "",
+          "payloadMode": "all",
+          "payload": {}
+        },
+        "elements": [],
+        "confirmation": false
+      },
+      "targets": []
+    },
+    {
+      "id": 911,
+      "type": "volkovlabs-form-panel",
+      "title": "Stop Strategy",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "strategy-control-api"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 89
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "sync": true,
+        "manipulate": false,
+        "buttonGroup": {
+          "orientation": 1,
+          "submit": "Stop Strategy",
+          "reset": "",
+          "options": {
+            "submit": {
+              "variant": "destructive",
+              "icon": "stop",
+              "size": "lg"
+            }
+          }
+        },
+        "layout": {
+          "orientation": 0,
+          "padding": 0,
+          "sectionPadding": 10,
+          "variant": 0,
+          "sectionVariant": 0
+        },
+        "initial": {
+          "method": "GET",
+          "url": "",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "strategy-control-api"
+          },
+          "headers": [],
+          "params": [],
+          "data": "",
+          "code": ""
+        },
+        "update": {
+          "method": "POST",
+          "url": "/api/strategies/by-algorithm/${algorithm_id}/stop",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "strategy-control-api"
+          },
+          "contentType": "application/json",
+          "headers": [],
+          "params": [],
+          "data": "",
+          "code": "",
+          "payloadMode": "all",
+          "payload": {}
+        },
+        "elements": [],
+        "confirmation": false
+      },
+      "targets": []
     }
   ],
   "refresh": "30s",

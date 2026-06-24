@@ -631,6 +631,60 @@ async def get_strategy_by_algorithm(algorithm_id: str):
         raise HTTPException(status_code=404, detail=f"No strategy found for algorithm_id: {algorithm_id}")
     return matches[0].dict()
 
+
+def _resolve_strategy_by_algorithm(algorithm_id: str):
+    """Find a strategy by algorithm_id (exact then partial). Returns StrategyInfo or None."""
+    strategies = get_strategies()
+    matches = [s for s in strategies if s.algorithm_id == algorithm_id]
+    if not matches:
+        matches = [s for s in strategies if s.algorithm_id and algorithm_id in s.algorithm_id]
+    return matches[0] if matches else None
+
+
+@app.post("/api/strategies/by-algorithm/{algorithm_id}/start", response_model=ActionResponse)
+async def start_strategy_by_algorithm(algorithm_id: str, _=Depends(verify_token)):
+    """Start a strategy looked up by algorithm_id (for Grafana $algorithm_id button)."""
+    invalidate_cache()
+    target = _resolve_strategy_by_algorithm(algorithm_id)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"No strategy found for algorithm_id: {algorithm_id}")
+    if target.status == "running":
+        return ActionResponse(success=True, message="Already running", strategy_id=target.strategy_id, action="start")
+    config_path = target.config_path
+    if not config_path:
+        raise HTTPException(status_code=400, detail=f"No config path for strategy: {target.strategy_id}")
+    success, msg, _ = start_strategy_by_config(config_path)
+    audit_log("start", target.strategy_id, "success" if success else "failed", msg)
+    if success:
+        _save_control_state(target.strategy_id, "start")
+    if target.bridge:
+        b_ok, b_msg = start_bridge_by_name(target.bridge)
+        audit_log("start", f"bridge:{target.bridge}", "success" if b_ok else "failed", b_msg)
+    invalidate_cache()
+    return ActionResponse(success=success, message=msg, strategy_id=target.strategy_id, action="start")
+
+
+@app.post("/api/strategies/by-algorithm/{algorithm_id}/stop", response_model=ActionResponse)
+async def stop_strategy_by_algorithm(algorithm_id: str, _=Depends(verify_token)):
+    """Stop a strategy looked up by algorithm_id (for Grafana $algorithm_id button)."""
+    invalidate_cache()
+    target = _resolve_strategy_by_algorithm(algorithm_id)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"No strategy found for algorithm_id: {algorithm_id}")
+    if target.status == "stopped":
+        return ActionResponse(success=True, message="Already stopped", strategy_id=target.strategy_id, action="stop")
+    if not target.pid:
+        raise HTTPException(status_code=400, detail=f"No PID for strategy: {target.strategy_id}")
+    ok = graceful_stop(target.pid, target.strategy_id, timeout=20)
+    msg = f"Stopped PID {target.pid}" if ok else f"Failed to stop PID {target.pid}"
+    audit_log("stop", target.strategy_id, "success" if ok else "failed", msg)
+    _save_control_state(target.strategy_id, "stop")
+    if target.bridge:
+        b_ok, b_msg = stop_bridge_by_name(target.bridge)
+        audit_log("stop", f"bridge:{target.bridge}", "success" if b_ok else "failed", b_msg)
+    invalidate_cache()
+    return ActionResponse(success=ok, message=msg, strategy_id=target.strategy_id, action="stop")
+
 @app.post("/api/strategies/{strategy_id}/start", response_model=ActionResponse)
 async def start_strategy(strategy_id: str, _=Depends(verify_token)):
     """Start a stopped strategy."""
