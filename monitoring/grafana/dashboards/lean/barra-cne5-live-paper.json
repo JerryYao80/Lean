@@ -3259,17 +3259,17 @@
           "value": "AShareBarraCNE5V2Algorithm"
         },
         "datasource": {
-          "type": "influxdb",
-          "uid": "lean-influxdb"
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "strategy-control-api"
         },
-        "definition": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"mode\" = 'live'",
+        "definition": "/api/strategies/algorithm-ids",
         "hide": 0,
         "includeAll": false,
         "label": "Algorithm",
         "multi": false,
         "name": "algorithm_id",
         "options": [],
-        "query": "SHOW TAG VALUES FROM \"lean_chart\" WITH KEY = \"algorithm_id\" WHERE \"mode\" = 'live'",
+        "query": "/api/strategies/algorithm-ids",
         "refresh": 1,
         "sort": 1,
         "type": "query"

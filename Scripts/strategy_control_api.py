@@ -619,6 +619,21 @@ async def list_strategies(group: Optional[str] = Query(None, description="Filter
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
+@app.get("/api/strategies/algorithm-ids")
+async def list_algorithm_ids():
+    """Deduped, sorted algorithm_id values across live-paper groups.
+
+    Backs the Grafana dashboard dropdown (replaces the stale lean_chart tag scan).
+    Returns a bare JSON array of strings for easy Infinity-variable parsing.
+    """
+    strategies = get_strategies()
+    ids = sorted({
+        s.algorithm_id for s in strategies
+        if s.algorithm_id and s.group in ("soloquant-lp", "legacy-lp")
+    })
+    return ids
+
+
 @app.get("/api/strategies/by-algorithm/{algorithm_id}")
 async def get_strategy_by_algorithm(algorithm_id: str):
     """Lookup strategy by algorithm_id (for Grafana template variable $algorithm_id)."""
