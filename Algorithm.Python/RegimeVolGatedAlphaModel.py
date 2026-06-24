@@ -19,8 +19,9 @@ class RegimeVolGatedAlphaModel(AlphaModel):
     TARGET_EXPOSURE = 0.5
     W_MAX = 0.6
     Q_THRESHOLD = 0.60
-    REGIME_GATE_KAPPA = 1.0   # optimization: disable regime gating to test baseline signal
+    REGIME_GATE_KAPPA = 0.0   # paper baseline: zero exposure in high-vol regime
     REESTIMATE_DAYS = 63
+    INSIGHT_HORIZON_DAYS = 1  # optimization: shorter horizon to reduce cost drag
 
     def __init__(self, feature_csv_path, symbol, lookback=22):
         self.feature_csv_path = feature_csv_path
@@ -53,6 +54,14 @@ class RegimeVolGatedAlphaModel(AlphaModel):
         if signal is None:
             return []
 
+        # Walk-forward threshold filter (paper eq 27-28): keep only signals whose
+        # absolute value exceeds the q-th quantile of recent |signal| history.
+        # This drops the weakest (1-q) fraction of signals before scaling.
+        if len(self._signal_history) >= 20:
+            thr = float(np.quantile(self._signal_history[-250:], self.Q_THRESHOLD))
+            if abs(signal) < thr:
+                signal = 0.0
+
         self._signal_history.append(abs(signal))
         c_wf = self._walk_forward_scale()
         scaled = max(-self.W_MAX, min(self.W_MAX, c_wf * signal))
@@ -63,7 +72,7 @@ class RegimeVolGatedAlphaModel(AlphaModel):
         if scaled <= 1e-4:
             return []
 
-        insight = Insight.price(self.symbol, timedelta(days=7),
+        insight = Insight.price(self.symbol, timedelta(days=self.INSIGHT_HORIZON_DAYS),
                                 InsightDirection.UP, float(scaled), None)
         return [insight]
 
@@ -178,13 +187,8 @@ class RegimeVolGatedAlphaModel(AlphaModel):
         if p_t > 0.5:
             s = self.REGIME_GATE_KAPPA * s
 
-        # Threshold filter: drop weak signals relative to recent signal scale
-        recent = df['log_rv'].iloc[max(0, idx - 250):idx]
-        if len(recent) > 10:
-            spread = np.abs(recent.diff().dropna())
-            thr = float(np.quantile(spread, self.Q_THRESHOLD))
-            if abs(s) < thr * 1e-3:
-                s = 0.0
+        # NOTE: walk-forward threshold filtering is applied in update() using the
+        # real-time signal history (paper eq 27-28: Q^WF_{q,t} on |s^G_t|), not here.
         return s
 
     def _walk_forward_scale(self):
