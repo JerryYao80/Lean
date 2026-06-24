@@ -58,4 +58,9 @@ class VolatilityScalingPCM(PortfolioConstructionModel):
         if price <= 0:
             return 0.0
         target_value = weight * algorithm.portfolio.total_portfolio_value
-        return target_value / price
+        raw_qty = target_value / price
+        # A-share: round to nearest 100-share lot (AShareStockFillModel rejects
+        # non-multiples of 100). Round half away from zero so signs are preserved.
+        lot = 100.0
+        rounded = math.copysign(round(abs(raw_qty) / lot) * lot, raw_qty)
+        return rounded
