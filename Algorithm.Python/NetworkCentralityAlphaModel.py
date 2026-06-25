@@ -22,6 +22,7 @@ class NetworkCentralityAlphaModel(AlphaModel):
         self.feature_csv_path = feature_csv_path
         self.top_n = int(top_n)
         self._features = None
+        self._last_emit_month = None  # gate: emit only once per factor month
 
     def on_securities_changed(self, algorithm, changes):
         pass
@@ -42,6 +43,15 @@ class NetworkCentralityAlphaModel(AlphaModel):
                 return []
             latest = recent['trade_date'].max()
             current = self._features[self._features['trade_date'] == latest]
+        else:
+            latest = current_date
+
+        # Monthly rebalance gate: only emit insights when a NEW factor month
+        # becomes available. Without this, update() runs every trading day and
+        # the PCM churns the book daily (91k orders over 10y observed before).
+        if latest == self._last_emit_month:
+            return []
+        self._last_emit_month = latest
 
         if 'cc' not in current.columns:
             return []
