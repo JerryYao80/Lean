@@ -100,12 +100,21 @@ def load_registry_universe(registry_file: str | Path, exclude_money_market: bool
     return sorted(symbols)
 
 
-def scale_price(value) -> int:
-    return int(round(float(value) * 10000))
+def scale_price(value):
+    """Price in real CNY yuan (no scaling).
+
+    Previously multiplied by 10000, which inflated prices (e.g. 600519 Moutai
+    showed 2,100,200 instead of ~210 yuan) and made A-share strategies unable to
+    afford any position relative to a 1M CNY account, producing fake Sharpe/returns.
+    LEAN TradeBar parses prices as decimal and accepts fractional yuan, so the
+    integer scaling is unnecessary. Round to 4 dp to keep CSV compact.
+    """
+    return round(float(value), 4)
 
 
-def scale_volume(value) -> int:
-    return int(round(float(value) * 100))
+def scale_volume(value):
+    """Volume rounded to integer shares (no scaling)."""
+    return int(round(float(value)))
 
 
 def build_export_rows(frame: pd.DataFrame, start_date: str | None = None, end_date: str | None = None) -> list[str]:
