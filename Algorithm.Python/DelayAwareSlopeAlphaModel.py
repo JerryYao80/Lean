@@ -102,12 +102,25 @@ class DelayAwareSlopeAlphaModel(AlphaModel):
         algorithm.debug(f'[delay-aware] retrained XGBoost (val corr={corr:.3f})')
 
     def _predict_current(self, algorithm):
-        """Predict slope for symbols currently in the algorithm's universe."""
+        """Predict slope for symbols at the current algorithm date."""
         df = self._features
         if len(df) == 0:
             return {}
-        latest_by_code = df.sort_values('trade_date').groupby('ts_code').tail(1)
-        feats = latest_by_code.set_index('ts_code')
+
+        # Get current date from algorithm (format: YYYYMMDD)
+        current_date = algorithm.time.strftime('%Y%m%d')
+
+        # Filter features for current date
+        current_feats = df[df['trade_date'] == current_date]
+        if current_feats.empty:
+            # Fallback: use most recent date <= current
+            recent = df[df['trade_date'] <= current_date]
+            if recent.empty:
+                return {}
+            latest_date = recent['trade_date'].max()
+            current_feats = df[df['trade_date'] == latest_date]
+
+        feats = current_feats.set_index('ts_code')
         out = {}
         for symbol in algorithm.active_securities.keys():
             code = self._symbol_to_ts_code(symbol)

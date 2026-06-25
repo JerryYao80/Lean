@@ -136,12 +136,71 @@ def load_daily_returns(ts_codes, start_date, end_date):
     return panel.dropna(how='all').fillna(0.0)
 
 
+def build_time_series_features(returns, max_lag=5, window=60, rebalance_every=21):
+    """Build per-(date, ts_code) time-series feature frame for walk-forward training.
+
+    - lead_strength/follow_strength: recomputed every `rebalance_every` days using
+      the trailing `window` of returns (controls N*N*max_lag compute cost).
+    - momentum/volatility/slope_target: computed daily.
+    - slope_target = future 5-day return (training target; uses forward data, only
+      consumed as label y, never as a feature at prediction time).
+
+    returns: DataFrame (T x N), index = trade_date str, columns = ts_code.
+    Returns DataFrame sorted by (ts_code, trade_date).
+    """
+    codes = list(returns.columns)
+    n = len(codes)
+    dates = list(returns.index)
+    T = len(dates)
+
+    # Precompute lead/follow strength per rebalance date (cache by rebalance bucket).
+    lead_cache = {}
+    follow_cache = {}
+    for t in range(window + max_lag, T, rebalance_every):
+        R_win = returns.iloc[t - window:t]
+        try:
+            C = lagged_correlation(R_win, max_lag=max_lag, window=window)
+            ls, fs = lead_follow_strength(C)
+            lead_cache[t] = np.nan_to_num(ls, nan=0.0)
+            follow_cache[t] = np.nan_to_num(fs, nan=0.0)
+        except Exception:
+            lead_cache[t] = np.zeros(n)
+            follow_cache[t] = np.zeros(n)
+
+    rows = []
+    for t in range(window + max_lag, T - 5):
+        bucket = max((b for b in lead_cache if b <= t), default=None)
+        if bucket is None:
+            continue
+        lead_s = lead_cache[bucket]
+        follow_s = follow_cache[bucket]
+        date = dates[t]
+        for j, code in enumerate(codes):
+            r = returns[code].iloc[:t + 1]
+            if len(r) < 60:
+                continue
+            future_ret = returns[code].iloc[t + 1:t + 6].sum()
+            rows.append({
+                'trade_date': date,
+                'ts_code': code,
+                'lead_strength': float(lead_s[j]),
+                'follow_strength': float(follow_s[j]),
+                'ret_5d': float(r.iloc[-5:].sum()),
+                'ret_10d': float(r.iloc[-10:].sum()),
+                'ret_20d': float(r.iloc[-20:].sum()),
+                'vol_ratio': float(r.iloc[-20:].std() / (r.iloc[-60:].std() + 1e-9)),
+                'slope_target': float(future_ret),
+            })
+    return pd.DataFrame(rows)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--start-date', default='20200101')
     ap.add_argument('--end-date', default='20260623')
     ap.add_argument('--max-lag', type=int, default=5)
     ap.add_argument('--window', type=int, default=60)
+    ap.add_argument('--rebalance-every', type=int, default=21)
     ap.add_argument('--universe', nargs='+', default=['csi300', 'csi500'])
     args = ap.parse_args()
 
@@ -159,10 +218,12 @@ def main():
         if R.shape[1] > 300:
             vol = R.iloc[-60:].std().sort_values(ascending=False)
             R = R[vol.head(300).index]
-        feats = build_features(R, max_lag=args.max_lag, window=args.window)
+        feats = build_time_series_features(
+            R, max_lag=args.max_lag, window=args.window,
+            rebalance_every=args.rebalance_every)
         out = OUT_DIR / f'{uni}_features.csv'
         feats.to_csv(out, index=False)
-        print(f'[delay-aware] wrote {len(feats)} rows -> {out}')
+        print(f'[delay-aware] wrote {len(feats)} time-series rows -> {out}')
 
 
 if __name__ == '__main__':
