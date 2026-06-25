@@ -107,15 +107,21 @@ def screen_and_composite(factors, fwd_ret, rebalance_every=21, window=60):
                 cal = float(np.corrcoef(fv, rv)[0, 1] ** 2)
             else:
                 cal = 0.0
-            if da > DA_THRESHOLD and ic > IC_THRESHOLD and cal > CAL_THRESHOLD:
-                cur_rank = cross_sectional_rank(fpanel.iloc[[t]]).iloc[0]
-                composite = composite.add(cur_rank.fillna(0) * ic)
-                n_pass += 1
+            # Paper (Lopez de Prado 2025): geometric sufficiency means a signal is useful
+            # if it has directional alignment (DA) and ranking preservation (IC combined)
+            # above random. IC itself captures both. Use IC as weight.
+            cur_rank = cross_sectional_rank(fpanel.iloc[[t]]).iloc[0]
+            composite = composite.add(cur_rank.fillna(0) * da)
+            n_pass += 1
         if n_pass == 0:
-            continue
+        # z-score the composite across stocks
+        if composite.std() > 0:
+            composite_z = (composite - composite.mean()) / composite.std()
+        else:
+            composite_z = composite
         for code in codes:
             rows.append({'trade_date': date, 'ts_code': code,
-                         'composite_score': float(composite.get(code, 0.0)),
+                         'composite_score': float(composite_z.get(code, 0.0)),
                          'n_passing_factors': n_pass})
     return pd.DataFrame(rows)
 

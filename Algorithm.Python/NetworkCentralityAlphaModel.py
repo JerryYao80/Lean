@@ -16,7 +16,7 @@ class NetworkCentralityAlphaModel(AlphaModel):
     Reference: 华西证券《股票网络与网络中心度因子研究》(2021-03-14)
     """
 
-    INSIGHT_HORIZON_DAYS = 22  # monthly rebalance horizon
+    INSIGHT_HORIZON_DAYS = 45  # cross next monthly rebalance to avoid mid-cycle liquidation
 
     def __init__(self, feature_csv_path, top_n=60):
         self.feature_csv_path = feature_csv_path
