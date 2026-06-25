@@ -41,8 +41,7 @@ class DelayAwareGnnSdeAlgorithm(QCAlgorithm):
         feature_paths = [
             os.path.join(Globals.data_folder, 'alternative', 'delay-aware-gnn-sde',
                          'csi300_features.csv'),
-            os.path.join(Globals.data_folder, 'alternative', 'delay-aware-gnn-sde',
-                         'csi500_features.csv'),
+            # csi500_features.csv not available (000905.SH missing from tushare index_weight)
         ]
         self.set_universe_selection(ManualUniverseSelectionModel(list(self._equities.keys())))
         self.set_alpha(DelayAwareSlopeAlphaModel(feature_paths, top_n=20))
@@ -60,11 +59,16 @@ class DelayAwareGnnSdeAlgorithm(QCAlgorithm):
         base = Path('/home/project/tushare-downloader/tushare_data_v2/index_weight')
         codes = set()
         files = sorted(glob.glob(str(base / 'trade_date=*')))
-        for f in reversed(files[-10:]):
+        # Search last 200 files for 000300.SH (some may be empty or contain other indices)
+        for f in reversed(files[-200:]):
             try:
                 import pandas as pd
                 df = pd.read_parquet(f)
-                sub = df[df['index_code'] == '000300.SH'] if 'index_code' in df.columns else df
+                if len(df) == 0:
+                    continue
+                if 'index_code' not in df.columns:
+                    continue
+                sub = df[df['index_code'] == '000300.SH']
                 if len(sub) > 0:
                     col = 'con_code' if 'con_code' in sub.columns else 'ts_code'
                     codes.update(sub[col].astype(str).tolist())

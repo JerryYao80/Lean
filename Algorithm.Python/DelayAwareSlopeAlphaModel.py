@@ -62,8 +62,11 @@ class DelayAwareSlopeAlphaModel(AlphaModel):
         for p in self.feature_csv_paths:
             try:
                 frames.append(pd.read_csv(p))
+                algorithm.debug(f'[delay-aware] loaded {p}')
             except Exception as e:
-                algorithm.error(f'[delay-aware] feature load failed {p}: {e}')
+                # Non-fatal: skip missing CSVs (e.g. csi500 not available).
+                # Use debug, NOT error — algorithm.error() calls SetRunTimeError and halts.
+                algorithm.debug(f'[delay-aware] skip feature CSV {p}: {e}')
         if frames:
             self._features = pd.concat(frames, ignore_index=True)
             self._features['trade_date'] = self._features['trade_date'].astype(str)
