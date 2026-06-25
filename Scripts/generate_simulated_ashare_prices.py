@@ -8,7 +8,7 @@ Also creates minimal factor_files and map_files so LEAN can load the data.
 LEAN daily price CSV format:
   Header: Date,Open,High,Low,Close,Volume
   Date: YYYYMMDD HH:MM (always 00:00 for daily)
-  Prices: raw_price * 10000 (integer, no decimals)
+  Prices: real CNY yuan (decimal, no scaling) — LEAN parses as decimal
   Volume: shares (integer)
 
 Usage:
@@ -150,12 +150,11 @@ def generate_price_csv(
             high = max(high, open_price, close)
             low = min(low, open_price, close)
 
-            # Scale prices by 10000 for LEAN format
-            SCALE = 10000
-            open_scaled = int(round(open_price * SCALE))
-            high_scaled = int(round(high * SCALE))
-            low_scaled = int(round(low * SCALE))
-            close_scaled = int(round(close * SCALE))
+            # Prices in real CNY yuan (no scaling) — LEAN parses as decimal
+            open_scaled = round(open_price, 4)
+            high_scaled = round(high, 4)
+            low_scaled = round(low, 4)
+            close_scaled = round(close, 4)
 
             # Volume in shares (multiply by 100 from lots)
             volume = int(round(volume_base * (1 + rng.gauss(0, 0.3)) * 100))
