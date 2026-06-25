@@ -1,0 +1,32 @@
+{
+  "environment": "live-paper",
+  "algorithm-type-name": "DelayAwareGnnSdeAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "../../../Algorithm.Python/DelayAwareGnnSdeAlgorithm.py",
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+  "live-mode": true,
+  "live-mode-brokerage": "PaperBrokerage",
+  "setup-handler": "QuantConnect.Lean.Engine.Setup.BrokerageSetupHandler",
+  "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
+  "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.LiveTradingDataFeed",
+  "data-queue-handler": ["TushareDataQueue"],
+  "real-time-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
+  "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler",
+  "history-provider": ["TushareHistoryProvider"],
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": true,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
+  "influxdb-algorithm-id": "delay-aware-gnn-sde-live",
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "parameters": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data"
+  }
+}
