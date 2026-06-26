@@ -14,127 +14,102 @@ _spec.loader.exec_module(_mod)
 ChipPeakFactors = _mod.ChipPeakFactors
 PeakPattern = _mod.PeakPattern
 
+import math
 import pandas as pd
 
 
-def test_concentration_single_peak():
-    """Test: 完全集中的筹码（单价位）集中度=1.0"""
-    df = pd.DataFrame({
-        'corrected_price': [100.0],
-        'percent': [100.0]
+def _row(cost_5, cost_95, weight_avg, winner_rate):
+    """构造一行 cyq_perf 风格的 Series（已复权校正字段）。"""
+    return pd.Series({
+        'cost_5pct_adj': cost_5,
+        'cost_15pct_adj': (cost_5 + weight_avg) / 2,
+        'cost_50pct_adj': weight_avg,
+        'cost_85pct_adj': (cost_95 + weight_avg) / 2,
+        'cost_95pct_adj': cost_95,
+        'weight_avg_adj': weight_avg,
+        'winner_rate': winner_rate,
     })
-    assert ChipPeakFactors.concentration(df) == 1.0
+
+
+def test_concentration_single_peak():
+    """Test: 完全集中（成本带宽=0）集中度=1.0"""
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=0.0)
+    assert ChipPeakFactors.concentration(row) == 1.0
 
 
 def test_concentration_divergent():
-    """Test: 完全分散的筹码集中度接近0"""
-    df = pd.DataFrame({
-        'corrected_price': range(100, 110),
-        'percent': [10.0] * 10
-    })
-    conc = ChipPeakFactors.concentration(df)
-    assert abs(conc) < 0.01  # 归一化熵=ln(10), 1-1=0
+    """Test: 宽分布集中度应低于单峰阈值。"""
+    # spread = (250-50)/150 = 1.333 → conc = exp(-1.333) ≈ 0.264 < 0.6
+    row = _row(cost_5=50.0, cost_95=250.0, weight_avg=150.0, winner_rate=50.0)
+    conc = ChipPeakFactors.concentration(row)
+    assert conc < 0.6
+
+
+def test_concentration_missing_data():
+    """Test: 数据缺失返回 NaN"""
+    row = pd.Series({'cost_95pct_adj': float('nan'), 'cost_5pct_adj': 100.0,
+                     'weight_avg_adj': 100.0, 'winner_rate': 0.0})
+    assert math.isnan(ChipPeakFactors.concentration(row))
 
 
 def test_profit_ratio_basic():
-    """Test: 当前价110, 筹码在100/105/110, 获利盘=前两个=60%"""
-    df = pd.DataFrame({
-        'corrected_price': [100.0, 105.0, 110.0],
-        'percent': [30.0, 30.0, 40.0]
-    })
-    profit = ChipPeakFactors.profit_ratio(df, 110.0)
-    assert abs(profit - 0.6) < 0.01  # 100+105=60% (< 110, 不含110本身)
+    """Test: winner_rate=60 → 获利盘=0.6"""
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=60.0)
+    profit = ChipPeakFactors.profit_ratio(row)
+    assert abs(profit - 0.6) < 0.001
 
 
 def test_average_cost_and_deviation():
-    """Test: 平均成本 = 加权均值；偏离度 = (现价-均)/均"""
-    df = pd.DataFrame({
-        'corrected_price': [100.0, 110.0],
-        'percent': [50.0, 50.0]
-    })
-    avg = ChipPeakFactors.average_cost(df)
+    """Test: 平均成本=weight_avg_adj；偏离度=(现价-均)/均"""
+    row = _row(cost_5=100.0, cost_95=110.0, weight_avg=105.0, winner_rate=50.0)
+    avg = ChipPeakFactors.average_cost(row)
     assert abs(avg - 105.0) < 0.01
-    dev = ChipPeakFactors.cost_deviation(df, 110.0)
+    dev = ChipPeakFactors.cost_deviation(row, 110.0)
     assert abs(dev - (110.0 - 105.0) / 105.0) < 0.001
 
 
 def test_classify_peak_high_single():
-    """Test: 单价位集中(集中度1.0), 获利盘1.0 → HIGH_SINGLE_PEAK"""
-    df = pd.DataFrame({
-        'corrected_price': [100.0],
-        'percent': [100.0]
-    })
+    """Test: 集中(带宽0) + 获利盘1.0 → HIGH_SINGLE_PEAK（派发区）"""
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=95.0)
     params = ChipPeakFactors.DEFAULT_PARAMS
-    pattern = ChipPeakFactors.classify_peak(df, 105.0, params)
-    assert pattern == PeakPattern.HIGH_SINGLE_PEAK  # 集中度1.0>0.6, 获利盘1.0>0.8
+    pattern = ChipPeakFactors.classify_peak(row, 105.0, params)
+    assert pattern == PeakPattern.HIGH_SINGLE_PEAK  # conc=1.0>0.6, profit=0.95>0.8
 
 
 def test_classify_peak_low_single():
-    """Test: 单价位集中(集中度1.0), 现价低于筹码(套牢), 获利盘=0 → LOW_SINGLE_PEAK。
-
-    数据设计：筹码全部集中在 100.0 价位，现价 99.0（低于所有筹码成本），
-    故获利盘=0（无人获利），属于低位建仓区。
-    """
-    df = pd.DataFrame({
-        'corrected_price': [100.0],
-        'percent': [100.0]
-    })
+    """Test: 集中(带宽0) + 获利盘=0 → LOW_SINGLE_PEAK（建仓区）"""
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=5.0)
     params = ChipPeakFactors.DEFAULT_PARAMS
-    pattern = ChipPeakFactors.classify_peak(df, 99.0, params)
-    assert pattern == PeakPattern.LOW_SINGLE_PEAK  # 集中度1.0>0.6, 获利盘0.0<0.2
+    pattern = ChipPeakFactors.classify_peak(row, 99.0, params)
+    assert pattern == PeakPattern.LOW_SINGLE_PEAK  # conc=1.0>0.6, profit=0.05<0.2
 
 
-def test_classify_peak_divergent_uniform():
-    """Test: 完全均匀分散(集中度~0) → DIVERGENT"""
-    df = pd.DataFrame({
-        'corrected_price': range(100, 110),
-        'percent': [10.0] * 10
-    })
+def test_classify_peak_divergent_wide():
+    """Test: 宽分布(集中度低) → DIVERGENT"""
+    row = _row(cost_5=50.0, cost_95=250.0, weight_avg=150.0, winner_rate=50.0)
     params = ChipPeakFactors.DEFAULT_PARAMS
-    pattern = ChipPeakFactors.classify_peak(df, 105.0, params)
-    assert pattern == PeakPattern.DIVERGENT  # 集中度过低
+    pattern = ChipPeakFactors.classify_peak(row, 150.0, params)
+    assert pattern == PeakPattern.DIVERGENT  # conc≈0.264 < 0.6
 
 
 def test_composite_score_low_peak_positive():
-    """Test: 低位单峰密集（建仓区）应得正分。
-
-    数据设计：筹码全部集中在 100.0 价位，现价 99.0（套牢区，无人获利）。
-    - concentration = 1.0（单价位完全集中）
-    - profit_ratio = 0.0（无筹码在 99.0 之下）
-    - cost_deviation = (99-100)/100 = -0.01（max(0,-0.01)=0）
-    - classify → LOW_SINGLE_PEAK
-    - score = 1.0 × (1-0) × (1+0) = 1.0 > 0
-    """
-    df = pd.DataFrame({
-        'corrected_price': [100.0],
-        'percent': [100.0]
-    })
-    score = ChipPeakFactors.composite_score(df, 99.0, ChipPeakFactors.DEFAULT_PARAMS)
+    """Test: 低位单峰密集（建仓区）应得正分"""
+    # conc=1.0, profit=0.05, dev=(99-100)/100=-0.01 → max(0,-0.01)=0
+    # score = 1.0 × (1-0.05) × (1+0) = 0.95 > 0
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=5.0)
+    score = ChipPeakFactors.composite_score(row, 99.0, ChipPeakFactors.DEFAULT_PARAMS)
     assert score > 0
 
 
 def test_composite_score_high_peak_zero():
-    """Test: 高位单峰密集（派发区）应得 0 分。
-
-    数据设计：筹码全部集中在 100.0 价位，现价 105.0（全部获利）。
-    - concentration = 1.0
-    - profit_ratio = 1.0（全部筹码 < 105）
-    - classify → HIGH_SINGLE_PEAK
-    - score = 0.0
-    """
-    df = pd.DataFrame({
-        'corrected_price': [100.0],
-        'percent': [100.0]
-    })
-    score = ChipPeakFactors.composite_score(df, 105.0, ChipPeakFactors.DEFAULT_PARAMS)
+    """Test: 高位单峰密集（派发区）应得 0 分"""
+    row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=95.0)
+    score = ChipPeakFactors.composite_score(row, 105.0, ChipPeakFactors.DEFAULT_PARAMS)
     assert score == 0.0
 
 
 def test_composite_score_divergent_zero():
     """Test: 发散分布应得 0 分"""
-    df = pd.DataFrame({
-        'corrected_price': range(100, 110),
-        'percent': [10.0] * 10
-    })
-    score = ChipPeakFactors.composite_score(df, 105.0, ChipPeakFactors.DEFAULT_PARAMS)
+    row = _row(cost_5=50.0, cost_95=250.0, weight_avg=150.0, winner_rate=50.0)
+    score = ChipPeakFactors.composite_score(row, 150.0, ChipPeakFactors.DEFAULT_PARAMS)
     assert score == 0.0
