@@ -33,8 +33,12 @@ class ChipPeakRiskManagementModel(RiskManagementModel):
         self.params = params or ChipPeakFactors.DEFAULT_PARAMS.copy()
         self.loader = ChipDataLoader(data_folder, max_batch_size=50)
 
-    def manage(self, algorithm: QCAlgorithm, insights: list) -> list:
-        """过滤掉派发区 (HIGH_SINGLE_PEAK) 股票的 Insight"""
+    def manage_risk(self, algorithm: QCAlgorithm, insights: list) -> list:
+        """过滤掉派发区 (HIGH_SINGLE_PEAK) 股票的 Insight。
+
+        方法名必须为 manage_risk (snake_case of C# ManageRisk)，
+        否则框架调用基类抛 NotImplementedException，风控不生效。
+        """
         if not insights:
             return insights
 
