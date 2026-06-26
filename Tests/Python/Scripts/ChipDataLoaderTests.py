@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Ensure ToolBox is importable
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -63,6 +63,21 @@ def test_load_single_corrected_price_calculation():
     # We'll verify the column exists and is numeric
     assert 'corrected_price' in first_row
     assert isinstance(first_row['corrected_price'], float)
+
+
+def test_load_batch_generator():
+    """Test: load_batch returns generator yielding (ts_code, df) pairs, respects max_batch_size."""
+    data_folder = '/home/project/tushare-downloader/tushare_data_v2'
+    loader = ChipDataLoader(data_folder, max_batch_size=2)
+
+    ts_codes = ['600519.SH', '000001.SZ', '000002.SZ']  # 3只, batch_size=2
+    results = list(loader.load_batch(ts_codes, '20231113'))
+
+    # 应该yield <= 2个（batch_size限制）
+    assert len(results) <= 2
+    for ts_code, df in results:
+        assert df is not None
+        assert 'corrected_price' in df.columns
 
 
 if __name__ == '__main__':

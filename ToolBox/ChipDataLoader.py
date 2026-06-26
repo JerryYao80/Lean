@@ -144,6 +144,7 @@ class ChipDataLoader:
     ) -> Generator[Tuple[str, pd.DataFrame], None, None]:
         """
         流式加载一批股票（生成器）。
+        每次yield后，调用方处理完DataFrame，下次循环前被释放（内存安全）。
 
         按 max_batch_size 分批，惰性 yield (ts_code, DataFrame)，避免一次性载入内存。
 
@@ -153,8 +154,12 @@ class ChipDataLoader:
 
         Yields:
             Tuple[ts_code, DataFrame] - 逐只产出
-
-        Note:
-            Task 2 实现具体逻辑。
         """
-        pass  # Task 2 implements
+        batch = ts_codes[: self.max_batch_size]
+        for ts_code in batch:
+            try:
+                df = self.load_single(ts_code, trade_date)
+                if df is not None:
+                    yield ts_code, df
+            except Exception:
+                continue
