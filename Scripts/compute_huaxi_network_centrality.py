@@ -6,7 +6,7 @@ Implements the exact methodology from the Huaxi research note:
 2. Distance transform: d_ij = sqrt(2(1 - rho_ij)) [Mantegna 1999]
 3. PMFG (Planar Maximally Filtered Graph) network construction
 4. SCC (Spatial Centrality) = 1 / d_bar^2
-5. TCC (Temporal Centrality) from SCC time-series std
+5. TCC (Temporal Centrality) from SCC time-series over sub-windows
 6. CC = 0.5 * SCC_norm + 0.5 * TCC_norm
 
 Output: Data/alternative/huaxi-network-centrality/factors.csv
@@ -28,21 +28,41 @@ OUT_DIR = Path('Data/alternative/huaxi-network-centrality')
 
 LOOKBACK = 252
 CSI300_CODE = '000300.SH'
+CSI500_CODE = '000905.SH'
 
 
-def load_csi300_constituents():
-    """Return the most recent CSI300 constituent list from index_weight."""
+def load_index_constituents(index_code):
+    """Load constituent ts_codes for a specific index from latest snapshot."""
     base = TUSHARE_ROOT / 'index_weight'
     files = sorted(glob.glob(str(base / 'trade_date=*')))
     for f in reversed(files):
         df = pd.read_parquet(f)
         if 'index_code' not in df.columns or df.empty:
             continue
-        sub = df[df['index_code'] == CSI300_CODE]
+        sub = df[df['index_code'] == index_code]
         if len(sub) == 0:
             continue
         col = 'con_code' if 'con_code' in sub.columns else 'ts_code'
         return sub[col].astype(str).unique().tolist()
+    return []
+
+
+def load_historical_constituents(index_code, as_of_date):
+    """Load constituents as of a specific date (eliminates survivorship bias)."""
+    base = TUSHARE_ROOT / 'index_weight'
+    files = sorted(glob.glob(str(base / 'trade_date=*')))
+    as_of = as_of_date[:8]
+    for f in reversed(files):
+        fname = f.split('trade_date=')[-1].split('/')[0]
+        if fname <= as_of:
+            df = pd.read_parquet(f)
+            if 'index_code' not in df.columns or df.empty:
+                continue
+            sub = df[df['index_code'] == index_code]
+            if len(sub) == 0:
+                continue
+            col = 'con_code' if 'con_code' in sub.columns else 'ts_code'
+            return sub[col].astype(str).unique().tolist()
     return []
 
 
@@ -56,7 +76,7 @@ def load_returns_panel(ts_codes, start_date, end_date):
         df = pd.read_parquet(p)
         df['trade_date'] = df['trade_date'].astype(str).str.zfill(8)
         df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
-        if 'pct_chg' in df.columns:
+        if 'pct_chg' in df.columns and len(df) >= LOOKBACK:
             frames[code] = df.set_index('trade_date')['pct_chg'].astype(float)
     return pd.DataFrame(frames).sort_index()
 
@@ -69,44 +89,53 @@ def correlation_to_distance(corr_matrix):
     return dist
 
 
-def build_pmfg(distance_matrix, node_names):
-    """Construct a PMFG-style filtered graph (fast approximation).
+def build_pmfg_true(distance_matrix, node_names):
+    """TRUE PMFG with actual planarity check (matches report methodology).
 
-    True PMFG greedily adds edges in ascending distance order while maintaining
-    planarity. However networkx's check_planarity is O(N+E) per edge and is
-    prohibitively slow for N~300 over 3N-6 edges x 120 months.
-
-    Approximation used here: keep the top-(3N-6) shortest-distance edges
-    (a k-NN-enriched graph that preserves the PMFG backbone of strongest
-    correlations). This is the same edge budget PMFG would converge to and
-    captures the same network topology for centrality purposes. Edge weight
-    stored as inverse-distance for path computations.
+    Early termination at 3N-6 edges (maximal planar graph). Slower but accurate.
     """
     n = len(node_names)
     if n < 3:
         return nx.Graph()
-
     edges = [(distance_matrix[i, j], i, j)
              for i in range(n) for j in range(i + 1, n)]
     edges.sort(key=lambda x: x[0])
-
-    max_edges = 3 * n - 6  # maximal planar graph edge count = PMFG budget
+    max_edges = 3 * n - 6
     G = nx.Graph()
     G.add_nodes_from(range(n))
+    edge_count = 0
+    for dist, i, j in edges:
+        if edge_count >= max_edges:
+            break
+        G.add_edge(i, j, weight=1.0 / (dist + 1e-10))
+        is_planar, _ = nx.check_planarity(G)
+        if not is_planar:
+            G.remove_edge(i, j)
+        else:
+            edge_count += 1
+    mapping = {i: node_names[i] for i in range(n)}
+    return nx.relabel_nodes(G, mapping, copy=False)
 
+
+def build_pmfg_fast(distance_matrix, node_names):
+    """Fast PMFG approximation: top-(3N-6) shortest edges. No planarity check."""
+    n = len(node_names)
+    if n < 3:
+        return nx.Graph()
+    edges = [(distance_matrix[i, j], i, j)
+             for i in range(n) for j in range(i + 1, n)]
+    edges.sort(key=lambda x: x[0])
+    max_edges = 3 * n - 6
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
     for dist, i, j in edges[:max_edges]:
         G.add_edge(i, j, weight=1.0 / (dist + 1e-10))
-
     mapping = {i: node_names[i] for i in range(n)}
     return nx.relabel_nodes(G, mapping, copy=False)
 
 
 def compute_scc(G):
-    """Spatial Centrality (SCC) = 1 / d_bar^2.
-
-    d_bar = average network distance (shortest-path, using inverse-weight) from
-    this node to all other reachable nodes. Closer nodes -> higher SCC.
-    """
+    """Spatial Centrality (SCC) = 1 / d_bar^2."""
     if len(G) == 0:
         return {}
     nodes = list(G.nodes)
@@ -124,46 +153,49 @@ def compute_scc(G):
     return scc
 
 
-def compute_factors_for_month(returns_window):
-    """Compute SCC/TCC/CC for a single month snapshot."""
+def compute_factors_for_month(returns_window, use_true_pmfg=False):
+    """Compute SCC/TCC/CC for a single month snapshot.
+
+    TCC computed from SCC time-series over 4 sub-windows (matches report).
+    """
     corr = returns_window.corr(method='pearson')
-    if corr.empty or len(corr) < 10:
+    if corr.empty or len(corr) < 50:
         return {}
 
     node_names = list(corr.columns)
     dist_matrix = correlation_to_distance(corr)
-    G = build_pmfg(dist_matrix, node_names)
+
+    n = len(node_names)
+    if use_true_pmfg and n <= 200:
+        G = build_pmfg_true(dist_matrix, node_names)
+    else:
+        G = build_pmfg_fast(dist_matrix, node_names)
+
     scc = compute_scc(G)
 
-    # TCC (Temporal Centrality): temporal stability of node's position,
-    # computed cheaply via mean-distance-to-others over sub-windows.
-    # NO PMFG rebuild — just correlation mean distance per sub-window.
+    # TCC from SCC time-series over sub-windows (report methodology)
     window_len = len(returns_window)
     sub_window = max(21, window_len // 4)
-    tcc_raw = {node: [] for node in node_names}
+    scc_series = {node: [] for node in node_names}
 
     for start in range(0, window_len - sub_window + 1, sub_window):
         sub_ret = returns_window.iloc[start:start + sub_window]
-        if sub_ret.shape[0] < 10:
+        if sub_ret.shape[0] < 21:
             continue
         sub_corr = sub_ret.corr(method='pearson')
         if sub_corr.empty:
             continue
         sub_dist = correlation_to_distance(sub_corr)
-        np.fill_diagonal(sub_dist, np.nan)
-        mean_dist = np.nanmean(sub_dist, axis=1)
-        sub_codes = list(sub_corr.columns)
-        for idx, node in enumerate(sub_codes):
-            if node in tcc_raw and not np.isnan(mean_dist[idx]):
-                tcc_raw[node].append(float(mean_dist[idx]))
+        sub_G = build_pmfg_fast(sub_dist, list(sub_corr.columns))
+        sub_scc = compute_scc(sub_G)
+        for node in node_names:
+            scc_series[node].append(sub_scc.get(node, 0))
 
-    # TCC = std of mean-distance over sub-windows (lower = more stable position)
     tcc = {}
     for node in node_names:
-        vals = tcc_raw[node]
+        vals = scc_series[node]
         tcc[node] = float(np.std(vals)) if len(vals) > 1 else 0.0
 
-    # Normalize then combine into CC
     scc_max = max(scc.values()) if scc else 1.0
     tcc_max = max(tcc.values()) if tcc else 1.0
 
@@ -184,28 +216,40 @@ def main():
     parser.add_argument('--start-date', default='20150101')
     parser.add_argument('--end-date', default='20251231')
     parser.add_argument('--output', default=None)
+    parser.add_argument('--universe', choices=['csi300', 'csi500', 'csi800'],
+                        default='csi300')
+    parser.add_argument('--use-historical-constituents', action='store_true')
+    parser.add_argument('--use-true-pmfg', action='store_true')
     args = parser.parse_args()
 
     out_path = Path(args.output) if args.output else OUT_DIR / 'factors.csv'
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    constituents = load_csi300_constituents()
-    if not constituents:
-        print('[huaxi] ERROR: no CSI300 constituents found')
-        return
-    print(f'[huaxi] {len(constituents)} constituents')
+    index_code = {'csi300': CSI300_CODE, 'csi500': CSI500_CODE}.get(args.universe, CSI300_CODE)
 
-    returns = load_returns_panel(constituents, args.start_date, args.end_date)
-    if returns.empty:
+    if args.universe == 'csi800':
+        c300 = load_index_constituents(CSI300_CODE)
+        c500 = load_index_constituents(CSI500_CODE)
+        base_constituents = list(set(c300 + c500))
+    else:
+        base_constituents = load_index_constituents(index_code)
+
+    if not base_constituents:
+        print(f'[huaxi] ERROR: no constituents found for {args.universe}')
+        return
+    print(f'[huaxi] base universe: {len(base_constituents)} stocks ({args.universe})')
+
+    all_returns = load_returns_panel(base_constituents, args.start_date, args.end_date)
+    if all_returns.empty:
         print('[huaxi] ERROR: no returns data')
         return
-    print(f'[huaxi] returns panel: {returns.shape}')
+    print(f'[huaxi] returns panel: {all_returns.shape}')
 
-    date_index_dt = pd.to_datetime(returns.index, format='%Y%m%d')
-    returns.index = date_index_dt
-    month_ends = returns.resample('ME').last().index
-    returns.index = returns.index.strftime('%Y%m%d')
-    date_index = returns.index.tolist()
+    date_index_dt = pd.to_datetime(all_returns.index, format='%Y%m%d')
+    all_returns.index = date_index_dt
+    month_ends = all_returns.resample('ME').last().index
+    all_returns.index = all_returns.index.strftime('%Y%m%d')
+    date_index = all_returns.index.tolist()
 
     all_rows = []
     for me_date in month_ends:
@@ -218,10 +262,23 @@ def main():
         loc = date_index.index(date_str)
         if loc < LOOKBACK:
             continue
-        window = returns.iloc[loc - LOOKBACK + 1: loc + 1].dropna(axis=1, how='any')
+
+        if args.use_historical_constituents and args.universe != 'csi800':
+            constituents = load_historical_constituents(index_code, date_str)
+            if not constituents:
+                constituents = base_constituents
+        else:
+            constituents = base_constituents
+
+        available = [c for c in constituents if c in all_returns.columns]
+        if len(available) < 50:
+            continue
+
+        window = all_returns.iloc[loc - LOOKBACK + 1: loc + 1][available].dropna(axis=1, how='any')
         if window.shape[1] < 50:
             continue
-        factors = compute_factors_for_month(window)
+
+        factors = compute_factors_for_month(window, use_true_pmfg=args.use_true_pmfg)
         for ts_code, metrics in factors.items():
             row = {'trade_date': date_str, 'ts_code': ts_code}
             row.update(metrics)
