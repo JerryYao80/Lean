@@ -38,7 +38,11 @@ class AShareUniverseSelectionModel(UniverseSelectionModel):
                 s.set_settlement_model(DelayedSettlementModel(1, timedelta(hours=9)))
             symbols.append(symbol)
         algorithm.log(f'[AShareUniverse] loaded {len(symbols)} symbols')
-        return [UserDefinedUniverse(symbols)]
+        # 全部 symbol 已通过 add_equity 显式注册并套用 A 股本地化模型，
+        # 作为手动订阅证券永久存活，无需再返回 UserDefinedUniverse（其构造
+        # 在本 LEAN 版本需 SubscriptionDataConfig，无法直接由 list 构造）。
+        # AlphaModel 通过 algorithm.active_securities 访问全部已注册标的。
+        return []
 
     def _load_all_codes(self, algorithm: QCAlgorithm) -> list:
         if self._all_codes is not None:
