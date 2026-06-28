@@ -13,6 +13,10 @@
  * limitations under the License.
 */
 
+using System;
+using System.Diagnostics;
+using System.IO;
+
 namespace QuantConnect.ToolBox
 {
     /// <summary>
@@ -29,6 +33,44 @@ namespace QuantConnect.ToolBox
         {
             TusharePath = tusharePath;
             LeanDataPath = leanDataPath;
+        }
+
+        /// <summary>
+        /// Execute Python code via subprocess and capture stdout.
+        /// Used to read tushare parquet files with pandas.
+        /// </summary>
+        public string RunPythonScript(string pythonCode)
+        {
+            var tempFile = Path.GetTempFileName();
+            File.WriteAllText(tempFile, pythonCode);
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = PythonPath,
+                        Arguments = tempFile,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                var output = process.StandardOutput.ReadToEnd();
+                var error = process.StandardError.ReadToEnd();
+                process.WaitForExit(30000);
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidOperationException($"Python failed: {error}");
+                }
+                return output;
+            }
+            finally
+            {
+                File.Delete(tempFile);
+            }
         }
     }
 }

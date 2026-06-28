@@ -30,5 +30,13 @@ namespace QuantConnect.Tests.AShare
             var converter = new AShareOptionDataConverter(TusharePath, LeanDataPath);
             Assert.IsNotNull(converter);
         }
+
+        [Test]
+        public void RunPythonScript_ReturnsValidJson()
+        {
+            var converter = new AShareOptionDataConverter(TusharePath, LeanDataPath);
+            var output = converter.RunPythonScript("print('[1, 2, 3]')");
+            Assert.AreEqual("[1, 2, 3]", output.Trim());
+        }
     }
 }
