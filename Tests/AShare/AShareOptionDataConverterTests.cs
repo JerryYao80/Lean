@@ -38,5 +38,38 @@ namespace QuantConnect.Tests.AShare
             var output = converter.RunPythonScript("print('[1, 2, 3]')");
             Assert.AreEqual("[1, 2, 3]", output.Trim());
         }
+
+        [Test]
+        public void LoadOptBasic_ReturnsSSEContracts()
+        {
+            var converter = new AShareOptionDataConverter(TusharePath, LeanDataPath);
+            var contracts = converter.LoadOptBasic("OP510050.SH");
+
+            Assert.Greater(contracts.Count, 0);
+            Assert.IsTrue(contracts.All(c => c.Exchange == "SSE"));
+            Assert.IsTrue(contracts.All(c => c.OptCode == "OP510050.SH"));
+            Assert.IsTrue(contracts.All(c => c.ExercisePrice > 0m));
+        }
+
+        [Test]
+        public void ConvertAllContracts_GeneratesUniverseAndDailyFiles()
+        {
+            var converter = new AShareOptionDataConverter(TusharePath, LeanDataPath);
+            converter.ConvertAllContracts("OP510050.SH", "20240628");
+
+            var universePath = Path.Combine(LeanDataPath, "option", "china", "universes",
+                                             "510050", "20240628.csv");
+            Assert.IsTrue(File.Exists(universePath));
+
+            var lines = File.ReadAllLines(universePath);
+            Assert.AreEqual("symbol,expiration,strike,right,style", lines[0]);
+            Assert.Greater(lines.Length, 20, "Universe should contain >20 contracts");
+
+            // Verify all are European (A-share ETF options are European-style)
+            foreach (var line in lines.Skip(1))
+            {
+                Assert.IsTrue(line.EndsWith(",European"), $"Non-European contract: {line}");
+            }
+        }
     }
 }
