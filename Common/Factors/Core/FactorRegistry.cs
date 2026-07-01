@@ -12,7 +12,16 @@ namespace QuantConnect.Factors.Core
 
         public static void Initialize()
         {
-            lock (_lock) { if (_initialized) return; _initialized = true; }
+            lock (_lock)
+            {
+                if (_initialized) return;
+
+                // Register volatility factors
+                Register(new QuantConnect.Factors.Volatility.IVPercentileFactor(lookbackDays: 252));
+                Register(new QuantConnect.Factors.Volatility.HVFactor(windowDays: 20));
+
+                _initialized = true;
+            }
         }
 
         public static void Register(IFactor factor)
