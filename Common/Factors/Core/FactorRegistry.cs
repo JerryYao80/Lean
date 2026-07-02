@@ -25,6 +25,12 @@ namespace QuantConnect.Factors.Core
                 Register(new QuantConnect.Factors.Trend.MACrossFactor(5, 20));
                 Register(new QuantConnect.Factors.Trend.RSIFactor(14));
 
+                // Chip factors (Phase 1 stubs - need cyq_perf data integration)
+                Register(new QuantConnect.Factors.Chip.ConcentrationFactor());
+                Register(new QuantConnect.Factors.Chip.ProfitRatioFactor());
+                Register(new QuantConnect.Factors.Chip.PeakPatternFactor());
+                Register(new QuantConnect.Factors.Chip.ChipPeakCompositeFactor());
+
                 _initialized = true;
             }
         }
