@@ -32,6 +32,7 @@ import ashare_implied_volatility as iv_mod
 
 CSV_HEADER = (
     "trade_date,atm_iv,iv_call_25delta,iv_put_25delta,skew,"
+    "iv_skew_surface_minus,skew_near_term,skew_next_term,"
     "term_days_near,term_days_next,option_count,vix,sigma_near,"
     "sigma_next,t_near,t_next"
 )
@@ -63,6 +64,9 @@ def merge_row(
         _fmt(iv.iv_call_25delta, 8),
         _fmt(iv.iv_put_25delta, 8),
         _fmt(iv.skew, 8),
+        _fmt(iv.iv_skew_surface_minus, 8),
+        _fmt(iv.skew_near_term, 8),
+        _fmt(iv.skew_next_term, 8),
         str(iv.term_days_near),
         str(iv.term_days_next),
         str(iv.option_count),

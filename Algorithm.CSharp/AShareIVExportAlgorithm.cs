@@ -22,7 +22,6 @@ using QuantConnect.Data.AShare;
 using QuantConnect.Data.Market;
 using QuantConnect.Indicators;
 using QuantConnect.Securities.Option;
-using QuantConnect.ToolBox;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -45,15 +44,12 @@ namespace QuantConnect.Algorithm.CSharp
             SetEndDate(2024, 6, 28);
             SetCash(100000);
 
-            AddEquity(Underlying, Resolution.Daily, market: Market.China);
-            _option = AddOption(Underlying, Resolution.Daily, market: Market.China);
-            _option.SetOptionChainProvider(new AShareOptionChainProvider(Globals.DataFolder));
-            _option.SetFilter(u => u
-                .Includes(OptionRight.Call)
-                .Includes(OptionRight.Put)
-                .FrontMonth()
-                .BackMonths()
-                .MovesAfter(20));
+            AddEquity(Underlying, Resolution.Daily, market: global::QuantConnect.Market.SSE);
+            _option = AddOption(Underlying, Resolution.Daily, market: global::QuantConnect.Market.SSE);
+            Log($"Added option symbol: {_option.Symbol}, underlying: {_option.Symbol.Underlying}");
+            SetOptionChainProvider(new AShareOptionChainProvider(Globals.DataFolder));
+            // Filter for near+next expiry contracts (VIX needs both), 放宽到所有合约
+            _option.SetFilter(u => u.Strikes(-20, +20).Expiration(0, 365));
 
             var tusharePath = "/home/project/tushare-downloader/tushare_data_v2";
             _rateModel = new AShareShiborRateModel(tusharePath);
@@ -64,7 +60,14 @@ namespace QuantConnect.Algorithm.CSharp
         public override void OnData(Slice data)
         {
             OptionChain chain;
-            if (!data.OptionChains.TryGetValue(_option.Symbol, out chain)) return;
+            if (!data.OptionChains.TryGetValue(_option.Symbol, out chain))
+            {
+                if (Time.Day == 3 || Time.Day == 24)
+                    Log($"OnData {Time:yyyyMMdd}: no chain for {_option.Symbol}. Chains keys: {string.Join(",", data.OptionChains.Keys.Select(k => k.Value))}. Securities invested={Securities.Count}");
+                return;
+            }
+            Log($"OnData {Time:yyyyMMdd}: chain contracts={chain.Count()}");
+            if (chain.Count() == 0) return;
 
             var underlyingSymbol = _option.Symbol.Underlying;
             if (!data.Bars.TryGetValue(underlyingSymbol, out var bar)) return;
@@ -77,6 +80,13 @@ namespace QuantConnect.Algorithm.CSharp
             var near = byExpiry[0];
             var next = byExpiry[1];
 
+            // DEBUG: dump one contract's style and prices to diagnose IV=0
+            if (Time.Day == 13)
+            {
+                var sample = near.FirstOrDefault(c => c.Right == OptionRight.Call);
+                if (sample != null)
+                    Log($"DBG day13 contract={sample.Symbol} strike={sample.Strike} lastPrice={sample.LastPrice} underlying={S} style={sample.Symbol.ID.OptionStyle} expiry={sample.Expiry} T={(sample.Expiry-Time).Days}/365");
+            }
             // Native IV (LEAN ImpliedVolatility indicator, Brent solver)
             var atmIv = ComputeAtmIvNative(near, S);
             var (call25, put25) = Compute25DeltaIvNative(near, S);
@@ -97,11 +107,13 @@ namespace QuantConnect.Algorithm.CSharp
 
         private static OptionContractData ToContractData(OptionContract c)
         {
+            // The converter writes tushare settle into the LEAN Close/LastPrice field,
+            // so LastPrice IS the settlement price for A-share options.
             return new OptionContractData
             {
                 Strike = c.Strike,
                 Right = c.Right,
-                Price = c.Settlement != null && c.Settlement != 0m ? (decimal)c.Settlement : (decimal)c.Close
+                Price = c.LastPrice
             };
         }
 
@@ -113,7 +125,7 @@ namespace QuantConnect.Algorithm.CSharp
             var ivs = new List<decimal>();
             foreach (var c in atmContracts)
             {
-                var iv = GetIv(c);
+                var iv = GetIv(c, S);
                 if (iv > 0.01m && iv < 3m) ivs.Add(iv);
             }
             if (!ivs.Any()) return 0m;
@@ -127,16 +139,23 @@ namespace QuantConnect.Algorithm.CSharp
             var call = near.Where(c => c.Right == OptionRight.Call && c.Strike > S).OrderBy(c => c.Strike).FirstOrDefault();
             var put = near.Where(c => c.Right == OptionRight.Put && c.Strike < S).OrderByDescending(c => c.Strike).FirstOrDefault();
 
-            decimal? callIv = call != null ? GetIv(call) : (decimal?)null;
-            decimal? putIv = put != null ? GetIv(put) : (decimal?)null;
+            decimal? callIv = call != null ? GetIv(call, S) : (decimal?)null;
+            decimal? putIv = put != null ? GetIv(put, S) : (decimal?)null;
             return (callIv, putIv);
         }
 
-        private decimal GetIv(OptionContract c)
+        private decimal GetIv(OptionContract c, decimal underlyingPrice)
         {
             var iv = new ImpliedVolatility(c.Symbol, _rateModel, _divModel,
                 optionModel: OptionPricingModelType.BlackScholes);
-            iv.Update(Time, c.Close);
+            var optBar = new TradeBar(Time, c.Symbol, c.LastPrice, c.LastPrice, c.LastPrice, c.LastPrice, 0);
+            var undBar = new TradeBar(Time, c.Symbol.Underlying, underlyingPrice, underlyingPrice, underlyingPrice, underlyingPrice, 0);
+            iv.Update(optBar);
+            iv.Update(undBar);
+            if (!iv.IsReady && Time.Day == 13)
+            {
+                Log($"IV not ready {c.Symbol}: optLastPrice={c.LastPrice} undPrice={underlyingPrice} samples={iv.Samples}");
+            }
             return iv.IsReady ? iv.Current.Value : 0m;
         }
 

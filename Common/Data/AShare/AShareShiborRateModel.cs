@@ -21,7 +21,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using QuantConnect.Data;
 
-namespace QuantConnect.ToolBox
+namespace QuantConnect.Data.AShare
 {
     /// <summary>
     /// Risk-free interest rate model sourced from tushare SHIBOR 1Y.

@@ -15,6 +15,8 @@
 
 using NUnit.Framework;
 using QuantConnect.ToolBox;
+using System.IO;
+using System.Linq;
 
 namespace QuantConnect.Tests.AShare
 {

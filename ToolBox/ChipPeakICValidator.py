@@ -48,6 +48,7 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
     """
     遍历 cyq_perf 全A股，计算复合得分与形态分布。
     Phase 1 (骨架): 验证因子可计算且分布合理。
+    增强模式：加载 moneyflow + daily_basic（若可用）。
     """
     ChipPeakFactors, PeakPattern = _load_factors()
     loader = ChipDataLoader(data_folder)
@@ -59,6 +60,8 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
     scores = []
     concentrations = []
     profits = []
+    mf_signals = []
+    value_scores = []
     pattern_counts = {p.value: 0 for p in PeakPattern}
     processed = 0
     failed = 0
@@ -67,7 +70,8 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
 
     for i in range(0, len(codes), batch_size):
         batch = codes[i:i + batch_size]
-        for ts_code, chip_row in loader.load_batch(batch, trade_date):
+        # 使用 enriched_batch 加载筹码 + 资金流 + 估值
+        for ts_code, chip_row in loader.enriched_batch(batch, trade_date):
             try:
                 current_price = _close_price(data_folder, ts_code, trade_date)
                 if np.isnan(current_price):
@@ -81,11 +85,17 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
                 )
                 conc = ChipPeakFactors.concentration(chip_row)
                 profit = ChipPeakFactors.profit_ratio(chip_row)
+                # 增强因子统计
+                mf_signal = ChipPeakFactors.net_moneyflow_signal(chip_row, ChipPeakFactors.DEFAULT_PARAMS)
+                value_score = ChipPeakFactors.value_quality_score(chip_row, ChipPeakFactors.DEFAULT_PARAMS)
+
                 scores.append(score)
                 if not np.isnan(conc):
                     concentrations.append(conc)
                 if not np.isnan(profit):
                     profits.append(profit)
+                mf_signals.append(mf_signal)
+                value_scores.append(value_score)
                 pattern_counts[pattern.value] += 1
                 processed += 1
             except Exception:
@@ -94,6 +104,8 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
     scores_arr = np.array(scores) if scores else np.array([0.0])
     conc_arr = np.array(concentrations) if concentrations else np.array([0.0])
     profit_arr = np.array(profits) if profits else np.array([0.0])
+    mf_arr = np.array(mf_signals) if mf_signals else np.array([0.0])
+    value_arr = np.array(value_scores) if value_scores else np.array([0.0])
     return {
         'total_codes': len(codes),
         'processed': processed,
@@ -103,8 +115,10 @@ def run_ic_test(start_date: str, end_date: str, data_folder: str) -> dict:
         'positive_ratio': float((scores_arr > 0).mean()),
         'concentration_mean': float(conc_arr.mean()),
         'profit_ratio_mean': float(profit_arr.mean()),
+        'mf_signal_mean': float(mf_arr.mean()),
+        'value_score_mean': float(value_arr.mean()),
         'pattern_distribution': pattern_counts,
-        'note': 'Phase1 skeleton (cyq_perf) - full IC needs forward daily returns',
+        'note': 'Phase1 skeleton (cyq_perf + moneyflow + daily_basic) - full IC needs forward daily returns',
     }
 
 

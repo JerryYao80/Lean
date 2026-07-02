@@ -386,6 +386,11 @@ class IvResult:
     term_days_near: int  # near-term days to expiry
     term_days_next: int  # next-term days to expiry
     option_count: int  # number of options used
+    # IV surface skew: low-strike IV minus high-strike IV, term-weighted.
+    # Positive => put wing steeper than call wing (downside protection bid up).
+    iv_skew_surface_minus: float | None = None
+    skew_near_term: float | None = None  # surface skew for near-term expiry
+    skew_next_term: float | None = None  # surface skew for next-term expiry
 
 
 @dataclass(frozen=True)
@@ -471,6 +476,11 @@ def compute_daily_iv(
     else:
         skew = None
 
+    # Compute IV surface skew across all strikes and expiries
+    iv_surface_skew, skew_near, skew_next = compute_iv_surface_skew(
+        merged, underlying_price, risk_free_rate, trade_date, near_dte, next_dte
+    )
+
     iv_result = IvResult(
         underlying=FRIENDLY_NAMES.get(underlying_code, underlying_code),
         trade_date=trade_date,
@@ -481,6 +491,9 @@ def compute_daily_iv(
         term_days_near=near_dte,
         term_days_next=next_dte or 0,
         option_count=len(near_options),
+        iv_skew_surface_minus=iv_surface_skew,
+        skew_near_term=skew_near,
+        skew_next_term=skew_next,
     )
 
     # Compute VIX-like index
@@ -600,12 +613,12 @@ def _find_iv_near_strike(
     r: float,
 ) -> float | None:
     """Find IV for the option closest to target_K."""
-    cp_options = options[options["call_put"] == call_put].copy()
-    if cp_options.empty:
+    cp_option = options[options["call_put"] == call_put].copy()
+    if cp_option.empty:
         return None
 
-    cp_options["k_dist"] = (cp_options["exercise_price"] - target_K).abs()
-    closest = cp_options.nsmallest(3, "k_dist")
+    cp_option["k_dist"] = (cp_option["exercise_price"] - target_K).abs()
+    closest = cp_option.nsmallest(3, "k_dist")
 
     ivs = []
     for _, row in closest.iterrows():
@@ -620,6 +633,119 @@ def _find_iv_near_strike(
             ivs.append(iv)
 
     return float(np.median(ivs)) if ivs else None
+
+
+def compute_iv_surface_skew(
+    merged: pd.DataFrame,
+    S: float,
+    r: float,
+    trade_date: str,
+    near_dte: int | None = None,
+    next_dte: int | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    """Compute IV surface skew across strikes and expiries.
+
+    Returns (iv_skew_surface_minus, skew_near_term, skew_next_term) where:
+    - iv_skew_surface_minus = weighted average of (low-strike IV - high-strike IV)
+    - skew_near_term = surface skew for near-term expiry
+    - skew_next_term = surface skew for next-term expiry
+
+    Methodology:
+    1. For each expiry, compute IV for all strikes with valid settlement prices
+    2. Split strikes into quartiles: low 25% (put wing) vs high 25% (call wing)
+    3. Skew_per_term = mean IV(low quartile) - mean IV(high quartile)
+    4. Weight by inverse days-to-expiry (near-term gets higher weight)
+    """
+    if merged.empty or S <= 0:
+        return None, None, None
+
+    # Filter to valid expiries
+    merged = merged[merged["dte"] > 0].copy()
+    if merged.empty:
+        return None, None, None
+
+    all_dtes = sorted(merged["dte"].unique())
+
+    # Use provided near/next dte or pick closest two
+    term_dtes = []
+    if near_dte and near_dte in all_dtes:
+        term_dtes.append(near_dte)
+    if next_dte and next_dte in all_dtes and next_dte != near_dte:
+        term_dtes.append(next_dte)
+
+    if len(term_dtes) < 2:
+        # Fallback: use first two available expiries
+        term_dtes = all_dtes[:2] if len(all_dtes) >= 2 else all_dtes[:1]
+
+    if not term_dtes:
+        return None, None, None
+
+    skew_by_term: list[tuple[int, float]] = []
+
+    for dte in term_dtes:
+        term_options = merged[merged["dte"] == dte].copy()
+        T = dte / TRADING_DAYS_PER_YEAR
+
+        # Compute IV for each strike
+        iv_by_strike: dict[float, float] = {}
+        for _, row in term_options.iterrows():
+            settle = to_float(row.get("settle"))
+            if settle is None or settle <= 0:
+                continue
+            K = to_float(row.get("exercise_price"))
+            cp = row.get("call_put", "C")
+            if K is None or K <= 0:
+                continue
+
+            iv = implied_vol_newton(settle, S, K, T, r, cp)
+            if iv is not None and 0.01 < iv < 3.0:
+                # Average IV if multiple contracts at same strike
+                if K in iv_by_strike:
+                    iv_by_strike[K] = (iv_by_strike[K] + iv) / 2.0
+                else:
+                    iv_by_strike[K] = iv
+
+        if len(iv_by_strike) < 4:
+            # Need at least 4 strikes to split into quartiles
+            continue
+
+        # Sort strikes and split into quartiles
+        sorted_strikes = sorted(iv_by_strike.items())
+        n = len(sorted_strikes)
+        quartile_size = max(1, n // 4)
+
+        # Low quartile (put wing): smallest strikes
+        low_quartile = sorted_strikes[:quartile_size]
+        # High quartile (call wing): largest strikes
+        high_quartile = sorted_strikes[-quartile_size:]
+
+        low_iv_mean = np.mean([iv for _, iv in low_quartile])
+        high_iv_mean = np.mean([iv for _, iv in high_quartile])
+
+        skew_term = low_iv_mean - high_iv_mean
+        skew_by_term.append((dte, skew_term))
+
+    if len(skew_by_term) == 0:
+        return None, None, None
+
+    # Extract near/next term skew
+    skew_near = None
+    skew_next = None
+    for dte, skew in skew_by_term:
+        if near_dte and dte == near_dte:
+            skew_near = skew
+        elif next_dte and dte == next_dte:
+            skew_next = skew
+        elif skew_near is None:
+            skew_near = skew  # first term
+        elif skew_next is None:
+            skew_next = skew  # second term
+
+    # Weighted average: inverse DTE weighting (near-term higher weight)
+    weights = [1.0 / dte for dte, _ in skew_by_term]
+    weighted_skew = sum(w * s for (_, s), w in zip(skew_by_term, weights)) / sum(weights)
+
+    return weighted_skew, skew_near, skew_next
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +779,12 @@ def iv_result_to_line(iv: IvResult, measurement: str = IV_MEASUREMENT) -> str:
         fields["iv_put_25delta"] = iv.iv_put_25delta * 100.0
     if iv.skew is not None:
         fields["skew"] = iv.skew * 100.0
+    if iv.iv_skew_surface_minus is not None:
+        fields["iv_skew_surface_minus"] = iv.iv_skew_surface_minus * 100.0
+    if iv.skew_near_term is not None:
+        fields["skew_near_term"] = iv.skew_near_term * 100.0
+    if iv.skew_next_term is not None:
+        fields["skew_next_term"] = iv.skew_next_term * 100.0
 
     tag_set = ",".join(f"{escape_key(k)}={escape_key(str(v))}" for k, v in sorted(tags.items()))
     field_set = ",".join(f"{escape_key(k)}={format_field_value(v)}" for k, v in sorted(fields.items()))

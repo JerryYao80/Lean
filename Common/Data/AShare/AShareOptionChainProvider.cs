@@ -18,12 +18,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using QuantConnect;
 using QuantConnect.Interfaces;
 
 namespace QuantConnect.Data.AShare
 {
     /// <summary>
-    /// Option chain provider for A-share ETF options (Market.China).
+    /// Option chain provider for A-share ETF options (global::QuantConnect.Market.China).
     /// Reads converted universe CSVs produced by AShareOptionDataConverter
     /// and returns European-style option Symbols for AddOption.
     /// </summary>
@@ -44,12 +45,15 @@ namespace QuantConnect.Data.AShare
         {
             var underlying = symbol.Underlying ?? symbol;
             var ticker = underlying.Value;
+            var market = symbol.ID.Market;
+            var marketDir = market == global::QuantConnect.Market.CFE ? "cfe" : "sse";
+            var isIndexOption = symbol.SecurityType == SecurityType.IndexOption;
 
-            var universePath = Path.Combine(_dataFolder, "option", "china", "universes",
+            var universePath = Path.Combine(_dataFolder, "option", marketDir, "universes",
                                              ticker, $"{date:yyyyMMdd}.csv");
             if (!File.Exists(universePath))
             {
-                universePath = FindNearestUniverse(ticker, date);
+                universePath = FindNearestUniverse(marketDir, ticker, date);
                 if (universePath == null) return Enumerable.Empty<Symbol>();
             }
 
@@ -64,19 +68,23 @@ namespace QuantConnect.Data.AShare
                 var strike = decimal.Parse(parts[2], CultureInfo.InvariantCulture);
                 var right = parts[3] == "C" ? OptionRight.Call : OptionRight.Put;
 
-                contracts.Add(Symbol.CreateOption(
-                    underlying, Market.China, OptionStyle.European, right, strike, expiry));
+                if (isIndexOption)
+                {
+                    contracts.Add(Symbol.CreateOption(underlying, null, market,
+                        SecurityType.IndexOption.DefaultOptionStyle(), right, strike, expiry));
+                }
+                else
+                {
+                    contracts.Add(Symbol.CreateOption(underlying, market,
+                        OptionStyle.European, right, strike, expiry));
+                }
             }
             return contracts;
         }
 
-        /// <summary>
-        /// Find the most recent universe file on or before the target date
-        /// (handles A-share market holidays where no universe exists).
-        /// </summary>
-        private string FindNearestUniverse(string ticker, DateTime targetDate)
+        private string FindNearestUniverse(string marketDir, string ticker, DateTime targetDate)
         {
-            var dir = Path.Combine(_dataFolder, "option", "china", "universes", ticker);
+            var dir = Path.Combine(_dataFolder, "option", marketDir, "universes", ticker);
             if (!Directory.Exists(dir)) return null;
 
             return Directory.GetFiles(dir, "*.csv")

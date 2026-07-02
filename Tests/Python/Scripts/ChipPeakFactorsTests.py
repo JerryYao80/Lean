@@ -31,6 +31,21 @@ def _row(cost_5, cost_95, weight_avg, winner_rate):
     })
 
 
+def _enriched_row(cost_5, cost_95, weight_avg, winner_rate,
+                  net_mf_amount=None, pe_ttm=None, pb=None, turnover_rate=None):
+    """构造一行增强 Series（筹码 + 资金流 + 估值）。"""
+    row = _row(cost_5, cost_95, weight_avg, winner_rate)
+    if net_mf_amount is not None:
+        row['net_mf_amount'] = net_mf_amount
+    if pe_ttm is not None:
+        row['pe_ttm'] = pe_ttm
+    if pb is not None:
+        row['pb'] = pb
+    if turnover_rate is not None:
+        row['turnover_rate'] = turnover_rate
+    return row
+
+
 def test_concentration_single_peak():
     """Test: 完全集中（成本带宽=0）集中度=1.0"""
     row = _row(cost_5=100.0, cost_95=100.0, weight_avg=100.0, winner_rate=0.0)
@@ -113,3 +128,110 @@ def test_composite_score_divergent_zero():
     row = _row(cost_5=50.0, cost_95=250.0, weight_avg=150.0, winner_rate=50.0)
     score = ChipPeakFactors.composite_score(row, 150.0, ChipPeakFactors.DEFAULT_PARAMS)
     assert score == 0.0
+
+
+# === 增强因子测试 ===
+
+def test_net_moneyflow_signal_positive():
+    """Test: 净流入达到阈值 → signal=1.0"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, net_mf_amount=5000.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    signal = ChipPeakFactors.net_moneyflow_signal(row, params)
+    assert abs(signal - 1.0) < 0.001
+
+
+def test_net_moneyflow_signal_half():
+    """Test: 净流入一半 → signal=0.5"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, net_mf_amount=2500.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    signal = ChipPeakFactors.net_moneyflow_signal(row, params)
+    assert abs(signal - 0.5) < 0.001
+
+
+def test_net_moneyflow_signal_negative():
+    """Test: 净流出 → signal=0.0"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, net_mf_amount=-1000.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    signal = ChipPeakFactors.net_moneyflow_signal(row, params)
+    assert signal == 0.0
+
+
+def test_net_moneyflow_signal_missing():
+    """Test: 缺失资金流 → signal=0.0"""
+    row = _row(100.0, 100.0, 100.0, 5.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    signal = ChipPeakFactors.net_moneyflow_signal(row, params)
+    assert signal == 0.0
+
+
+def test_value_quality_score_low_pe():
+    """Test: PE_TTM=15（低估值）→ score=1.0"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, pe_ttm=15.0, pb=3.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    score = ChipPeakFactors.value_quality_score(row, params)
+    assert abs(score - 1.0) < 0.001
+
+
+def test_value_quality_score_medium_pe():
+    """Test: PE_TTM=30 → score=0.8"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, pe_ttm=30.0, pb=3.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    score = ChipPeakFactors.value_quality_score(row, params)
+    assert abs(score - 0.8) < 0.001
+
+
+def test_value_quality_score_high_pb():
+    """Test: PB>6 → 打折20%"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, pe_ttm=30.0, pb=7.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    score = ChipPeakFactors.value_quality_score(row, params)
+    assert abs(score - 0.8 * 0.8) < 0.001
+
+
+def test_value_quality_score_missing():
+    """Test: 缺失估值 → score=0.5（中性）"""
+    row = _row(100.0, 100.0, 100.0, 5.0)
+    params = ChipPeakFactors.DEFAULT_PARAMS
+    score = ChipPeakFactors.value_quality_score(row, params)
+    assert abs(score - 0.5) < 0.001
+
+
+def test_turnover_risk_low():
+    """Test: turnover<3% → risk=0"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, turnover_rate=2.0)
+    risk = ChipPeakFactors.turnover_risk(row)
+    assert risk == 0.0
+
+
+def test_turnover_risk_medium():
+    """Test: 3%≤turnover<10% → risk=0.5"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, turnover_rate=5.0)
+    risk = ChipPeakFactors.turnover_risk(row)
+    assert abs(risk - 0.5) < 0.001
+
+
+def test_turnover_risk_high():
+    """Test: turnover≥10% → risk=1.0"""
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0, turnover_rate=12.0)
+    risk = ChipPeakFactors.turnover_risk(row)
+    assert risk == 1.0
+
+
+def test_composite_score_enriched_high():
+    """Test: 低位单峰 + 大流入 + 低估值 → 高分"""
+    # base=0.95, mf_signal=1.0, value=1.0, turnover_risk=0
+    # final = 0.95 × (1+0.3×1) × (1+0.2×1) × (1-0) = 0.95 × 1.3 × 1.2 = 1.482
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0,
+                         net_mf_amount=5000.0, pe_ttm=15.0, pb=3.0, turnover_rate=2.0)
+    score = ChipPeakFactors.composite_score(row, 99.0, ChipPeakFactors.DEFAULT_PARAMS)
+    assert score > 1.0  # 融合后应高于纯筹码得分 0.95
+
+
+def test_composite_score_enriched_low_turnover():
+    """Test: 高换手率 → 打折"""
+    # base=0.95, mf_signal=1.0, value=1.0, turnover_risk=1.0
+    # final = 0.95 × 1.3 × 1.2 × (1-1×0.3) = 0.95 × 1.3 × 1.2 × 0.7 = 1.0374
+    row = _enriched_row(100.0, 100.0, 100.0, 5.0,
+                         net_mf_amount=5000.0, pe_ttm=15.0, pb=3.0, turnover_rate=12.0)
+    score = ChipPeakFactors.composite_score(row, 99.0, ChipPeakFactors.DEFAULT_PARAMS)
+    assert score < 1.482  # 高换手率应打折

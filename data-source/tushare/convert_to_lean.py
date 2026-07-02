@@ -163,9 +163,43 @@ def compute_factor_file(df_adj, df_daily):
 
     # We need daily close prices for referencePrice
     close_by_date = {}
+    sorted_dates = []
     if df_daily is not None and not df_daily.empty:
         for _, row in df_daily.iterrows():
-            close_by_date[row["trade_date"]] = row["close"]
+            date = row["trade_date"]
+            close_by_date[date] = row["close"]
+            sorted_dates.append(date)
+        sorted_dates = sorted(set(sorted_dates))
+
+    def get_reference_price(event_date):
+        """Get reference price for a corporate event date.
+
+        Try the event date first, then search adjacent dates.
+        Returns 0 only if no price data is available at all.
+        """
+        # Try exact date
+        if event_date in close_by_date:
+            return close_by_date[event_date]
+
+        # Find nearest available date
+        if not sorted_dates:
+            return 0
+
+        # Binary search for nearest date
+        import bisect
+        idx = bisect.bisect_left(sorted_dates, event_date)
+
+        # Try previous trading day first (LEAN expects close before the event)
+        if idx > 0:
+            prev_date = sorted_dates[idx - 1]
+            return close_by_date[prev_date]
+
+        # Fall back to next trading day
+        if idx < len(sorted_dates):
+            next_date = sorted_dates[idx]
+            return close_by_date[next_date]
+
+        return 0
 
     # Find rows where adj_factor changes (corporate events)
     events = []
@@ -177,7 +211,7 @@ def compute_factor_file(df_adj, df_daily):
             # Significant change = corporate event
             if abs(ratio - 1.0) > 0.0001:
                 trade_date = row["trade_date"]
-                ref_price = close_by_date.get(trade_date, 0)
+                ref_price = get_reference_price(trade_date)
                 events.append({
                     "date": trade_date,
                     "adj_factor": current_factor,

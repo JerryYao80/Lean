@@ -16,7 +16,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace QuantConnect.ToolBox
+namespace QuantConnect.Data.AShare
 {
     /// <summary>
     /// VIX computation result: 30-day interpolated index and component variances.

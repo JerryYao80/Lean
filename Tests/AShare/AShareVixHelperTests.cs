@@ -14,7 +14,7 @@
 */
 
 using NUnit.Framework;
-using QuantConnect.ToolBox;
+using QuantConnect.Data.AShare;
 
 namespace QuantConnect.Tests.AShare
 {
@@ -27,7 +27,7 @@ namespace QuantConnect.Tests.AShare
             var chain = TestChainBuilder.BuildAtmChain(spot: 2.5m, callPrice: 0.12m, putPrice: 0.12m);
             var F = AShareVixHelper.ForwardPriceFromParity(chain, r: 0.02, T: 0.1);
             // F = K + e^(rT)(C-P); ATM with C=P => F ~ K = 2.5
-            Assert.AreEqual(2.5m, F, 0.05m);
+            Assert.That((double)F, Is.EqualTo(2.5).Within(0.05));  // F is decimal from put-call parity
         }
 
         [Test]

@@ -14,7 +14,7 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.ToolBox;
+using QuantConnect.Data.AShare;
 
 namespace QuantConnect.Tests.AShare
 {

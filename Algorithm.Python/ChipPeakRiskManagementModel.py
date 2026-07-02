@@ -40,10 +40,12 @@ class ChipPeakRiskManagementModel(RiskManagementModel):
         否则框架调用基类抛 NotImplementedException，风控不生效。
         """
         if not insights:
+            algorithm.debug('[ChipPeakRisk] no insights to filter')
             return insights
 
         current_date = algorithm.time.strftime('%Y%m%d')
         filtered = []
+        filtered_count = 0
 
         for insight in insights:
             symbol = insight.symbol
@@ -59,8 +61,13 @@ class ChipPeakRiskManagementModel(RiskManagementModel):
             pattern = ChipPeakFactors.classify_peak(chip_row, float(security.price), self.params)
             if pattern == PeakPattern.HIGH_SINGLE_PEAK:
                 algorithm.debug(f'[ChipPeakRisk] filtered {symbol} (HIGH_SINGLE_PEAK 派发区)')
+                filtered_count += 1
                 continue
             filtered.append(insight)
+
+        if filtered_count > 0:
+            algorithm.debug(f'[ChipPeakRisk] filtered {filtered_count}/{len(insights)} insights (HIGH_SINGLE_PEAK)')
+
         return filtered
 
     @staticmethod

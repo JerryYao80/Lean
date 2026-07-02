@@ -17,6 +17,9 @@ namespace QuantConnect.Algorithm.CSharp
         public decimal? IvCall25Delta { get; set; }
         public decimal? IvPut25Delta { get; set; }
         public decimal? Skew { get; set; }
+        public decimal? IvSkewSurfaceMinus { get; set; }
+        public decimal? SkewNearTerm { get; set; }
+        public decimal? SkewNextTerm { get; set; }
         public int? TermDaysNear { get; set; }
         public int? TermDaysNext { get; set; }
         public int? OptionCount { get; set; }
@@ -71,7 +74,7 @@ namespace QuantConnect.Algorithm.CSharp
                 return null;
 
             var csv = line.Split(',');
-            if (csv.Length < 8)
+            if (csv.Length < 11)
                 return null;
 
             if (!DateTime.TryParseExact(csv[0], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var tradeDate))
@@ -87,14 +90,17 @@ namespace QuantConnect.Algorithm.CSharp
                 IvCall25Delta = csv.Length > 2 ? ParseNullableDecimal(csv[2]) : null,
                 IvPut25Delta = csv.Length > 3 ? ParseNullableDecimal(csv[3]) : null,
                 Skew = csv.Length > 4 ? ParseNullableDecimal(csv[4]) : null,
-                TermDaysNear = csv.Length > 5 ? ParseNullableInt(csv[5]) : null,
-                TermDaysNext = csv.Length > 6 ? ParseNullableInt(csv[6]) : null,
-                OptionCount = csv.Length > 7 ? ParseNullableInt(csv[7]) : null,
-                Vix = csv.Length > 8 ? ParseNullableDecimal(csv[8]) : null,
-                SigmaNear = csv.Length > 9 ? ParseNullableDecimal(csv[9]) : null,
-                SigmaNext = csv.Length > 10 ? ParseNullableDecimal(csv[10]) : null,
-                TNear = csv.Length > 11 ? ParseNullableDecimal(csv[11]) : null,
-                TNext = csv.Length > 12 ? ParseNullableDecimal(csv[12]) : null,
+                IvSkewSurfaceMinus = csv.Length > 5 ? ParseNullableDecimal(csv[5]) : null,
+                SkewNearTerm = csv.Length > 6 ? ParseNullableDecimal(csv[6]) : null,
+                SkewNextTerm = csv.Length > 7 ? ParseNullableDecimal(csv[7]) : null,
+                TermDaysNear = csv.Length > 8 ? ParseNullableInt(csv[8]) : null,
+                TermDaysNext = csv.Length > 9 ? ParseNullableInt(csv[9]) : null,
+                OptionCount = csv.Length > 10 ? ParseNullableInt(csv[10]) : null,
+                Vix = csv.Length > 11 ? ParseNullableDecimal(csv[11]) : null,
+                SigmaNear = csv.Length > 12 ? ParseNullableDecimal(csv[12]) : null,
+                SigmaNext = csv.Length > 13 ? ParseNullableDecimal(csv[13]) : null,
+                TNear = csv.Length > 14 ? ParseNullableDecimal(csv[14]) : null,
+                TNext = csv.Length > 15 ? ParseNullableDecimal(csv[15]) : null,
             };
         }
 

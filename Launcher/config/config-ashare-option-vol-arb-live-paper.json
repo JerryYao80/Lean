@@ -1,0 +1,51 @@
+{
+  "environment": "live-paper",
+  "algorithm-type-name": "AShareOptionVolatilityArbitrageAlgorithm",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+  "history-provider": "FallbackTushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": true,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "parameters": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
+    "start-date": "2024-06-01",
+    "end-date": "2024-12-31",
+    "initial-capital": "1000000",
+    "iv-rv-zscore-threshold": "2.0",
+    "ivts-threshold": "1.3",
+    "skew-percentile-high": "0.90",
+    "skew-percentile-low": "0.10",
+    "rv-lookback-days": "20",
+    "iv-lookback-days": "60",
+    "delta-hedge-enabled": "true",
+    "max-position-value": "200000",
+    "stop-loss-percent": "0.20",
+    "live-mode": "true",
+    "brokerage": "paper",
+    "signal-file": "../../../Results/ashare-option-vol-arb/live/signals.json",
+    "portfolio-snapshot-file": "../../../Results/ashare-option-vol-arb/live/portfolio.json",
+    "daily-summary-file": "../../../Results/ashare-option-vol-arb/live/daily.csv",
+    "summary-file": "../../../Results/ashare-option-vol-arb/live/summary.json"
+  },
+  "environments": {
+    "live-paper": {
+      "live-mode": true,
+      "setup-handler": "QuantConnect.Lean.Engine.Setup.ConsoleSetupHandler",
+      "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
+      "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.LiveTradingDataFeed",
+      "realtime-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
+      "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.LiveTradingTransactionHandler"
+    }
+  }
+}

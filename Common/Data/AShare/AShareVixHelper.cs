@@ -16,8 +16,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QuantConnect;
 
-namespace QuantConnect.ToolBox
+namespace QuantConnect.Data.AShare
 {
     /// <summary>
     /// Lightweight option data carrier for CBOE VIX computation.

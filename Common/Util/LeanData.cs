@@ -1506,7 +1506,32 @@ namespace QuantConnect.Util
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool OptionUseScaleFactor(Symbol symbol)
         {
-            return symbol.SecurityType == SecurityType.Option || symbol.SecurityType == SecurityType.IndexOption;
+            // A-share IndexOption markets (CFFEX) use native prices - no scaling needed
+            // A-share ETF Option markets (SSE/SZSE) also use native prices in our zip files
+            if (symbol.SecurityType == SecurityType.IndexOption)
+            {
+                return symbol.ID.Market != Market.CFE;
+            }
+            if (symbol.SecurityType == SecurityType.Option)
+            {
+                return symbol.ID.Market != Market.SSE && symbol.ID.Market != Market.SZSE;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Helper method to determine if we should use scale factor for equity parsing.
+        /// A-share markets (SSE/SZSE) store prices in native format (not scaled by 10000),
+        /// so we should NOT apply scaleFactor when parsing A-share equity data.
+        /// </summary>
+        /// <param name="symbol">The associated equity symbol</param>
+        /// <returns>True for US markets (prices stored scaled), false for A-share markets</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool EquityUseScaleFactor(Symbol symbol)
+        {
+            // A-share markets: SSE (Shanghai), SZSE (Shenzhen) - native prices, no scaling
+            var market = symbol.ID.Market;
+            return market != Market.SSE && market != Market.SZSE;
         }
 
         /// <summary>

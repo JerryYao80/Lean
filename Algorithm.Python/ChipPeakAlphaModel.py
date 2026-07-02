@@ -30,23 +30,25 @@ class ChipPeakAlphaModel(AlphaModel):
     BATCH_SIZE = 500
 
     def __init__(self, data_folder: str, top_n: int = 20,
-                 batch_size: int = 500, params: dict = None):
+                 batch_size: int = 500, params: dict = None, max_workers: int = 2):
         super().__init__()
         self.data_folder = data_folder
         self.top_n = int(top_n)
         self.batch_size = int(batch_size)
         self.params = params or ChipPeakFactors.DEFAULT_PARAMS.copy()
-        self.loader = ChipDataLoader(data_folder, max_batch_size=batch_size)
+        # max_workers=2: 使用双线程并行加载 parquet（IO 密集型加速）
+        self.loader = ChipDataLoader(data_folder, max_batch_size=batch_size, max_workers=max_workers)
 
     def on_securities_changed(self, algorithm: QCAlgorithm, changes: SecurityChanges):
         # 筹码 Alpha 无需响应 universe 变化：update() 时按当前 active_securities 流式扫描
         pass
 
     def update(self, algorithm: QCAlgorithm, data: Slice) -> list:
-        """流式扫描：分批加载 cyq_perf → 计算得分 → Top-N → Insight
+        """流式扫描：分批加载 cyq_perf + moneyflow + daily_basic → 多因子得分 → Top-N → Insight
 
-        数据流：ChipDataLoader.load_batch yields (ts_code, pd.Series)
+        数据流：ChipDataLoader.enriched_batch yields (ts_code, pd.Series)
               chip_row 即该 Series（单行），用完即丢以控制内存。
+        增强模式：若 moneyflow/daily_basic 缺失，自动降级为纯筹码因子。
         """
         current_date = algorithm.time.strftime('%Y%m%d')
         candidates = list(algorithm.active_securities.keys())
@@ -63,12 +65,14 @@ class ChipPeakAlphaModel(AlphaModel):
 
         scores = {}
         codes = [symbol_to_code[s] for s in candidates]
+        total_batches = (len(codes) + self.batch_size - 1) // self.batch_size
+        completed_batches = 0
 
         # 分批流式处理（内存控制核心）
         for i in range(0, len(codes), self.batch_size):
             batch_codes = codes[i:i + self.batch_size]
-            # load_batch 内部按 batch 读取 cyq_perf，yield 单行 Series
-            for ts_code, chip_row in self.loader.load_batch(batch_codes, current_date):
+            # enriched_batch 加载筹码 + 资金流 + 估值（缺失自动降级）
+            for ts_code, chip_row in self.loader.enriched_batch(batch_codes, current_date):
                 if chip_row is None:
                     continue
                 symbol = code_to_symbol.get(ts_code)
@@ -78,11 +82,17 @@ class ChipPeakAlphaModel(AlphaModel):
                 if security is None:
                     continue
                 current_price = float(security.price)
-                # chip_row 是 pd.Series，传给标量 API
+                # chip_row 是 pd.Series，传给标量 API（多因子融合）
                 score = ChipPeakFactors.composite_score(chip_row, current_price, self.params)
                 if score > 0:
                     scores[symbol] = score
                 # chip_row 在循环结束后自动释放
+
+            completed_batches += 1
+            # 进度条：每完成一个批次打印一次（不阻塞主循环）
+            if completed_batches % 3 == 0 or completed_batches == total_batches:
+                percentage = (completed_batches / total_batches) * 100
+                algorithm.log(f'[ChipPeakAlpha] {percentage:6.1f}% ({completed_batches}/{total_batches} batches) scanned so far')
 
         if not scores:
             return []
