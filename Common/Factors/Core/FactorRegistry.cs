@@ -37,13 +37,16 @@ namespace QuantConnect.Factors.Core
 
         public static void Register(IFactor factor)
         {
-            EnsureInitialized();
-            _factors[factor.Id] = factor;
-            _metadata[factor.Id] = new FactorMetadata
+            // 直接注册，不调用 EnsureInitialized()（避免 Initialize→Register→EnsureInitialized 无限递归）
+            lock (_lock)
             {
-                Id = factor.Id, Name = factor.Name, Category = factor.Category,
-                Scope = factor.Scope, ComputeMode = factor.ComputeMode, DataSource = factor.DataSource
-            };
+                _factors[factor.Id] = factor;
+                _metadata[factor.Id] = new FactorMetadata
+                {
+                    Id = factor.Id, Name = factor.Name, Category = factor.Category,
+                    Scope = factor.Scope, ComputeMode = factor.ComputeMode, DataSource = factor.DataSource
+                };
+            }
         }
 
         public static IFactor Get(string factorId)

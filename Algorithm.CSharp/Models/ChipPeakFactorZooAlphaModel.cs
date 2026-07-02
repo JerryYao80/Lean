@@ -57,7 +57,12 @@ namespace QuantConnect.Algorithm.CSharp.Models
                 var sys = Py.Import("sys");
                 dynamic path = sys.GetAttr("path");
                 var root = _rootPath;
-                if (!path.Contains(root)) path.invoke("insert", 0, root);
+                // path 是 Python list, 用 Python in 操作符判断
+                var rootPy = root.ToPython();
+                if (!path.__contains__(rootPy).__bool__())
+                {
+                    path.invoke("insert", 0, rootPy);
+                }
 
                 dynamic importlib = Py.Import("importlib.util");
                 var factorsPath = Path.Combine(root, "Algorithm.Python", "ChipPeakFactors.py");
@@ -70,7 +75,16 @@ namespace QuantConnect.Algorithm.CSharp.Models
                 dynamic loaderSpec = importlib.spec_from_file_location("ChipDataLoader", loaderPath);
                 dynamic loaderMod = importlib.module_from_spec(loaderSpec);
                 loaderSpec.loader.exec_module(loaderMod);
-                _chipDataLoader = loaderMod.ChipDataLoader(_dataFolder, _batchSize, _maxWorkers);
+                // 用位置参数调用: ChipDataLoader(data_folder, cyq_dir='cyq_perf', ..., max_batch_size, max_workers)
+                // 但 cyq_dir/adj_dir 是字符串，避免误传 int. 直接传 str 类型.
+                _chipDataLoader = loaderMod.ChipDataLoader(
+                    _dataFolder,
+                    "cyq_perf",
+                    "adj_factor",
+                    "moneyflow",
+                    "daily_basic",
+                    _batchSize,
+                    _maxWorkers);
             }
             _pythonInitialized = true;
         }
