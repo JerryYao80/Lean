@@ -16,9 +16,14 @@ namespace QuantConnect.Factors.Core
             {
                 if (_initialized) return;
 
-                // Register volatility factors
-                Register(new QuantConnect.Factors.Volatility.IVPercentileFactor(lookbackDays: 252));
-                Register(new QuantConnect.Factors.Volatility.HVFactor(windowDays: 20));
+                // Volatility factors
+                Register(new QuantConnect.Factors.Volatility.IVPercentileFactor(252));
+                Register(new QuantConnect.Factors.Volatility.HVFactor(20));
+
+                // Trend factors
+                Register(new QuantConnect.Factors.Trend.MomentumFactor(20));
+                Register(new QuantConnect.Factors.Trend.MACrossFactor(5, 20));
+                Register(new QuantConnect.Factors.Trend.RSIFactor(14));
 
                 _initialized = true;
             }
