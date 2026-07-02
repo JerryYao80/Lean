@@ -19,17 +19,40 @@ namespace QuantConnect.Factors.Core
                 // Volatility factors
                 Register(new QuantConnect.Factors.Volatility.IVPercentileFactor(252));
                 Register(new QuantConnect.Factors.Volatility.HVFactor(20));
+                Register(new QuantConnect.Factors.Volatility.VIXFactor());
+                Register(new QuantConnect.Factors.Volatility.IVSkewFactor(252));
+                Register(new QuantConnect.Factors.Volatility.IVTermStructureFactor());
 
                 // Trend factors
                 Register(new QuantConnect.Factors.Trend.MomentumFactor(20));
                 Register(new QuantConnect.Factors.Trend.MACrossFactor(5, 20));
                 Register(new QuantConnect.Factors.Trend.RSIFactor(14));
 
-                // Chip factors (Phase 1 stubs - need cyq_perf data integration)
+                // Value factors
+                Register(new QuantConnect.Factors.Value.PEPercentileFactor());
+                Register(new QuantConnect.Factors.Value.PBPercentileFactor());
+                Register(new QuantConnect.Factors.Value.DividendYieldFactor());
+
+                // Quality factors
+                Register(new QuantConnect.Factors.Quality.ROEFactor());
+                Register(new QuantConnect.Factors.Quality.MarginFactor());
+                Register(new QuantConnect.Factors.Quality.LeverageFactor());
+
+                // Sentiment factors
+                Register(new QuantConnect.Factors.Sentiment.CrowdingFactor());
+                Register(new QuantConnect.Factors.Sentiment.PCRFactor());
+                Register(new QuantConnect.Factors.Sentiment.NorthboundFactor());
+
+                // Liquidity factors
+                Register(new QuantConnect.Factors.Liquidity.TurnoverRateFactor());
+                Register(new QuantConnect.Factors.Liquidity.AmihudIlliquidityFactor());
+
+                // Chip factors
                 Register(new QuantConnect.Factors.Chip.ConcentrationFactor());
                 Register(new QuantConnect.Factors.Chip.ProfitRatioFactor());
                 Register(new QuantConnect.Factors.Chip.PeakPatternFactor());
                 Register(new QuantConnect.Factors.Chip.ChipPeakCompositeFactor());
+                Register(new QuantConnect.Factors.Chip.CostDeviationFactor());
 
                 _initialized = true;
             }
