@@ -47,7 +47,7 @@ namespace QuantConnect.Risk.VaR
                 VaRMethod.BootstrapHistorical => ComputeBootstrapHistorical(symbol, clean, config, scenario, sw),
                 VaRMethod.DirectQuantile => ComputeDirectQuantile(symbol, clean, config, scenario, sw),
                 VaRMethod.CornishFisher => ComputeCornishFisher(symbol, clean, config, scenario, sw),
-                VaRMethod.MonteCarlo => throw new NotImplementedException("MonteCarlo added in Task 7"),
+                VaRMethod.MonteCarlo => ComputeMonteCarlo(symbol, clean, config, scenario, sw),
                 _ => throw new ArgumentException($"Unknown method: {method}")
             };
         }
@@ -225,6 +225,70 @@ namespace QuantConnect.Risk.VaR
 
             return new VaRResult(varFinal, esFinal, tau, config.HorizonDays, config.Confidence,
                 VaRMethod.CornishFisher, scenario, quality, diagMsg, returns.Length, sw.ElapsedMilliseconds, symbol);
+        }
+
+        /// <summary>
+        /// Refined Monte Carlo (Bayesian Bootstrap MC): random exponential weights w_i = -ln(U_i).
+        /// NOT Filtered Historical Simulation (which uses lambda-decay weights).
+        /// </summary>
+        private static VaRResult ComputeMonteCarlo(Symbol symbol, double[] returns, VarConfig config, VaRScenario scenario, Stopwatch sw)
+        {
+            var (working, diagMsg, fallbackResult) = PrepareWorkingReturns(symbol, returns, config, scenario, VaRMethod.MonteCarlo, sw);
+            if (fallbackResult != null) return fallbackResult.Value;
+
+            if (config.MonteCarloPaths < 1000)
+            {
+                sw.Stop();
+                return new VaRResult(double.NaN, double.NaN, 1 - config.Confidence, config.HorizonDays, config.Confidence,
+                    VaRMethod.MonteCarlo, scenario, VaRDataQuality.InsufficientHistory,
+                    $"MC paths {config.MonteCarloPaths} < 1000", working.Length, sw.ElapsedMilliseconds, symbol);
+            }
+
+            var rng = new MersenneTwister(config.RandomSeed, true);
+            var tau = 1 - config.Confidence;
+            var n = working.Length;
+
+            var pathQuantiles = new double[config.MonteCarloPaths];
+            var pathES = new double[config.MonteCarloPaths];
+
+            for (int p = 0; p < config.MonteCarloPaths; p++)
+            {
+                // Bayesian bootstrap: random exponential weights w_i = -ln(U_i)
+                var weights = new double[n];
+                for (int i = 0; i < n; i++)
+                    weights[i] = -Math.Log(rng.NextDouble());
+
+                var totalW = weights.Sum();
+                // Weighted empirical quantile: find return where cumulative weight crosses tau
+                var indexed = working.Select((r, i) => (r, w: weights[i])).OrderBy(x => x.r).ToArray();
+
+                double cumW = 0;
+                double quantileR = indexed[0].r;
+                for (int i = 0; i < n; i++)
+                {
+                    cumW += indexed[i].w / totalW;
+                    if (cumW >= tau) { quantileR = indexed[i].r; break; }
+                }
+                pathQuantiles[p] = -quantileR; // positive loss
+
+                // ES: weighted mean of returns <= quantile threshold
+                var threshold = quantileR;
+                double wsum = 0, wsumTail = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    if (indexed[i].r <= threshold) { wsumTail += indexed[i].w * indexed[i].r; wsum += indexed[i].w; }
+                }
+                pathES[p] = wsum > 0 ? -(wsumTail / wsum) : pathQuantiles[p];
+            }
+
+            // VaR = median of path quantiles; ES = mean of path ES
+            var varFinal = pathQuantiles.Median();
+            var esFinal = pathES.Average();
+            if (esFinal < varFinal - 1e-9) { diagMsg = (diagMsg ?? "") + "ES clamped to VaR"; esFinal = varFinal; }
+            sw.Stop();
+
+            return new VaRResult(varFinal, esFinal, tau, config.HorizonDays, config.Confidence,
+                VaRMethod.MonteCarlo, scenario, VaRDataQuality.Valid, diagMsg, n, sw.ElapsedMilliseconds, symbol);
         }
     }
 }

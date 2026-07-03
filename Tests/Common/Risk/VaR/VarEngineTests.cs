@@ -112,5 +112,26 @@ namespace QuantConnect.Tests.Common.Risk.VaR
             // Should still compute but flag DegenerateTail (or Valid if skew doesn't exceed threshold)
             Assert.IsTrue(result.Quality == VaRDataQuality.DegenerateTail || result.Quality == VaRDataQuality.Valid);
         }
+
+        [Test]
+        public void Compute_MonteCarlo_Normal99_ApproximatesAnalytic()
+        {
+            var returns = NormalReturns(500, 0, 0.02, 42);
+            var config = new VarConfig(monteCarloPaths: 5000); // smaller for test speed
+            var result = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.MonteCarlo, VaRScenario.OneDay99, config);
+            Assert.IsTrue(result.IsValid);
+            // Analytic 2.326 * 0.02 = 0.0465; MC has wider tolerance
+            Assert.AreEqual(0.0465, result.ValueAtRisk, 0.02);
+        }
+
+        [Test]
+        public void Compute_MonteCarlo_IsDeterministic()
+        {
+            var returns = NormalReturns(300, 0, 0.02, 42);
+            var config = new VarConfig(monteCarloPaths: 2000);
+            var r1 = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.MonteCarlo, VaRScenario.OneDay99, config);
+            var r2 = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.MonteCarlo, VaRScenario.OneDay99, config);
+            Assert.AreEqual(r1.ValueAtRisk, r2.ValueAtRisk, 1e-15);
+        }
     }
 }
