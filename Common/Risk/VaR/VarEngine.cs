@@ -198,6 +198,111 @@ namespace QuantConnect.Risk.VaR
                 VaRMethod.MonteCarlo, scenario, VaRDataQuality.Valid, diagMsg, minObs, sw.ElapsedMilliseconds, null);
         }
 
+        /// <summary>
+        /// Regime score: percentile of today's VaR within trailing VaR series.
+        /// Falls back to in-sample rank when trailing window < regimeWindow.
+        /// </summary>
+        public static VaRRegimeScore RegimeScore(
+            double[] dailyReturns, int trailingWindow = 252,
+            VaRScenario scenario = VaRScenario.OneDay99, DateTime time = default)
+        {
+            if (dailyReturns == null || dailyReturns.Length < VaRConstants.MinHistoryDays)
+                return new VaRRegimeScore(0, 0, 0, null, false);
+
+            var config = VarConfig.FromScenario(scenario);
+            var currentVaR = Compute(Symbol.Empty, dailyReturns, VaRMethod.BootstrapHistorical, scenario, config);
+
+            if (!currentVaR.IsValid)
+                return new VaRRegimeScore(0, 0, 0, null, false);
+
+            // Build trailing VaR series (rolling window)
+            var varSeries = new List<double>();
+            int startIdx = Math.Max(VaRConstants.MinHistoryDays, dailyReturns.Length - trailingWindow);
+            for (int i = startIdx; i < dailyReturns.Length; i++)
+            {
+                var window = new double[i];
+                Array.Copy(dailyReturns, 0, window, 0, i);
+                if (window.Length >= VaRConstants.MinHistoryDays)
+                {
+                    var r = Compute(Symbol.Empty, window, VaRMethod.BootstrapHistorical, scenario, config);
+                    if (r.IsValid) varSeries.Add(r.ValueAtRisk);
+                }
+            }
+
+            decimal regimePct;
+            if (varSeries.Count == 0)
+            {
+                // Fallback: in-sample rank of today's VaR in return distribution
+                var sorted = dailyReturns.OrderBy(r => r).ToArray();
+                var tau = 1 - config.Confidence;
+                var inSampleVar = -SortedArrayStatistics.Quantile(sorted, tau);
+                regimePct = (decimal)(dailyReturns.Count(r => -r <= inSampleVar) / (double)dailyReturns.Length);
+            }
+            else
+            {
+                var sortedVar = varSeries.OrderBy(v => v).ToList();
+                var rank = sortedVar.Count(v => v <= currentVaR.ValueAtRisk);
+                regimePct = (decimal)(rank / (double)sortedVar.Count);
+            }
+
+            return new VaRRegimeScore((decimal)currentVaR.ValueAtRisk, regimePct, 0m, null, true);
+        }
+
+        /// <summary>
+        /// Marginal VaR contribution per symbol: VaR(w_full) - VaR(w without i).
+        /// </summary>
+        public static Dictionary<Symbol, double> MarginalContributions(
+            Dictionary<Symbol, double[]> perSymbolReturns,
+            Dictionary<Symbol, double> weights,
+            VaRMethod method, VaRScenario scenario, DateTime time)
+        {
+            var result = new Dictionary<Symbol, double>();
+            var config = VarConfig.FromScenario(scenario);
+
+            var symbols = perSymbolReturns.Keys.ToList();
+            var fullInput = BuildPortfolioInput(perSymbolReturns, weights, time);
+            var fullVaR = ComputePortfolio(fullInput, method, scenario, config);
+
+            foreach (var sym in symbols)
+            {
+                // "Without i" = asset i's returns zeroed out; weights unchanged (no renormalization).
+                // This yields non-negative marginal contributions for long-only portfolios:
+                // VaR(w_full) - VaR(w with r_i=0) >= 0 since adding an asset can only add risk
+                // to a portfolio whose weights are not renormalized.
+                var zeroed = new double[perSymbolReturns[sym].Length];
+                var reducedReturns = perSymbolReturns.ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Key.Equals(sym) ? zeroed : kv.Value);
+
+                if (reducedReturns.Count == 0)
+                {
+                    result[sym] = fullVaR.IsValid ? fullVaR.ValueAtRisk : 0;
+                    continue;
+                }
+
+                var reducedInput = BuildPortfolioInput(reducedReturns, weights, time);
+                var reducedVaR = ComputePortfolio(reducedInput, method, scenario, config);
+                // Treat NaN (InsufficientHistory/NonPdCovariance) as 0 so mc = fullVaR in those cases;
+                // AllReturnsConstant/ZeroVariance already yield VaR=0 (not NaN) so they pass through.
+                var reducedValue = double.IsNaN(reducedVaR.ValueAtRisk) ? 0 : reducedVaR.ValueAtRisk;
+                result[sym] = fullVaR.IsValid && !double.IsNaN(fullVaR.ValueAtRisk)
+                    ? fullVaR.ValueAtRisk - reducedValue
+                    : 0;
+            }
+
+            return result;
+        }
+
+        private static PortfolioVaRInput BuildPortfolioInput(
+            Dictionary<Symbol, double[]> perSymbolReturns,
+            Dictionary<Symbol, double> weights, DateTime time)
+        {
+            var symbols = perSymbolReturns.Keys.ToList();
+            var returnsList = symbols.Select(s => (IReadOnlyList<double>)perSymbolReturns[s]).ToList();
+            var weightsList = symbols.Select(s => weights[s]).ToList();
+            return new PortfolioVaRInput(returnsList, weightsList, symbols, time);
+        }
+
         private static VaRResult InsufficientHistoryResult(Symbol symbol, VaRMethod method, VaRScenario scenario, VarConfig config, int count, Stopwatch sw)
         {
             sw.Stop();

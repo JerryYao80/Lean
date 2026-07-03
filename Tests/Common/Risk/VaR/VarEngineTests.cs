@@ -1,5 +1,6 @@
 // file: Tests/Common/Risk/VaR/VarEngineTests.cs
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using MathNet.Numerics.Distributions;
 using NUnit.Framework;
@@ -166,6 +167,39 @@ namespace QuantConnect.Tests.Common.Risk.VaR
             var input = new PortfolioVaRInput(new[] { r1 }, new[] { 1.0 }, null, DateTime.UtcNow);
             var result = VarEngine.ComputePortfolio(input, VaRMethod.DirectQuantile, VaRScenario.OneDay99);
             Assert.AreEqual(VaRDataQuality.InsufficientHistory, result.Quality);
+        }
+
+        [Test]
+        public void RegimeScore_ReturnsValidPercentile()
+        {
+            var returns = NormalReturns(300, 0, 0.02, 42);
+            var score = VarEngine.RegimeScore(returns, 100, VaRScenario.OneDay99);
+            Assert.IsTrue(score.IsValid);
+            Assert.GreaterOrEqual(score.RegimePercentile, 0m);
+            Assert.LessOrEqual(score.RegimePercentile, 1m);
+        }
+
+        [Test]
+        public void RegimeScore_InsufficientHistory_ReturnsInvalid()
+        {
+            var returns = new[] { 0.01, 0.02 };
+            var score = VarEngine.RegimeScore(returns, 100, VaRScenario.OneDay99);
+            Assert.IsFalse(score.IsValid);
+        }
+
+        [Test]
+        public void MarginalContributions_TwoAssets_ReturnsNonNeg()
+        {
+            var r1 = NormalReturns(300, 0, 0.02, 42);
+            var r2 = NormalReturns(300, 0, 0.015, 43);
+            var sym1 = Symbol.Create("510050", SecurityType.Equity, Market.USA);
+            var sym2 = Symbol.Create("510300", SecurityType.Equity, Market.USA);
+            var perSym = new Dictionary<Symbol, double[]> { { sym1, r1 }, { sym2, r2 } };
+            var weights = new Dictionary<Symbol, double> { { sym1, 0.6 }, { sym2, 0.4 } };
+            var mc = VarEngine.MarginalContributions(perSym, weights, VaRMethod.DirectQuantile, VaRScenario.OneDay99, DateTime.UtcNow);
+            Assert.AreEqual(2, mc.Count);
+            Assert.GreaterOrEqual(mc[sym1], -1e-9);
+            Assert.GreaterOrEqual(mc[sym2], -1e-9);
         }
     }
 }
