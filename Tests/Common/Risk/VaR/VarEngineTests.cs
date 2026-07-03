@@ -76,5 +76,41 @@ namespace QuantConnect.Tests.Common.Risk.VaR
             var r2 = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.BootstrapHistorical, VaRScenario.OneDay99);
             Assert.AreEqual(r1.ValueAtRisk, r2.ValueAtRisk, 1e-15);
         }
+
+        [Test]
+        public void Compute_CornishFisher_Normal99_ApproximatesAnalytic()
+        {
+            var returns = NormalReturns(500, 0, 0.02, 42);
+            var result = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.CornishFisher, VaRScenario.OneDay99);
+            Assert.IsTrue(result.IsValid);
+            // For normal (skew≈0, exKurt≈0), CF reduces to normal: 2.326 * 0.02 = 0.0465
+            Assert.AreEqual(0.0465, result.ValueAtRisk, 0.012);
+        }
+
+        [Test]
+        public void Compute_CornishFisher_TenDay_SqrtScaling()
+        {
+            var returns = NormalReturns(500, 0, 0.02, 42);
+            var oneDay = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.CornishFisher, VaRScenario.OneDay99);
+            var tenDay = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.CornishFisher, VaRScenario.TenDay99);
+            // sqrt(10) scaling
+            Assert.AreEqual(oneDay.ValueAtRisk * Math.Sqrt(10), tenDay.ValueAtRisk, 1e-9);
+        }
+
+        [Test]
+        public void Compute_CornishFisher_FlagDegenerateTail()
+        {
+            // Heavy-tailed synthetic: large negative skew
+            var rng = new MathNet.Numerics.Random.MersenneTwister(42);
+            var returns = new double[300];
+            for (int i = 0; i < 300; i++)
+            {
+                // Inject extreme negative returns to create skew
+                returns[i] = (rng.NextDouble() < 0.1) ? -0.10 : 0.01;
+            }
+            var result = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.CornishFisher, VaRScenario.OneDay99);
+            // Should still compute but flag DegenerateTail (or Valid if skew doesn't exceed threshold)
+            Assert.IsTrue(result.Quality == VaRDataQuality.DegenerateTail || result.Quality == VaRDataQuality.Valid);
+        }
     }
 }

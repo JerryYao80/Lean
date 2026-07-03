@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using MathNet.Numerics.Distributions;
 using MathNet.Numerics.Random;
 using MathNet.Numerics.Statistics;
 using QuantConnect.Securities;
@@ -45,7 +46,7 @@ namespace QuantConnect.Risk.VaR
             {
                 VaRMethod.BootstrapHistorical => ComputeBootstrapHistorical(symbol, clean, config, scenario, sw),
                 VaRMethod.DirectQuantile => ComputeDirectQuantile(symbol, clean, config, scenario, sw),
-                VaRMethod.CornishFisher => throw new NotImplementedException("CornishFisher added in Task 6"),
+                VaRMethod.CornishFisher => ComputeCornishFisher(symbol, clean, config, scenario, sw),
                 VaRMethod.MonteCarlo => throw new NotImplementedException("MonteCarlo added in Task 7"),
                 _ => throw new ArgumentException($"Unknown method: {method}")
             };
@@ -163,6 +164,67 @@ namespace QuantConnect.Risk.VaR
             }
 
             return (returns, "10D non-overlapping not implemented, using 1D", null);
+        }
+
+        private static VaRResult ComputeCornishFisher(Symbol symbol, double[] returns, VarConfig config, VaRScenario scenario, Stopwatch sw)
+        {
+            var (mean, sd, skew, exKurt) = VaRMath.SampleMoments(returns);
+            var tau = 1 - config.Confidence;
+
+            if (sd < 1e-10)
+            {
+                sw.Stop();
+                return new VaRResult(0, 0, tau, config.HorizonDays, config.Confidence,
+                    VaRMethod.CornishFisher, scenario, VaRDataQuality.ZeroVariance,
+                    "Zero variance", returns.Length, sw.ElapsedMilliseconds, symbol);
+            }
+
+            // z_alpha = lower-tail quantile (negative for loss)
+            var zAlpha = Normal.InvCDF(0, 1, tau);
+
+            // Cornish-Fisher expansion
+            var z_cf = zAlpha
+                + (1.0 / 6.0) * (zAlpha * zAlpha - 1) * skew
+                + (1.0 / 24.0) * (zAlpha * zAlpha * zAlpha - 3 * zAlpha) * exKurt
+                - (1.0 / 36.0) * (2 * zAlpha * zAlpha * zAlpha - 5 * zAlpha) * skew * skew;
+
+            var var1d = -(mean + sd * z_cf);
+
+            // ES with first-order skew correction
+            var phi = Normal.PDF(0, 1, zAlpha);
+            var esCorrection = phi / (1 - config.Confidence) + (zAlpha / 6.0) * (zAlpha * zAlpha - 1) * skew;
+            var es1d = -(mean + sd * esCorrection);
+
+            string diagMsg = null;
+            var quality = VaRDataQuality.Valid;
+
+            // Degenerate tail flag
+            if (Math.Abs(skew) > 4 || Math.Abs(exKurt) > 30)
+            {
+                quality = VaRDataQuality.DegenerateTail;
+                diagMsg = $"Degenerate tail: skew={skew:F3}, exKurt={exKurt:F3}; CF unreliable, consider Bootstrap";
+            }
+
+            // 10D: sqrt(10) scaling (parametric has no clean 10D CF expansion)
+            double varFinal, esFinal;
+            if (config.HorizonDays > 1 && config.UseSqrtScalingFor10Day)
+            {
+                var sqrtFactor = Math.Sqrt(config.HorizonDays);
+                varFinal = var1d * sqrtFactor;
+                esFinal = es1d * sqrtFactor;
+                diagMsg = (diagMsg ?? "") + $"10D sqrt({config.HorizonDays}) scaling";
+            }
+            else
+            {
+                varFinal = var1d;
+                esFinal = es1d;
+            }
+
+            if (esFinal < varFinal - 1e-9) { diagMsg = (diagMsg ?? "") + "ES clamped to VaR"; esFinal = varFinal; }
+            sw.Stop();
+
+            return new VaRResult(varFinal, esFinal, tau, config.HorizonDays, config.Confidence,
+                VaRMethod.CornishFisher, scenario, quality, diagMsg, returns.Length, sw.ElapsedMilliseconds, symbol);
         }
     }
 }
