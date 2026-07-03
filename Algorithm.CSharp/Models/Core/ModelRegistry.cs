@@ -32,6 +32,10 @@ namespace QuantConnect.Algorithm.CSharp.Models.Core
             RegisterRisk(new Risk.MaxDrawdownRiskModel(), "risk_max_drawdown");
             RegisterRisk(new Risk.PositionLimitRiskModel(), "risk_position_limit");
 
+            // VaR risk models (additive — new in 2026-07-03)
+            RegisterRisk(new Risk.VaRRiskModel(), "risk_var");
+            RegisterRisk(Risk.CompositeRiskModel.FromVaR(), "risk_composite_var_default");
+
             // Execution models
             RegisterExecution(new Execution.ImmediateExecutionModel(), "execution_immediate");
 
