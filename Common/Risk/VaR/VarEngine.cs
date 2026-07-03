@@ -68,6 +68,136 @@ namespace QuantConnect.Risk.VaR
             return results;
         }
 
+        /// <summary>Compute portfolio VaR (multi-asset). nAssets=1 + MC delegates to delta-normal.</summary>
+        public static VaRResult ComputePortfolio(
+            PortfolioVaRInput input, VaRMethod method, VaRScenario scenario, VarConfig config = default)
+        {
+            if (config.Equals(default(VarConfig)))
+                config = VarConfig.FromScenario(scenario);
+
+            var sw = Stopwatch.StartNew();
+            int nAssets = input.AssetReturns.Count;
+
+            if (nAssets == 0)
+                return InsufficientHistoryResult(null, method, scenario, config, 0, sw);
+
+            // nAssets=1 portfolio MC delegates to delta-normal (NOT Bayesian bootstrap)
+            if (nAssets == 1 && method == VaRMethod.MonteCarlo)
+            {
+                return ComputePortfolioDeltaNormal(input, config, scenario, sw);
+            }
+
+            // Align returns to matrix [nObs, nAssets] (truncate to shortest asset)
+            int minObs = input.AssetReturns.Min(r => r.Count);
+            if (minObs < config.MinHistoryDays)
+                return InsufficientHistoryResult(null, method, scenario, config, minObs, sw);
+
+            var matrix = new double[minObs, nAssets];
+            for (int a = 0; a < nAssets; a++)
+                for (int t = 0; t < minObs; t++)
+                    matrix[t, a] = input.AssetReturns[a][t];
+
+            // Build portfolio historical returns: R_p = sum(w_i * r_i)
+            var weightsArr = input.Weights.ToArray();
+            var sumW = weightsArr.Sum();
+            var normWeights = weightsArr.Select(w => w / sumW).ToArray();
+
+            var portfolioReturns = new double[minObs];
+            for (int t = 0; t < minObs; t++)
+            {
+                double rp = 0;
+                for (int a = 0; a < nAssets; a++)
+                    rp += normWeights[a] * matrix[t, a];
+                portfolioReturns[t] = rp;
+            }
+
+            // Delegate to single-asset methods on portfolio return series
+            var result = Compute(null, portfolioReturns, method, scenario, config);
+            sw.Stop();
+
+            // Re-wrap with corrected compute time
+            return new VaRResult(result.ValueAtRisk, result.ExpectedShortfall, result.Quantile,
+                result.HorizonDays, result.Confidence, result.Method, scenario, result.Quality,
+                result.DiagnosticMessage, result.ObservationsUsed, sw.ElapsedMilliseconds, null);
+        }
+
+        /// <summary>Compute all 4 methods x 3 scenarios for portfolio (12 results).</summary>
+        public static IReadOnlyDictionary<(VaRMethod Method, VaRScenario Scenario), VaRResult> ComputePortfolioAll(
+            PortfolioVaRInput input, VarConfig config = default)
+        {
+            var methods = new[] { VaRMethod.BootstrapHistorical, VaRMethod.CornishFisher, VaRMethod.MonteCarlo, VaRMethod.DirectQuantile };
+            var scenarios = new[] { VaRScenario.OneDay95, VaRScenario.OneDay99, VaRScenario.TenDay99 };
+            var results = new Dictionary<(VaRMethod, VaRScenario), VaRResult>();
+            foreach (var m in methods)
+                foreach (var s in scenarios)
+                {
+                    try { results[(m, s)] = ComputePortfolio(input, m, s, config); }
+                    catch (NotImplementedException) { }
+                }
+            return results;
+        }
+
+        /// <summary>
+        /// Delta-normal portfolio VaR (closed-form): VaR_p = sqrt(w' Σ w) * |z_alpha|.
+        /// Used as nAssets=1 MC delegation AND as a sanity check (DiagnosticMessage).
+        /// </summary>
+        private static VaRResult ComputePortfolioDeltaNormal(PortfolioVaRInput input, VarConfig config, VaRScenario scenario, Stopwatch sw)
+        {
+            int nAssets = input.AssetReturns.Count;
+            int minObs = input.AssetReturns.Min(r => r.Count);
+            var matrix = new double[minObs, nAssets];
+            for (int a = 0; a < nAssets; a++)
+                for (int t = 0; t < minObs; t++)
+                    matrix[t, a] = input.AssetReturns[a][t];
+
+            var cov = VaRMath.BuildCovariance(matrix, out var covWarning);
+            string diagMsg = covWarning;
+
+            if (config.EnforcePdCovariance && cov != null)
+            {
+                var (repairedCov, repaired, repairMsg) = VaRMath.EnsurePd(cov, config.EigenvalueFloor);
+                if (repaired) { cov = repairedCov; diagMsg = (diagMsg ?? "") + repairMsg; }
+            }
+
+            if (cov == null)
+            {
+                sw.Stop();
+                return new VaRResult(double.NaN, double.NaN, 1 - config.Confidence, config.HorizonDays, config.Confidence,
+                    VaRMethod.MonteCarlo, scenario, VaRDataQuality.NonPdCovariance, "Covariance null", minObs, sw.ElapsedMilliseconds, null);
+            }
+
+            var weightsArr = input.Weights.ToArray();
+            var sumW = weightsArr.Sum();
+            var normWeights = weightsArr.Select(w => w / sumW).ToArray();
+
+            // Portfolio variance: w' Σ w
+            double portVariance = 0;
+            for (int i = 0; i < nAssets; i++)
+                for (int j = 0; j < nAssets; j++)
+                    portVariance += normWeights[i] * cov[i, j] * normWeights[j];
+
+            var portSigma = Math.Sqrt(Math.Max(portVariance, 0));
+            var zAlpha = Normal.InvCDF(0, 1, 1 - config.Confidence);
+            var var1d = portSigma * Math.Abs(zAlpha);
+
+            // ES (normal): sigma * phi(z_alpha) / (1 - conf)
+            var phi = Normal.PDF(0, 1, zAlpha);
+            var es1d = portSigma * phi / (1 - config.Confidence);
+
+            double varFinal = var1d, esFinal = es1d;
+            if (config.HorizonDays > 1 && config.UseSqrtScalingFor10Day)
+            {
+                var sqrtFactor = Math.Sqrt(config.HorizonDays);
+                varFinal = var1d * sqrtFactor;
+                esFinal = es1d * sqrtFactor;
+                diagMsg = (diagMsg ?? "") + $"10D sqrt({config.HorizonDays}) scaling";
+            }
+
+            sw.Stop();
+            return new VaRResult(varFinal, esFinal, 1 - config.Confidence, config.HorizonDays, config.Confidence,
+                VaRMethod.MonteCarlo, scenario, VaRDataQuality.Valid, diagMsg, minObs, sw.ElapsedMilliseconds, null);
+        }
+
         private static VaRResult InsufficientHistoryResult(Symbol symbol, VaRMethod method, VaRScenario scenario, VarConfig config, int count, Stopwatch sw)
         {
             sw.Stop();

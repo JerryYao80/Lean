@@ -133,5 +133,39 @@ namespace QuantConnect.Tests.Common.Risk.VaR
             var r2 = VarEngine.Compute(Symbol.Empty, returns, VaRMethod.MonteCarlo, VaRScenario.OneDay99, config);
             Assert.AreEqual(r1.ValueAtRisk, r2.ValueAtRisk, 1e-15);
         }
+
+        [Test]
+        public void ComputePortfolio_TwoAssets_DirectQuantile()
+        {
+            var r1 = NormalReturns(300, 0, 0.02, 42);
+            var r2 = NormalReturns(300, 0, 0.015, 43);
+            var input = new PortfolioVaRInput(
+                new[] { r1, r2 }, new[] { 0.6, 0.4 }, null, DateTime.UtcNow);
+            var result = VarEngine.ComputePortfolio(input, VaRMethod.DirectQuantile, VaRScenario.OneDay99);
+            Assert.IsTrue(result.IsValid);
+            Assert.Greater(result.ValueAtRisk, 0);
+        }
+
+        [Test]
+        public void ComputePortfolio_SingleAsset_MC_DelegatesDeltaNormal()
+        {
+            var r1 = NormalReturns(300, 0, 0.02, 42);
+            var input = new PortfolioVaRInput(
+                new[] { r1 }, new[] { 1.0 }, null, DateTime.UtcNow);
+            var result = VarEngine.ComputePortfolio(input, VaRMethod.MonteCarlo, VaRScenario.OneDay99,
+                new VarConfig(monteCarloPaths: 2000));
+            Assert.IsTrue(result.IsValid);
+            // Delta-normal 1D99: 2.326 * 0.02 = 0.0465
+            Assert.AreEqual(0.0465, result.ValueAtRisk, 0.012);
+        }
+
+        [Test]
+        public void ComputePortfolio_InsufficientHistory()
+        {
+            var r1 = new[] { 0.01, 0.02 };
+            var input = new PortfolioVaRInput(new[] { r1 }, new[] { 1.0 }, null, DateTime.UtcNow);
+            var result = VarEngine.ComputePortfolio(input, VaRMethod.DirectQuantile, VaRScenario.OneDay99);
+            Assert.AreEqual(VaRDataQuality.InsufficientHistory, result.Quality);
+        }
     }
 }
