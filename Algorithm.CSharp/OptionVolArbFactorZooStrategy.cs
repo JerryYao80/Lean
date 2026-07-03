@@ -17,6 +17,7 @@ using QuantConnect.Algorithm.CSharp.Models.Risk;
 using QuantConnect.Algorithm.CSharp.Models.Alpha;
 using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Orders.Fees;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -26,11 +27,11 @@ namespace QuantConnect.Algorithm.CSharp
         {
             SetStartDate(2024, 2, 8);
             SetEndDate(2024, 6, 28);
-            SetAccountCurrency("CNY");
-            SetCash(1000000);
+            SetCash(1000000); // USD nominal, treat as CNY for A-share options (matches original)
 
-            // 标的: 510050 ETF (IV CSV 数据最全的标的)
-            AddEquity("510050", Resolution.Daily, Market.SSE);
+            // 标的: 510050 ETF (IV CSV 数据最全的标的) - 使用 ConstantFeeModel 避免 SSE market 不支持
+            var equity = AddEquity("510050", Resolution.Daily, Market.SSE);
+            equity.FeeModel = new ConstantFeeModel(5m);
 
             // Layer 2: 模型动物园组件
             SetAlpha(new OptionVolArbFactorZooAlphaModel(
