@@ -1,0 +1,32 @@
+optuna:
+  n_trials: 200
+  sampler: TPESampler
+  direction: maximize
+  concurrent: 4
+cpcv:
+  n_folds: 6
+  purge_bars: 5
+  embargo_bars: 5
+walk_forward:
+  train_days: 504
+  test_days: 126
+  step_days: 126
+ppo_training:
+  retrain_frequency: weekly
+  train_window_days: 504
+  cpcv_folds: 6
+  early_stop_patience: 20
+  deploy_gate: manual
+  rollout_policy: greedy
+  total_timesteps: 10000
+overfitting:
+  oos_dsr_absolute_min: 0.5
+  oos_is_ratio_min: 0.6
+ridge:
+  convergence_density_threshold: 0.3
+lean:
+  timeout_seconds: 600
+  executable: dotnet
+  launcher_dll: QuantConnect.Lean.Launcher.dll
+endpoints:
+  base_port: 5555
