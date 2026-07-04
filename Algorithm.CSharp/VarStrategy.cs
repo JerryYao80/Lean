@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json;
+using QuantConnect.Algorithm.CSharp.Common;
 using QuantConnect.Algorithm.CSharp.Models;
 using QuantConnect.Algorithm.CSharp.Models.Alpha;
 using QuantConnect.Algorithm.CSharp.Models.Portfolio;
@@ -20,7 +22,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// VaR three-layer pipeline strategy (Layer 3).
     /// Two modes via config "var-mode": "single-etf" (510050/510300/510500) or "multi-stock" (CSI300 subset).
     /// </summary>
-    public class VarStrategy : QCAlgorithm
+    public class VarStrategy : QCAlgorithm, IOptimizableStrategy, IRlStateExportable
     {
         private string _varMode;
         private List<string> _symbols;
@@ -146,6 +148,29 @@ namespace QuantConnect.Algorithm.CSharp
         {
             var val = GetParameter(key);
             return string.IsNullOrEmpty(val) ? defaultValue : val;
+        }
+
+        /// <summary>IOptimizableStrategy: 与 manifest.parameter_space 一致 (manifest_lint 校验).</summary>
+        public IEnumerable<string> GetTunableParameterNames() => new[]
+        {
+            "var-budget", "var-lookback-days", "risk-max-drawdown", "risk-max-position-weight"
+        };
+
+        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.</summary>
+        public string SerializeRlState(QCAlgorithm algo)
+        {
+            var tpv = Portfolio.TotalPortfolioValue;
+            var positions = Securities.Values
+                .Where(s => s.Holdings.Quantity != 0)
+                .Select(s => new {
+                    sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
+                    pnl_1d = 0m, days_held = 0
+                }).ToList();
+            return JsonConvert.SerializeObject(new {
+                ts = algo.Time.ToString("o"), strategy = "VarStrategy",
+                tpv, cash_pct = Portfolio.Cash / tpv, positions,
+                var_1d99 = 0m, var_regime = 0m, drawdown = 0m, n_open_positions = positions.Count
+            });
         }
     }
 }
