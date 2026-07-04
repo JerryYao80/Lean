@@ -32,8 +32,8 @@ using QuantConnect.Securities;
 namespace QuantConnect.Algorithm.CSharp
 {
     /// <summary>
-    /// A股ETF期权波动率套利策略 (三标的混合版)
-    /// 510050/510300/510500 混合标的，使用IV CSV信号驱动ETF现货交易
+    /// A股ETF期权波动率套利策略 (五标的扩展版)
+    /// 510050/510300/510500/588000/588080 混合标的，使用IV CSV信号驱动ETF现货交易
     ///
     /// 信号逻辑:
     /// - IV-RV spread z-score > 2 → 做空波动率 (卖出ETF)
@@ -47,19 +47,21 @@ namespace QuantConnect.Algorithm.CSharp
     /// </summary>
     public class AShareOptionVolatilityArbitrage3SymbolsAlgorithm : QCAlgorithm
     {
-        private readonly string[] _underlyings = { "510050", "510300", "510500" };
+        private readonly string[] _underlyings = { "510050", "510300", "510500", "588000", "588080" };
         private readonly Dictionary<string, Symbol> _symbols = new();
         private readonly Dictionary<string, RollingWindow<decimal>> _ivHistory = new();
         private readonly Dictionary<string, RollingWindow<decimal>> _rvHistory = new();
 
         private const int RvLookbackDays = 20;
         private const decimal IvRvZScoreThreshold = 2.0m;
-        private const decimal PositionWeight = 0.3m; // 每个标的30%仓位
+        private const decimal PositionWeight = 0.18m; // 5标的 × 18% ≈ 90% 满仓
 
         public override void Initialize()
         {
-            SetStartDate(2024, 6, 26);
-            SetEndDate(2024, 12, 25);
+            // 扩展回测窗口: 510500/588000/588080 的共同起点是 2023-06-05
+            // 510300 数据从2020开始, 但为统一5标的, 取2023-06-05~2025-04-01
+            SetStartDate(2023, 6, 5);
+            SetEndDate(2025, 4, 1);
             SetCash(1000000); // USD账户 (避免CNY崩溃)
 
             // 手动添加CNY并设置ConversionRate=1 (允许下单)

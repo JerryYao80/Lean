@@ -1,0 +1,33 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "VarStrategy",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+  "history-provider": "FallbackTushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": false,
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "algorithm-start-date": "2025-11-03T00:00:00Z",
+  "algorithm-end-date": "2025-12-31T23:59:59Z",
+  "timezone": "Asia/Shanghai",
+  "parameters": {
+    "var-mode": "single-etf",
+    "var-budget": "0.02",
+    "var-es-budget": "0.015",
+    "var-confidence": "99",
+    "var-horizon-days": "1",
+    "var-method": "DirectQuantile",
+    "var-lookback-days": "252",
+    "var-bootstrap-samples": "200",
+    "var-mc-paths": "50000",
+    "var-mc-seed": "42",
+    "risk-max-drawdown": "0.20",
+    "risk-max-position-weight": "0.40"
+  }
+}

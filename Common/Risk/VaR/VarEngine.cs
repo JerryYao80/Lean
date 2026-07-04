@@ -215,7 +215,10 @@ namespace QuantConnect.Risk.VaR
             if (!currentVaR.IsValid)
                 return new VaRRegimeScore(0, 0, 0, null, false);
 
-            // Build trailing VaR series (rolling window)
+            // Build trailing VaR series (rolling window).
+            // NOTE: trailing series is only used for percentile rank of current VaR, so we use
+            // DirectQuantile (fast empirical quantile) regardless of caller's method. This keeps
+            // RegimeScore tractable: 252 windows × O(n log n) sort instead of 252 × bootstrap(10000).
             var varSeries = new List<double>();
             int startIdx = Math.Max(VaRConstants.MinHistoryDays, dailyReturns.Length - trailingWindow);
             for (int i = startIdx; i < dailyReturns.Length; i++)
@@ -224,7 +227,7 @@ namespace QuantConnect.Risk.VaR
                 Array.Copy(dailyReturns, 0, window, 0, i);
                 if (window.Length >= VaRConstants.MinHistoryDays)
                 {
-                    var r = Compute(Symbol.Empty, window, VaRMethod.BootstrapHistorical, scenario, config);
+                    var r = Compute(Symbol.Empty, window, VaRMethod.DirectQuantile, scenario, config);
                     if (r.IsValid) varSeries.Add(r.ValueAtRisk);
                 }
             }

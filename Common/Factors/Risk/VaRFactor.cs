@@ -114,6 +114,8 @@ namespace QuantConnect.Factors.Risk
                     Quality = FactorDataQuality.Missing, ComputeTimeMs = (int)sw.ElapsedMilliseconds
                 };
 
+            // RegimeScore: rank current VaR against trailing series. Uses fast DirectQuantile
+            // internally (see VarEngine.RegimeScore) so this stays cheap regardless of _method.
             var regime = VarEngine.RegimeScore(rets.ToArray(), _regimeWindow, _scenario, time);
 
             // Quality flag
