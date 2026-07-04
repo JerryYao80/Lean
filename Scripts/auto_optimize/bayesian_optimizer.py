@@ -45,6 +45,6 @@ if __name__ == "__main__":
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--n-trials", type=int, default=200)
     args = ap.parse_args()
-    config = json.loads((pathlib.Path("Scripts/auto_optimize/config.yaml").read_text()))  # 简化, 实际用 yaml
+    config = yaml.safe_load(pathlib.Path("Scripts/auto_optimize/config.yaml").read_text())
     result = optimize(args.manifest, config, args.n_trials)
     print(json.dumps(result, indent=2))

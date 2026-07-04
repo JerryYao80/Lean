@@ -1,5 +1,5 @@
 strategy_name: AShareBarraCNE5V4Algorithm
-lean_config: Launcher/config/config-barra-cne5-v4.json
+lean_config: Launcher/config/config-barra-cne5v4-backtest.json
 risk_model_target: CompositeRiskManagementModel
 parameter_space:
   - {name: top-n, type: int, range: [10, 50], default: 25, layer: L2_Alpha}
