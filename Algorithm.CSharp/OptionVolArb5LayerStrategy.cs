@@ -17,10 +17,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using Newtonsoft.Json;
 using QuantConnect.Algorithm;
 using QuantConnect.Data; // for Globals
 using QuantConnect.Data.UniverseSelection; // for UniverseSettings
+using QuantConnect.Algorithm.CSharp.Common;
 using QuantConnect.Algorithm.CSharp.Models.Alpha;
 using QuantConnect.Algorithm.CSharp.Models.Execution;
 using QuantConnect.Algorithm.CSharp.Models.Portfolio;
@@ -40,7 +43,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// 期权波动率套利策略 (五层架构版).
     /// 彻底解耦命令式 OnData → LEAN Framework 分层模块.
     /// </summary>
-    public class OptionVolArb5LayerStrategy : QCAlgorithm
+    public class OptionVolArb5LayerStrategy : QCAlgorithm, IOptimizableStrategy, IRlStateExportable
     {
         private OptionVolArbUniverseSelectionModel _universeModel;
         private List<string> _candidateTickers;
@@ -133,22 +136,39 @@ namespace QuantConnect.Algorithm.CSharp
 
             // Layer 2: Alpha — IV-RV z-score / IVTS / Skew 多因子
             SetAlpha(new OptionVolArbFactorZooAlphaModel(
-                ivRvZScoreThreshold: 2.0m,
-                ivtsThreshold: 1.3m,
-                skewPercentileHigh: 0.90m,
-                skewPercentileLow: 0.10m));
+                ivRvZScoreThreshold: GetDecimalParameter("iv-rv-z-score-threshold", 2.0m),
+                ivtsThreshold: GetDecimalParameter("ivts-threshold", 1.3m),
+                skewPercentileHigh: GetDecimalParameter("skew-percentile-high", 0.90m),
+                skewPercentileLow: GetDecimalParameter("skew-percentile-low", 0.10m)));
 
             // Layer 3: Portfolio Construction — 等权组合
             SetPortfolioConstruction(new EqualWeightPortfolioModel());
 
             // Layer 4: Risk Management — VaR → MaxDrawdown → PositionLimit 三级风控链
-            SetRiskManagement(CompositeRiskModel.FromVaR(
-                varBudgetFraction: 0.02m,
-                maxDrawdown: 0.20m,
-                maxPositionWeight: 0.30m,
-                method: VaRMethod.BootstrapHistorical,
-                scenario: VaRScenario.OneDay99,
-                lookbackDays: 252));
+            // risk-mode: "composite" (default, CompositeRiskModel.FromVaR) | "rl" (RlRiskModel ZeroMQ IPC)
+            var riskMode = GetParameterOrDefault("risk-mode", "composite");
+            if (riskMode == "rl")
+            {
+                SetRiskManagement(new RlRiskModel(new RlRiskConfig
+                {
+                    Endpoint = GetParameterOrDefault("rl-server-endpoint", "tcp://127.0.0.1:5555"),
+                    PolicyName = GetParameterOrDefault("rl-policy-name", "default"),
+                    FallbackAlpha = GetDecimalParameter("rl-fallback-alpha", 0.5m),
+                    TimeoutMs = GetIntParameter("rl-timeout-ms", 200),
+                }));
+                Log("[OptionVolArb-5Layer] L4 Risk: RlRiskModel (rl mode)");
+            }
+            else
+            {
+                SetRiskManagement(CompositeRiskModel.FromVaR(
+                    varBudgetFraction: GetDecimalParameter("var-budget", 0.02m),
+                    maxDrawdown: GetDecimalParameter("max-drawdown", 0.20m),
+                    maxPositionWeight: GetDecimalParameter("max-position-weight", 0.30m),
+                    method: VaRMethod.BootstrapHistorical,
+                    scenario: VaRScenario.OneDay99,
+                    lookbackDays: GetIntParameter("var-lookback-days", 252)));
+                Log("[OptionVolArb-5Layer] L4 Risk: CompositeRiskModel (composite mode, default)");
+            }
 
             // Layer 5: Execution — 立即执行 (用 LEAN 原生, 避免与 Models.Execution 同名歧义)
             SetExecution(new QuantConnect.Algorithm.Framework.Execution.ImmediateExecutionModel());
@@ -178,6 +198,53 @@ namespace QuantConnect.Algorithm.CSharp
         {
             var val = GetParameter(key);
             return string.IsNullOrEmpty(val) ? defaultValue : val;
+        }
+
+        private decimal GetDecimalParameter(string name, decimal defaultValue)
+        {
+            var value = GetParameter(name);
+            if (string.IsNullOrWhiteSpace(value)) return defaultValue;
+            return decimal.TryParse(value, NumberStyles.Any,
+                CultureInfo.InvariantCulture, out var parsed) ? parsed : defaultValue;
+        }
+
+        private int GetIntParameter(string name, int defaultValue)
+        {
+            var value = GetParameter(name);
+            if (string.IsNullOrWhiteSpace(value)) return defaultValue;
+            return int.TryParse(value, NumberStyles.Any,
+                CultureInfo.InvariantCulture, out var parsed) ? parsed : defaultValue;
+        }
+
+        /// <summary>IOptimizableStrategy: 与 manifest.parameter_space 一致 (manifest_lint 校验).</summary>
+        public IEnumerable<string> GetTunableParameterNames() => new[]
+        {
+            "iv-rv-z-score-threshold", "ivts-threshold", "skew-percentile-high", "skew-percentile-low",
+            "var-budget", "max-drawdown", "max-position-weight", "var-lookback-days"
+        };
+
+        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.</summary>
+        public string SerializeRlState(QCAlgorithm algo)
+        {
+            var tpv = Portfolio.TotalPortfolioValue;
+            var peak = tpv; // 简化: 实际应跟踪历史 peak
+            var drawdown = peak > 0 ? Math.Max(0m, (peak - tpv) / peak) : 0m;
+            var positions = Securities.Values
+                .Where(s => s.Holdings.Quantity != 0)
+                .Select(s => new {
+                    sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
+                    pnl_1d = 0m,
+                    days_held = 0
+                }).ToList();
+            var state = new {
+                ts = algo.Time.ToString("o"),
+                strategy = "OptionVolArb5Layer",
+                tpv, cash_pct = Portfolio.Cash / tpv,
+                positions,
+                var_1d99 = 0m, var_regime = 0m, // 由策略实际 VaRFactor 填充, 首期可置 0
+                drawdown, days_to_peak = 0, n_open_positions = positions.Count
+            };
+            return JsonConvert.SerializeObject(state);
         }
 
         /// <summary>
