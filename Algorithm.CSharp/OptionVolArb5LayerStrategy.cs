@@ -18,11 +18,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using QuantConnect.Algorithm;
 using QuantConnect.Data; // for Globals
+using QuantConnect.Data.Market;
 using QuantConnect.Data.UniverseSelection; // for UniverseSettings
+using QuantConnect.Factors.Risk;
 using QuantConnect.Algorithm.CSharp.Common;
 using QuantConnect.Algorithm.CSharp.Models.Alpha;
 using QuantConnect.Algorithm.CSharp.Models.Execution;
@@ -47,6 +50,14 @@ namespace QuantConnect.Algorithm.CSharp
     {
         private OptionVolArbUniverseSelectionModel _universeModel;
         private List<string> _candidateTickers;
+
+        // RL state tracking (auto-update2.md 第一步a: 真实 var_1d99/var_regime/drawdown/pnl_1d)
+        private VaRFactor _varFactor;
+        private decimal _peakTpv;
+        private DateTime _peakDate;
+        private readonly Dictionary<Symbol, decimal> _prevClose = new();
+        private readonly Dictionary<Symbol, int> _entryDay = new();
+        private int _dayIndex = 0;
 
         public override void Initialize()
         {
@@ -176,6 +187,17 @@ namespace QuantConnect.Algorithm.CSharp
             // Security initializer: 为 SSE/SZSE 标的统一设置 A股 ETF 费率/结算/保证金
             SetSecurityInitializer(new AShareETFSecurityInitializer());
 
+            // RL state: VaRFactor for SerializeRlState (auto-update2.md 第一步a)
+            // 用短窗口 (60d history / 30d minUsable) 与风控 VaR (252d) 解耦,
+            // 确保短回测窗口下 RL state 也能拿到真实 var_1d99 (非 0).
+            _varFactor = new VaRFactor(
+                historyDays: 60,
+                minUsable: 30,
+                scenario: VaRScenario.OneDay99,
+                method: VaRMethod.BootstrapHistorical);
+            _peakTpv = Portfolio.TotalPortfolioValue;
+            _peakDate = StartDate;
+
             SetWarmUp(60, Resolution.Daily);
 
             Log($"[OptionVolArb-5Layer] 五层架构初始化完成:");
@@ -216,6 +238,45 @@ namespace QuantConnect.Algorithm.CSharp
                 CultureInfo.InvariantCulture, out var parsed) ? parsed : defaultValue;
         }
 
+        public override void OnData(Slice slice)
+        {
+            if (IsWarmingUp) return;
+            _dayIndex++;
+            var tpv = Portfolio.TotalPortfolioValue;
+            if (tpv > _peakTpv) { _peakTpv = tpv; _peakDate = Time; }
+            // auto-update2.md 第一步b: 写真实 state_trace.jsonl 供 Layer C 训练
+            // 必须在更新 _prevClose 之前写, 这样 SerializeRlState 用的是昨收 → 真实 pnl_1d
+            WriteRlStateTraceIfNeeded(slice.Time);
+            foreach (var sym in _universeModel.SelectedSymbols)
+            {
+                if (slice.Bars.ContainsKey(sym))
+                {
+                    _prevClose[sym] = slice.Bars[sym].Close;
+                }
+            }
+        }
+
+        // auto-update2.md 第一步b: RL_TRACE_PATH env 触发逐 bar 状态写盘
+        private string _rlTracePath;
+        private void WriteRlStateTraceIfNeeded(DateTime barTime)
+        {
+            if (_rlTracePath == null)
+            {
+                _rlTracePath = Environment.GetEnvironmentVariable("RL_TRACE_PATH") ?? "";
+            }
+            if (string.IsNullOrEmpty(_rlTracePath)) return;
+            try
+            {
+                var stateJson = SerializeRlState(this);
+                var line = stateJson + "\n";
+                File.AppendAllText(_rlTracePath, line);
+            }
+            catch (Exception ex)
+            {
+                Log($"[OptionVolArb-5Layer] RL_TRACE_PATH 写入失败: {ex.Message}");
+            }
+        }
+
         /// <summary>IOptimizableStrategy: 与 manifest.parameter_space 一致 (manifest_lint 校验).</summary>
         public IEnumerable<string> GetTunableParameterNames() => new[]
         {
@@ -223,26 +284,62 @@ namespace QuantConnect.Algorithm.CSharp
             "var-budget", "max-drawdown", "max-position-weight", "var-lookback-days"
         };
 
-        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.</summary>
+        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.
+        /// auto-update2.md 第一步a: 真实 var_1d99/var_regime/drawdown/pnl_1d.
+        /// </summary>
         public string SerializeRlState(QCAlgorithm algo)
         {
             var tpv = Portfolio.TotalPortfolioValue;
-            var peak = tpv; // 简化: 实际应跟踪历史 peak
-            var drawdown = peak > 0 ? Math.Max(0m, (peak - tpv) / peak) : 0m;
+            var drawdown = _peakTpv > 0 ? Math.Max(0m, (_peakTpv - tpv) / _peakTpv) : 0m;
+            var daysToPeak = Math.Max(0, (algo.Time.Date - _peakDate.Date).Days);
+
+            // 真实 VaR: 用组合内持仓最重的标的的 VaR 近似 (单标的 VaR 的代理)
+            decimal var1d99 = 0m, varRegime = 0m;
+            try
+            {
+                var holdSym = Securities.Values
+                    .Where(s => s.Holdings.Quantity != 0)
+                    .OrderByDescending(s => Math.Abs(s.Holdings.Quantity * s.Price))
+                    .Select(s => s.Symbol)
+                    .FirstOrDefault();
+                if (holdSym != null)
+                {
+                    var hist = History<TradeBar>(holdSym, GetIntParameter("var-lookback-days", 252), Resolution.Daily).ToList();
+                    var fr = _varFactor.Compute(holdSym, algo.Time, hist);
+                    if (fr.Quality == QuantConnect.Factors.Core.FactorDataQuality.Valid)
+                    {
+                        var1d99 = fr.RawValue;        // ValueAtRisk (decimal fraction)
+                        varRegime = fr.Value;         // RegimePercentile [0,1]
+                    }
+                    else
+                    {
+                        Log($"[OptionVolArb-5Layer] VaR quality={fr.Quality} for {holdSym.Value} at {algo.Time:yyyy-MM-dd}, hist.Count={hist.Count}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[OptionVolArb-5Layer] SerializeRlState VaR 计算失败: {ex.Message}");
+            }
+
             var positions = Securities.Values
                 .Where(s => s.Holdings.Quantity != 0)
-                .Select(s => new {
-                    sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
-                    pnl_1d = 0m,
-                    days_held = 0
+                .Select(s => {
+                    var pnl1d = (_prevClose.TryGetValue(s.Symbol, out var pc) && pc > 0)
+                        ? (s.Price - pc) / pc : 0m;
+                    var daysHeld = _entryDay.TryGetValue(s.Symbol, out var ed) ? Math.Max(0, _dayIndex - ed) : 0;
+                    return new {
+                        sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
+                        pnl_1d = pnl1d, days_held = daysHeld
+                    };
                 }).ToList();
             var state = new {
                 ts = algo.Time.ToString("o"),
                 strategy = "OptionVolArb5Layer",
                 tpv, cash_pct = Portfolio.Cash / tpv,
                 positions,
-                var_1d99 = 0m, var_regime = 0m, // 由策略实际 VaRFactor 填充, 首期可置 0
-                drawdown, days_to_peak = 0, n_open_positions = positions.Count
+                var_1d99 = var1d99, var_regime = varRegime,
+                drawdown, days_to_peak = daysToPeak, n_open_positions = positions.Count
             };
             return JsonConvert.SerializeObject(state);
         }
