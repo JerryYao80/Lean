@@ -1,6 +1,7 @@
 """Layer A main driver. Spec §5.1. 策略无关, 全从 manifest 读."""
 import json, pathlib, sys, argparse
 import optuna
+import yaml
 from manifest_loader import load_manifest
 from lean_runner import run_backtest
 from reward import compute_reward
