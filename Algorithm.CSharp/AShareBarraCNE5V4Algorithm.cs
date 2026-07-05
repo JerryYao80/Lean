@@ -31,6 +31,8 @@ using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Securities;
 using QuantConnect.Securities.Equity;
+using Newtonsoft.Json;
+using QuantConnect.Algorithm.CSharp.Common;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -40,7 +42,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// Uses the same 15 tushare factor fields as V3.2, but fully follows LEAN's framework.
     /// V4 is completely independent from V2/V2.1/V3/V3.2.
     /// </summary>
-    public class AShareBarraCNE5V4Algorithm : QCAlgorithm
+    public class AShareBarraCNE5V4Algorithm : QCAlgorithm, IOptimizableStrategy, IRlStateExportable
     {
         private readonly Dictionary<Symbol, Symbol> _factorToUnderlying = new();
         private AShareBarraCNE5V4AlphaModel _alphaModel;
@@ -523,5 +525,29 @@ namespace QuantConnect.Algorithm.CSharp
         }
 
         #endregion
+
+        /// <summary>IOptimizableStrategy: 与 manifest.parameter_space 一致 (manifest_lint 校验).</summary>
+        public IEnumerable<string> GetTunableParameterNames() => new[]
+        {
+            "top-n", "target-portfolio-exposure", "max-single-weight", "trailing-stop-pct"
+        };
+
+        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.
+        /// 简化版 (mature strategy, 零侵入): pnl_1d/days_held/drawdown 首期置 0/基础值.</summary>
+        public string SerializeRlState(QCAlgorithm algo)
+        {
+            var tpv = Portfolio.TotalPortfolioValue;
+            var positions = Securities.Values
+                .Where(s => s.Holdings.Quantity != 0)
+                .Select(s => new {
+                    sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
+                    pnl_1d = 0m, days_held = 0
+                }).ToList();
+            return JsonConvert.SerializeObject(new {
+                ts = algo.Time.ToString("o"), strategy = "AShareBarraCNE5V4Algorithm",
+                tpv, cash_pct = Portfolio.Cash / tpv, positions,
+                drawdown = 0m, n_open_positions = positions.Count
+            });
+        }
     }
 }
