@@ -37,19 +37,20 @@ class RlRiskEnv(gym.Env):
             "t": self._t,
         }
 
-    def reset(self, **kwargs):
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
         self._t = 0
-        return self._state_dict()
+        return self._obs(), {}
 
     def step(self, action):
-        alpha = action["alpha"] if isinstance(action, dict) else float(action[0])
+        alpha = float(action[0]) if isinstance(action, (np.ndarray, list)) else float(action)
         alpha = max(0.0, min(1.0, alpha))
-        # Transition to next state; reward is shaped from the state we land in.
         self._t += 1
-        done = self._t >= len(self._trace)
-        if done:
+        terminated = self._t >= len(self._trace)
+        truncated = False
+        if terminated:
             r = self._episode_dsr * 10.0
-            return {}, r, done, {}
+            return np.zeros(8, dtype=np.float32), r, terminated, truncated, {}
         s = self._trace[self._t]
         scaled_pnl = s.get("pnl", 0) * alpha
         r = 0.0
@@ -62,7 +63,7 @@ class RlRiskEnv(gym.Env):
                 r -= term["weight"] * max(0, s["drawdown"] - self._max_dd)
             elif term["term"] == "over_clearance_penalty":
                 if alpha < 0.1: r -= term["weight"]
-        return self._state_dict(), r, done, {}
+        return self._obs(), r, terminated, truncated, {}
 
 def eval_term(term_name, alpha, scaled_pnl, var_excess, dd_excess):
     """注册表, 供 manifest 扩展自定义 shaping 项."""
