@@ -1,4 +1,5 @@
 strategy_name: TestStrategy
+rl_state_completeness: full
 lean_config: Launcher/config/config-test.json
 risk_model_target: CompositeRiskModel
 parameter_space:

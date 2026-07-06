@@ -58,6 +58,7 @@ class StrategyManifest:
     cpcv: dict = None
     walk_forward: dict = None
     ppo_training: dict = None
+    rl_state_completeness: str = "unaudited"
     raw: dict = None
 
 
@@ -88,5 +89,7 @@ def load_manifest(path) -> StrategyManifest:
         parameter_space=ps, state_schema=ss, reward_config=rc,
         universe=Universe(u_raw.get("symbols", []), u_raw.get("timezone", "Asia/Shanghai")),
         cpcv=raw.get("cpcv"), walk_forward=raw.get("walk_forward"),
-        ppo_training=raw.get("ppo_training"), raw=raw,
+        ppo_training=raw.get("ppo_training"),
+        rl_state_completeness=raw.get("rl_state_completeness", "unaudited"),
+        raw=raw,
     )

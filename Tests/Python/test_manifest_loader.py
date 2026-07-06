@@ -24,3 +24,7 @@ def test_missing_strategy_name_raises():
             load_manifest(bad)
     finally:
         bad.unlink()
+
+def test_rl_state_completeness_parsed():
+    m = load_manifest(FIXTURES / "manifest_sample.yaml")
+    assert m.rl_state_completeness == "full"
