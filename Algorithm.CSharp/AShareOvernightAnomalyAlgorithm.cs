@@ -10,6 +10,7 @@ using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Securities;
+using QuantConnect.Algorithm.CSharp.Common;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -29,7 +30,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// intraday). However, gold ETFs (518880) and money market ETFs show the
     /// classic positive overnight premium. This strategy exploits that anomaly.
     /// </summary>
-    public class AShareOvernightAnomalyAlgorithm : QCAlgorithm
+    public class AShareOvernightAnomalyAlgorithm : QCAlgorithm, IOptimizableStrategy, IRlStateExportable
     {
         private const int LotSize = 100;
 
@@ -499,6 +500,31 @@ namespace QuantConnect.Algorithm.CSharp
                 Confidence = confidence,
                 Urgency = urgency,
             };
+
+        /// <summary>IOptimizableStrategy: 与 manifest.parameter_space 一致 (manifest_lint 校验).</summary>
+        public IEnumerable<string> GetTunableParameterNames() => new[]
+        {
+            "lookback-days", "top-n", "target-vol", "vol-lookback-days",
+            "position-size", "rebalance-frequency-days", "min-overnight-momentum"
+        };
+
+        /// <summary>IRlStateExportable: 序列化 RL 状态 JSON, 字段须与 manifest.state_schema 一致.
+        /// 简化版 (mature strategy, 零侵入): pnl_1d/days_held/drawdown 首期置 0/基础值.</summary>
+        public string SerializeRlState(QCAlgorithm algo)
+        {
+            var tpv = Portfolio.TotalPortfolioValue;
+            var positions = Securities.Values
+                .Where(s => s.Holdings.Quantity != 0)
+                .Select(s => new {
+                    sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv,
+                    pnl_1d = 0m, days_held = 0
+                }).ToList();
+            return JsonConvert.SerializeObject(new {
+                ts = algo.Time.ToString("o"), strategy = "AShareOvernightAnomalyAlgorithm",
+                tpv, cash_pct = Portfolio.Cash / tpv, positions,
+                drawdown = 0m, n_open_positions = positions.Count
+            });
+        }
 
         private decimal GetDecimalParameter(string name, decimal def)
         {
