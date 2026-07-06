@@ -29,16 +29,24 @@
 
 **前置检查（self-updatea.md 警告）**：CQL/IQL 能学到东西，前提是数据里对"同一类状态"存在不同动作的真实结果。现有 trace 大概率是 composite 策略（alpha 恒为 1）生成，动作维度无变化。若方差≈0，离线 RL 静默失效（CQL 保守惩罚让 policy 收敛到 alpha≈1，且 FQE 评估可能还显示"没变坏"）。
 
+**多样化方式（self-update25.md 第1点修正）**：~~5-10 组固定 alpha 全程跑~~ → **每个 rebalance 点独立随机采样 alpha**。固定 alpha 全程跑的问题：5 条轨迹早期分叉后，同一市场状态在 5 条轨迹里对应"从头到尾同一 alpha"的结果，覆盖的是"5 种恒定策略宏观表现对比"，而非"给定具体风险状态不同 alpha 会怎样"。轨迹后期状态因路径依赖分叉过远，覆盖稀疏，CQL 保守惩罚仍会让 policy 在后期状态"不敢动"——与"静默收敛到 alpha≈1"同类失败模式。
+
+**实现**：
+- alpha 采样分布：Beta(α=8, β=2)（偏向 1 附近但有噪声，均值≈0.8，覆盖 [0,1]），或均匀 U(0.3, 1.0)。通过 `config.yaml` 的 `alpha_perturbation.distribution: beta|uniform` 切换
+- **逐 bar 采样**：`rl-fallback-alpha` 从常数改为逐 bar 采样的序列。策略侧 `RlRiskModel` 在 IPC 超时/kill 时 fallback 到逐 bar alpha（需新增"按 trace 序列回放 alpha"模式，而非单值）
+- 跑 1-2 次随机注入轨迹（而非 5-10 次恒定），产生的 `(state, action)` 覆盖比 5 条恒定轨迹丰富得多（D4RL 标准做法：行为策略 = 基础策略 + 随机扰动）
+- 实现成本与"固定 alpha 跑 5 次"基本一样，但数据质量好很多
+
 **新增文件**：
 
 | 文件 | 职责 |
 |---|---|
 | `Scripts/auto_optimize/alpha_variance_check.py` | 扫描现有 trace，统计 alpha 分布方差。方差≈0 → 触发多样化重跑 |
-| `Scripts/auto_optimize/alpha_perturbation_runner.py` | 跑 5-10 组固定 alpha 扰动（0.3/0.5/0.7/0.9/1.0）的 LEAN 回测，通过 `risk-mode=rl` + `rl-fallback-alpha={α}` 注入（fallback 即固定 α）。每组产出一条 trace，合并成 `state_trace_diverse.jsonl` |
+| `Scripts/auto_optimize/alpha_perturbation_runner.py` | 逐 bar 随机采样 alpha（Beta/均匀）跑 1-2 次随机注入 LEAN 回测。alpha 序列写入 trace，合并成 `state_trace_diverse.jsonl` |
 
 **实现要点**：
 - **不改 gym_env**，只是多跑几次已有 LEAN 回测，成本很低
-- 每组 alpha 跑同一回测窗口，trace 文件按 alpha 命名（如 `state_trace_a0.3.jsonl`），合并时标注 `alpha` 字段
+- 每次 alpha 序列预生成（固定 seed 可复现），写入 trace 的 `alpha` 字段
 - 输出：`Results/auto_optimize/{strategy}/state_trace_diverse.jsonl` + alpha 方差报告
 
 ### 1.3 A2：d3rlpy 离线 RL + FQE 评估
@@ -76,13 +84,14 @@
 **问题**：BarraCNE5V4/OvernightAnomaly 的 `pnl_1d`/`days_held`/`drawdown` 置 0，policy 学到"系统性错误假设下的确定性映射"，对置 0 状态给出**自信且错误**的动作。这是二元判断（该阶段不能用），不是权重问题（不能用降权处理）。
 
 **实现**：
-- **manifest 加字段**：`rl_state_completeness: full | partial`
+- **manifest 加字段**：`rl_state_completeness: full | partial | unaudited`（self-update25.md 第3点：三态而非二元）
   - `full`：所有 state_schema 字段填真实值
   - `partial`：有字段置 0
-- **manifest_lint.py（门 0）自动拦截**：`partial` 策略不允许进入灰度部署流程
+  - `unaudited`：尚未审计（如 var_strategy 当前状态），与 `partial` 一样被门 0 拦截，直到显式审计后改 `full`
+- **manifest_lint.py（门 0）自动拦截**：`partial` 和 `unaudited` 策略不允许进入灰度部署流程
 - **现有 4 策略标记**：
   - option_vol_arb_5layer: `full`（但需先审计，见 §2.3）
-  - var_strategy: 待审计（SerializeRlState 较简化）
+  - var_strategy: `unaudited`（SerializeRlState 较简化，待审计）
   - barra_cne5_v4: `partial`
   - overnight_anomaly: `partial`
 
@@ -188,9 +197,10 @@ self-update-youhua.md 第 2/3/4 点 + SOTA 优化表未在 §1/§2 覆盖的项�
 |---|---|
 | `Tests/Python/test_alpha_variance_check.py` | alpha 方差诊断正确性 |
 | `Tests/Python/test_trace_to_mdp_dataset.py` | trace→MDP 转换正确性（四元组完整性） |
-| `Tests/Python/test_offline_rl_trainer.py` | d3rlpy 训练 smoke（少量数据，验证不崩溃） |
-| `Tests/Python/test_ope_evaluator.py` | FQE 评估输出合理值 |
-| `Tests/Python/test_manifest_lint_completeness.py` | `partial` 策略被门 0 拦截 |
+| `Tests/Python/test_offline_rl_trainer_smoke.py` | d3rlpy 训练 smoke（少量数据，验证不崩溃） |
+| `Tests/Python/test_offline_rl_synthetic_sanity.py` | **合成 sanity check（self-update25.md 第4点）**：手工构造小 MDP（已知最优 alpha），验证 policy 收敛到正确方向 |
+| `Tests/Python/test_ope_evaluator.py` | FQE 评估输出合理值 + FQE 自检（5 个恒定-alpha 行为策略估计值 vs 真实回报校准） |
+| `Tests/Python/test_manifest_lint_completeness.py` | `partial`/`unaudited` 策略被门 0 拦截，`full` 通过 |
 
 ---
 
@@ -205,7 +215,10 @@ self-update-youhua.md 第 2/3/4 点 + SOTA 优化表未在 §1/§2 覆盖的项�
 ### 5.2 A2 验证（d3rlpy + FQE）
 
 - CQL/IQL 训练不崩溃，policy.pt 产出
-- FQE 估计值 > 现有 PPO policy 的 FQE 估计值（证明离线 RL 学到东西）
+- **合成 sanity check（self-update25.md 第4点）**：手工构造几步小 MDP，已知最优 alpha 策略（如"drawdown 超阈值时 alpha 应更低"），验证训出的 policy 在已知答案的合成环境里收敛到正确方向（而非仅"不崩溃"，能抓出 reward 符号搞反/action 归一化错误等管线 bug）
+- **FQE 自检（self-update25.md 第2点）**：在 5 个已知恒定-alpha 行为策略上跑 FQE，对比估计值与真实回报是否大致吻合（校准 FQE 自身可信度）
+- **FQE 对比口径**：新 CQL policy 与旧 PPO policy 在**同一份留存数据**上做 FQE（非各自训练 trace）
+- **FQE 下限基准**：加 random alpha 和"恒定 alpha=1（无风控）"两个基准的 FQE 值，作为下限参照（不只是跟旧 PPO 比，确认是"真的学到风控行为"而非"只比烂基准好一点"）
 - ONNX 导出一致性验证通过（atol=1e-5）
 
 ### 5.3 第5点验证（自动门禁）
@@ -225,18 +238,22 @@ self-update-youhua.md 第 2/3/4 点 + SOTA 优化表未在 §1/§2 覆盖的项�
 | 风险 | 缓解 |
 |---|---|
 | d3rlpy 未安装 | `pip install d3rlpy`，CI 环境装包 |
-| CQL 收敛到 alpha≈1（数据不足） | A1 多样化重跑确保 alpha 方差；FQE 对比验证 |
+| **d3rlpy 单点依赖（self-update25.md 次要建议）** | 记录备选：CORL 库（同类实现 CQL/IQL/TD3+BC）。本期不切换，但风险表标注，避免锁死 |
+| CQL 收敛到 alpha≈1（数据不足） | A1 逐 bar 随机采样确保 alpha 方差；FQE 对比验证 + 合成 sanity check |
 | OptionVolArb5Layer 字段口径不一致 | §2.3 审计先行，修正后再作为模板 |
 | 字段补全后旧 policy 失效 | self-update23.md 已明确：用修复后 pipeline 重训，不增量修补 |
 | B 阶段轻量模拟器近似误差 | B 阶段切换前抽样对比近似值 vs 真实 LEAN 重跑值 |
+| **资源竞争（self-update25.md 次要建议）** | alpha_perturbation_runner 与 bayesian_optimizer 共享 LEAN 子进程/config 目录时，确认并行无 config 文件冲突或资源抢占（尤其 CI 内并行）；必要时加文件锁或独立 config 副本 |
 
 ---
 
 ## 7. 实现顺序
 
-1. **Phase A1**：alpha_variance_check + alpha_perturbation_runner + 测试
-2. **Phase A2**：trace_to_mdp_dataset + offline_rl_trainer + ope_evaluator + 测试
-3. **Phase 第5点 A**：manifest 加 `rl_state_completeness` + manifest_lint 拦截 + 4 策略标记
+**Scope 限定（self-update25.md 第5点）**：A1/A2 首期只在 `option_vol_arb_5layer`（唯一 `full`）上跑通验证。`var_strategy` 审计完成后再决定是否纳入。`barra_cne5_v4`/`overnight_anomaly` 等 §2.2 字段补全后再单独跑（避免在已知要重训的策略上浪费 LEAN 回测成本）。
+
+1. **Phase A1**：alpha_variance_check + alpha_perturbation_runner（仅 option_vol_arb_5layer）+ 测试
+2. **Phase A2**：trace_to_mdp_dataset + offline_rl_trainer + ope_evaluator + 合成 sanity check + FQE 自检 + 测试
+3. **Phase 第5点 A**：manifest 加 `rl_state_completeness`（三态）+ manifest_lint 拦截 `partial`/`unaudited` + 4 策略标记
 4. **Phase 第5点 C 准备**：option_vol_arb_field_audit 审计（与 A 并行）
 5. **Phase 第5点 C 执行**：补 BarraCNE5V4/OvernightAnomaly 真实字段，用新 pipeline 重训（依赖 A2 完成）
 
