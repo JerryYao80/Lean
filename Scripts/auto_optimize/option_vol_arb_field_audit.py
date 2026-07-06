@@ -15,10 +15,12 @@ class FieldAuditReport:
 
 def _parse_percent(val) -> float:
     if val is None: return None
-    s = str(val).replace("%", "").replace(",", "").strip()
+    s = str(val).replace(",", "").strip()
+    had_pct = "%" in s
+    s = s.replace("%", "")
     try:
         f = float(s)
-        return f / 100.0 if f > 1 else f
+        return f / 100.0 if had_pct else (f / 100.0 if f > 1 else f)
     except ValueError:
         return None
 
