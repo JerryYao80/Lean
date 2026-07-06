@@ -2750,7 +2750,12 @@ namespace QuantConnect.Algorithm.CSharp
                 return;
             }
 
-            // Map family exposures to factor exposures for Monte Carlo
+            // Map family exposures to factor exposures for Monte Carlo.
+            // NOTE: StrategyMonteCarloFactorExposure 的 10 个槽位（Beta..NonLinearSize）是
+            // 通用回归器槽，名字继承自 Barra MC schema，并非语义声明。MC 最小二乘回归对 10 列
+            // 对称处理（见 StrategyMonteCarloStatistics.FactorPerturbationReturns），且
+            // ToSummaryStatistics 只导出聚合统计（LossProbability/P95Drawdown），不导出单因子
+            // beta，故槽位名不影响数学。这里从 12 个家族里选 10 个填入。详见 docs/cmf-audit2.md。
             var factorExposures = _familyExposureRows
                 .Select(row => new StrategyMonteCarloFactorExposure
                 {

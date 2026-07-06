@@ -54,6 +54,10 @@ FRIENDLY_NAMES = {
 }
 
 TRADING_DAYS_PER_YEAR = 242
+# IV 的 T 年化用自然日/365（与 C# OptionGreekIndicatorsHelper.TimeTillExpiry 对齐，
+# 与 CBOE VIX 口径一致）。详见 docs/iv-audit-findings.md 第 ④⑤ 条。
+# RV 模块（export_vol_regime_feature_data.py）仍用交易日年化，不在此处使用。
+CALENDAR_DAYS_PER_YEAR = 365
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +474,7 @@ def compute_daily_iv(
 
     # Compute ATM IV from near-term options
     near_options = merged[merged["dte"] == near_dte].copy()
-    T_near = near_dte / TRADING_DAYS_PER_YEAR
+    T_near = near_dte / CALENDAR_DAYS_PER_YEAR
     atm_iv = compute_atm_iv(near_options, underlying_price, T_near, risk_free_rate)
 
     # Compute 25-delta IVs for skew
@@ -504,7 +508,7 @@ def compute_daily_iv(
     vix_result = None
     if next_dte is not None:
         next_options = merged[merged["dte"] == next_dte].copy()
-        T_next = next_dte / TRADING_DAYS_PER_YEAR
+        T_next = next_dte / CALENDAR_DAYS_PER_YEAR
 
         # Near-term
         F_near = find_forward_price(near_options, risk_free_rate, T_near)
@@ -520,7 +524,7 @@ def compute_daily_iv(
 
         # Interpolate to 30 days
         if var_near is not None and var_next is not None and T_near > 0 and T_next > 0:
-            t30 = 30.0 / TRADING_DAYS_PER_YEAR
+            t30 = 30.0 / CALENDAR_DAYS_PER_YEAR
             w1 = (T_next - t30) / (T_next - T_near)
             w2 = 1.0 - w1
             sigma_30_sq = w1 * var_near * (T_near / t30) + w2 * var_next * (T_next / t30)
@@ -688,7 +692,7 @@ def compute_iv_surface_skew(
 
     for dte in term_dtes:
         term_options = merged[merged["dte"] == dte].copy()
-        T = dte / TRADING_DAYS_PER_YEAR
+        T = dte / CALENDAR_DAYS_PER_YEAR
 
         # Compute IV for each strike
         iv_by_strike: dict[float, float] = {}

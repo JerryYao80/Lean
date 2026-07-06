@@ -83,14 +83,14 @@ class TestImpliedVol(unittest.TestCase):
 
     def test_round_trip_call(self):
         """Compute call price at known IV, then recover IV."""
-        S, K, T, r, true_iv = 2.7, 2.7, 30 / 242, 0.02, 0.25
+        S, K, T, r, true_iv = 2.7, 2.7, 30 / 365, 0.02, 0.25
         price = bs_call_price(S, K, T, r, true_iv)
         iv = implied_vol_newton(price, S, K, T, r, "C")
         self.assertIsNotNone(iv)
         self.assertAlmostEqual(iv, true_iv, places=3)
 
     def test_round_trip_put(self):
-        S, K, T, r, true_iv = 2.7, 2.8, 30 / 242, 0.02, 0.30
+        S, K, T, r, true_iv = 2.7, 2.8, 30 / 365, 0.02, 0.30
         price = bs_put_price(S, K, T, r, true_iv)
         iv = implied_vol_newton(price, S, K, T, r, "P")
         self.assertIsNotNone(iv)
@@ -193,7 +193,7 @@ class TestComputeAtmIv(unittest.TestCase):
         import pandas as pd
 
         S = 2.7
-        T = 30 / 242
+        T = 30 / 365
         r = 0.02
         true_iv = 0.20
 
@@ -215,7 +215,7 @@ class TestFindForwardPrice(unittest.TestCase):
     def test_synthetic(self):
         import pandas as pd
 
-        S, T, r, true_iv = 2.7, 30 / 242, 0.02, 0.20
+        S, T, r, true_iv = 2.7, 30 / 365, 0.02, 0.20
         K = 2.7
         call_price = bs_call_price(S, K, T, r, true_iv)
         put_price = bs_put_price(S, K, T, r, true_iv)
@@ -238,7 +238,7 @@ class TestComputeVixForTerm(unittest.TestCase):
         import pandas as pd
 
         S = 2.7
-        T = 30 / 242
+        T = 30 / 365
         r = 0.02
         true_iv = 0.25
 

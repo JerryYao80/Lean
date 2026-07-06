@@ -95,10 +95,13 @@ namespace QuantConnect.Factors.Risk
             if (rets.Count < _minUsable - 1) return Missing(symbol, time);
             if (rets.Any(r => double.IsNaN(r) || double.IsInfinity(r))) return Missing(symbol, time);
 
-            // Pull dependency factor values (regime blending / quality, NOT VaR math)
+            // Pull dependency factor values (regime blending / quality, NOT VaR math).
+            // chip_concentration 参与 Outlier 判定：高集中度 + 极端 regime + IV>HV → 标记 Outlier。
+            // 之前声明了依赖却从未 Compute()（cmf-audit2.md 第1点），现补上。
             var hvR = _hv?.Compute(symbol, time, history) ?? default;
             var ivR = _ivPct?.Compute(symbol, time, null) ?? default;
             var spR = _ivHvSpread?.Compute(symbol, time, history) ?? default;
+            var chipR = _chipConcentration?.Compute(symbol, time, history) ?? default;
 
             var config = new VarConfig(
                 lookbackDays: _historyDays, minHistoryDays: _minUsable,
@@ -125,6 +128,16 @@ namespace QuantConnect.Factors.Risk
                 q = FactorDataQuality.Outlier;
             else if (hvR.Quality != FactorDataQuality.Valid && ivR.Quality != FactorDataQuality.Valid)
                 q = FactorDataQuality.Stale;
+
+            // Concentration overlay：高筹码集中度（>=0.6）时叠加 Outlier 标记。
+            // 筹码集中度高 + VaR 极端 = 隐含"筹码锁定下流动性差，尾部风险被低估"。
+            // 见 docs/cmf-audit2.md 第1点（VaRFactor 死线修复）。
+            if (q == FactorDataQuality.Valid
+                && chipR.Quality == FactorDataQuality.Valid
+                && chipR.Value >= 0.6m)
+            {
+                q = FactorDataQuality.Outlier;
+            }
 
             return new FactorResult
             {

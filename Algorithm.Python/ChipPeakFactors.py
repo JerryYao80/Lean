@@ -43,6 +43,12 @@ class ChipPeakFactors:
         'single_concentration': 0.6,   # 单峰集中度阈值（exp(-spread)）
         'low_profit_max': 0.2,         # 低位获利盘上限
         'high_profit_min': 0.8,        # 高位（派发区）获利盘下限
+        # 横截面相对阈值（可选，cmf-audit2.md 第4点）：调用方传入 conc_mean/conc_std 后启用
+        'conc_zscore_threshold': None,  # None = 用绝对阈值 single_concentration
+        'conc_mean': None,
+        'conc_std': None,
+        # 偏度调整权重（cmf-audit2.md 第5点）
+        'skew_weight': 0.2,
         # 多因子融合权重（增强模式）
         'mf_weight': 0.3,              # 资金流信号权重
         'value_weight': 0.2,           # 估值因子权重
@@ -53,6 +59,30 @@ class ChipPeakFactors:
         'value_pe_high': 60.0,
         'value_pb_high': 6.0,
     }
+
+    @staticmethod
+    def cost_skewness(chip_row) -> float:
+        """筹码成本偏度 = (cost_85-cost_50) - (cost_50-cost_15)，归一化到 weight_avg。
+
+        利用 cyq_perf 中原本闲置的 cost_15pct / cost_85pct（cmf-audit2.md 第5点）。
+        - skew > 0：筹码往上方偏（85-50 段宽于 50-15 段）→ 高位筹码堆积，派发压力更早显现。
+        - skew < 0：筹码往下方偏 → 低位支撑更强。
+        - skew ≈ 0：成本分布关于中位成本对称。
+
+        归一化：除以 weight_avg_adj，使偏度无量纲且对 adj_factor 不敏感（分子分母同尺度）。
+        数据缺失（任一分位缺失或 weight_avg<=0）→ NaN。
+
+        注意：这是 5 档分位下的离散偏度代理，非完整分布的真实三阶矩；
+        双峰分布下可能失真（见 docs/cmf-audit2.md 本质局限）。
+        """
+        c85 = _f(chip_row, 'cost_85pct_adj')
+        c50 = _f(chip_row, 'cost_50pct_adj')
+        c15 = _f(chip_row, 'cost_15pct_adj')
+        wavg = _f(chip_row, 'weight_avg_adj')
+        if math.isnan(c85) or math.isnan(c50) or math.isnan(c15) or wavg <= 0:
+            return float('nan')
+        skew = (c85 - c50) - (c50 - c15)
+        return float(skew / wavg)
 
     @staticmethod
     def concentration(chip_row) -> float:
@@ -95,9 +125,19 @@ class ChipPeakFactors:
         """平均成本偏离度 = (现价 - 均成本)/均成本.
 
         current_price 与 weight_avg_adj 须在同一复权口径（后复权）。
+
+        复权口径自动校验（cmf-audit2.md 第6点）：
+        若 current_price 与 weight_avg_adj 量级差异超 5x，判定为复权口径不一致
+        （如 current_price 是前复权、weight_avg_adj 是后复权），返回 0.0 而非给出
+        误导性偏离值。阈值 5x 来自 A 股个股后复权/前复权长期累积的典型比例上限。
         """
         avg = ChipPeakFactors.average_cost(chip_row)
         if avg is None or avg == 0 or math.isnan(avg):
+            return 0.0
+        # 复权口径一致性校验：价格与成本应同量级（A 股后复权累积比例通常 < 5x）
+        ratio = current_price / avg if avg > 0 else 0.0
+        if ratio > 5.0 or ratio < 0.2:
+            # 量级严重不匹配 → 疑似复权口径不一致，返回 0（中性，不误导）
             return 0.0
         return float((current_price - avg) / avg)
 
@@ -111,13 +151,34 @@ class ChipPeakFactors:
         - 其余 → DIVERGENT
         双峰检测暂不实现（YAGNI），统一归入 DIVERGENT。
         数据缺失（NaN 集中度）→ DIVERGENT（保守不发信号）。
+
+        阈值校准（cmf-audit2.md 第4点）：
+        single_concentration / low_profit_max / high_profit_min 是绝对阈值，未做样本外
+        walk-forward 校准。conc 是绝对值判断（不像路径B/C做了横截面 z-score），不同波动率
+        regime / 不同板块下同一阈值可能对应不同误判率。
+        - 默认仍是绝对阈值（向后兼容）。
+        - 若 params 含 'conc_zscore_threshold'（横截面 z-score 阈值），则改用
+          concentration 相对全市场分位的位置判定单峰——调用方需自行算横截面均值/标准差
+          并传入 'conc_mean'/'conc_std'。本函数不自行做横截面统计（无全市场上下文）。
         """
         conc = ChipPeakFactors.concentration(chip_row)
         profit = ChipPeakFactors.profit_ratio(chip_row)
         if math.isnan(conc) or math.isnan(profit):
             return PeakPattern.DIVERGENT
 
-        if conc < params['single_concentration']:
+        # 横截面相对阈值（可选）：若调用方传入 conc_mean/conc_std，则用 z-score 判定单峰。
+        # 否则回退到绝对阈值 single_concentration（默认 0.6）。
+        conc_mean = params.get('conc_mean')
+        conc_std = params.get('conc_std')
+        conc_z_threshold = params.get('conc_zscore_threshold')
+        if (conc_mean is not None and conc_std is not None
+                and conc_z_threshold is not None and conc_std > 0):
+            conc_z = (conc - conc_mean) / conc_std
+            is_single_peak = conc_z >= conc_z_threshold
+        else:
+            is_single_peak = conc >= params['single_concentration']
+
+        if not is_single_peak:
             return PeakPattern.DIVERGENT
 
         if profit < params['low_profit_max']:
@@ -255,6 +316,16 @@ class ChipPeakFactors:
 
         # 基础筹码得分
         base_score = conc * (1 - profit) * (1 + max(0.0, dev))
+
+        # 偏度调整（cmf-audit2.md 第5点）：用 cost_15/85pct 构造的方向性细化。
+        # skew < 0（筹码往下偏，支撑强）→ 增益；skew > 0（往上偏，派发压力）→ 打折。
+        # 调整幅度由 skew_weight 控制，默认 0.2（±20% 量级）。
+        skew = ChipPeakFactors.cost_skewness(chip_row)
+        if not math.isnan(skew):
+            skew_weight = params.get('skew_weight', 0.2)
+            # 限幅 [-1, 1] 避免极端值主导
+            skew_clamped = max(-1.0, min(1.0, skew * 10.0))  # skew 量级通常 ~0.1，×10 放到 [-1,1]
+            base_score *= (1.0 - skew_weight * skew_clamped)
 
         # 增强因子（向后兼容：缺失时仍用纯筹码得分）
         mf_weight = params.get('mf_weight', 0.3)

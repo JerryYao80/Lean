@@ -9,6 +9,6 @@ namespace QuantConnect.Factors.Core
 {
     public enum FactorCategory
     {
-        Trend, Value, Volatility, Quality, Sentiment, Liquidity, Chip
+        Trend, Value, Volatility, Quality, Sentiment, Liquidity, Chip, Forward
     }
 }

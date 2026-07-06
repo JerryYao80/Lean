@@ -54,6 +54,22 @@ namespace QuantConnect.Factors.Core
                 Register(new QuantConnect.Factors.Chip.ChipPeakCompositeFactor());
                 Register(new QuantConnect.Factors.Chip.CostDeviationFactor());
 
+                // Forward factors (前瞻性因子, docs/qianzhan.md)
+                // 3 个立足：数据立足(tushare 表) + 计算立足(静态 Compute 方法) + 消费立足(Layer A/B/C)
+                // 3 层管线：Layer A 选股(alpha) / Layer B 风控(预警) / Layer C 执行(仓位调节)
+                Register(new QuantConnect.Factors.Forward.BigOrderNetFlowFactor());
+                Register(new QuantConnect.Factors.Forward.NorthboundMomentumFactor());
+                Register(new QuantConnect.Factors.Forward.AuctionGapFactor());
+                Register(new QuantConnect.Factors.Forward.MomentumAccelerationFactor());
+                Register(new QuantConnect.Factors.Forward.VolumeAnomalyFactor());
+                Register(new QuantConnect.Factors.Forward.EarningsSurpriseFactor());
+                Register(new QuantConnect.Factors.Forward.DisclosureTimingFactor());
+                Register(new QuantConnect.Factors.Forward.InsiderTradeFactor());
+                Register(new QuantConnect.Factors.Forward.PledgeRiskFactor());
+                Register(new QuantConnect.Factors.Forward.M1M2ScissorsFactor());
+                Register(new QuantConnect.Factors.Forward.ThemeHeatFactor());
+                Register(new QuantConnect.Factors.Forward.ConvertPremiumFactor());
+
                 _initialized = true;
             }
         }
