@@ -33,6 +33,9 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
 
         public string Name => "RlRiskModel";
 
+        /// <summary>当期实际应用的 alpha (供策略 SerializeRlState 写 trace). 1-bar 滞后: OnData 写 trace 时读到的是上一 bar ManageRisk 设的 alpha.</summary>
+        public decimal LastAppliedAlpha { get; private set; } = 1.0m;
+
         public RlRiskModel(QCAlgorithm algorithm = null, RlRiskConfig config = null)
         {
             _config = config ?? new RlRiskConfig();
@@ -61,6 +64,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
                 var traceAlpha = _alphaTraceIdx < _alphaTrace.Count ? _alphaTrace[_alphaTraceIdx] : _config.FallbackAlpha;
                 _alphaTraceIdx++;
                 var clampedAlpha = ClampAlpha(traceAlpha);
+                LastAppliedAlpha = clampedAlpha;
                 return targets.Select(t => new PortfolioTarget(t.Symbol, t.Quantity * clampedAlpha));
             }
 
@@ -114,14 +118,17 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
             {
                 LogThrottled(algorithm,
                     $"[RlRiskModel] IPC 异常: {ex.Message}, 用 fallback α={_config.FallbackAlpha}");
+                LastAppliedAlpha = _config.FallbackAlpha;
                 return ApplyFallback(algorithm, targets, reason: "exception");
             }
+            LastAppliedAlpha = alpha;
             return targets.Select(t => new PortfolioTarget(t.Symbol, t.Quantity * alpha));
         }
 
         private IEnumerable<IPortfolioTarget> ApplyFallback(QCAlgorithm algo, IPortfolioTarget[] targets, string reason)
         {
             // 永不抛异常, 永远返回可执行 targets
+            LastAppliedAlpha = _config.FallbackAlpha;
             return targets.Select(t => new PortfolioTarget(t.Symbol, t.Quantity * _config.FallbackAlpha));
         }
 

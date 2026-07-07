@@ -23,6 +23,7 @@ state_schema:
     - {name: drawdown, type: float}
     - {name: days_to_peak, type: int}
     - {name: n_open_positions, type: int}
+    - {name: alpha, type: float}
   dim_hint: 18
 reward_config:
   primary: dsr

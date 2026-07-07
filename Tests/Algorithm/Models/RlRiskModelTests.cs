@@ -73,8 +73,18 @@ namespace QuantConnect.Tests.Algorithm.Models
                 var r2 = model.ManageRisk(new TestAlgo(), new[] { new PortfolioTarget(sym, 100m) }).ToList();
                 Assert.AreEqual(30m, r1[0].Quantity);  // 100 * 0.3
                 Assert.AreEqual(70m, r2[0].Quantity);  // 100 * 0.7
+                // A1.5: LastAppliedAlpha 须反映当期 trace alpha (供 SerializeRlState 写 trace)
+                Assert.AreEqual(0.7m, model.LastAppliedAlpha);
             }
             finally { System.IO.File.Delete(tracePath); }
+        }
+
+        [Test]
+        public void LastAppliedAlpha_DefaultsToOne_InCompositeMode()
+        {
+            // 无 RlRiskModel 时, 策略 SerializeRlState 用 1.0m (满仓) — 不影响 composite mode
+            var model = new RlRiskModel(config: new RlRiskConfig { FallbackAlpha = 0.5m });
+            Assert.AreEqual(1.0m, model.LastAppliedAlpha);
         }
 
         private class TestAlgo : QCAlgorithm { }

@@ -58,6 +58,8 @@ namespace QuantConnect.Algorithm.CSharp
         private readonly Dictionary<Symbol, decimal> _prevClose = new();
         private readonly Dictionary<Symbol, int> _entryDay = new();
         private int _dayIndex = 0;
+        // RL risk model 引用 (rl mode 下用于读取当期实际 alpha, 写入 trace 供离线 RL 训练)
+        private RlRiskModel _rlRiskModel;
 
         public override void Initialize()
         {
@@ -160,14 +162,15 @@ namespace QuantConnect.Algorithm.CSharp
             var riskMode = GetParameterOrDefault("risk-mode", "composite");
             if (riskMode == "rl")
             {
-                SetRiskManagement(new RlRiskModel(this, new RlRiskConfig
+                _rlRiskModel = new RlRiskModel(this, new RlRiskConfig
                 {
                     Endpoint = GetParameterOrDefault("rl-server-endpoint", "tcp://127.0.0.1:5555"),
                     PolicyName = GetParameterOrDefault("rl-policy-name", "default"),
                     FallbackAlpha = GetDecimalParameter("rl-fallback-alpha", 0.5m),
                     TimeoutMs = GetIntParameter("rl-timeout-ms", 200),
                     AlphaTracePath = GetParameterOrDefault("rl-alpha-trace-path", null),
-                }));
+                });
+                SetRiskManagement(_rlRiskModel);
                 Log("[OptionVolArb-5Layer] L4 Risk: RlRiskModel (rl mode)");
             }
             else
@@ -340,7 +343,10 @@ namespace QuantConnect.Algorithm.CSharp
                 tpv, cash_pct = Portfolio.Cash / tpv,
                 positions,
                 var_1d99 = var1d99, var_regime = varRegime,
-                drawdown, days_to_peak = daysToPeak, n_open_positions = positions.Count
+                drawdown, days_to_peak = daysToPeak, n_open_positions = positions.Count,
+                // auto-evolution A1.5: 写入当期实际 alpha (供离线 RL 训练 trace_to_mdp_dataset).
+                // composite mode 无 RlRiskModel → alpha=1.0 (满仓); rl mode 读 LastAppliedAlpha.
+                alpha = _rlRiskModel?.LastAppliedAlpha ?? 1.0m,
             };
             return JsonConvert.SerializeObject(state);
         }
