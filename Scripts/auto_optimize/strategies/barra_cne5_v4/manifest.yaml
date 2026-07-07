@@ -1,4 +1,5 @@
 strategy_name: AShareBarraCNE5V4Algorithm
+rl_state_completeness: partial
 lean_config: Launcher/config/config-barra-cne5v4-backtest.json
 risk_model_target: CompositeRiskManagementModel
 parameter_space:

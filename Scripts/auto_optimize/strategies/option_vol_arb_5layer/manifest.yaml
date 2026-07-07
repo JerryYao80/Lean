@@ -1,4 +1,5 @@
 strategy_name: OptionVolArb5LayerStrategy
+rl_state_completeness: full
 lean_config: Launcher/config/config-option-vol-arb-5layer.json
 risk_model_target: CompositeRiskModel
 parameter_space:

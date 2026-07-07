@@ -68,6 +68,7 @@ state_schema:
   - name: n_open_positions
     type: int
 strategy_name: VarStrategy
+rl_state_completeness: unaudited
 universe:
   symbols:
   - '510050'
