@@ -160,12 +160,13 @@ namespace QuantConnect.Algorithm.CSharp
             var riskMode = GetParameterOrDefault("risk-mode", "composite");
             if (riskMode == "rl")
             {
-                SetRiskManagement(new RlRiskModel(new RlRiskConfig
+                SetRiskManagement(new RlRiskModel(this, new RlRiskConfig
                 {
                     Endpoint = GetParameterOrDefault("rl-server-endpoint", "tcp://127.0.0.1:5555"),
                     PolicyName = GetParameterOrDefault("rl-policy-name", "default"),
                     FallbackAlpha = GetDecimalParameter("rl-fallback-alpha", 0.5m),
                     TimeoutMs = GetIntParameter("rl-timeout-ms", 200),
+                    AlphaTracePath = GetParameterOrDefault("rl-alpha-trace-path", null),
                 }));
                 Log("[OptionVolArb-5Layer] L4 Risk: RlRiskModel (rl mode)");
             }

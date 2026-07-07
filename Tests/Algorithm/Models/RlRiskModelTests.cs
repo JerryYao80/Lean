@@ -24,7 +24,7 @@ namespace QuantConnect.Tests.Algorithm.Models
         [Test]
         public void ManageRisk_PreservesZeroTargets()
         {
-            var model = new RlRiskModel(new RlRiskConfig { FallbackAlpha = 0.5m });
+            var model = new RlRiskModel(config: new RlRiskConfig { FallbackAlpha = 0.5m });
             var sym = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
             var targets = new[] { new PortfolioTarget(sym, 0m) };
             var algo = new TestAlgo();
@@ -35,7 +35,7 @@ namespace QuantConnect.Tests.Algorithm.Models
         [Test]
         public void Request_ReturnsFallback_WhenServerDown()
         {
-            var model = new RlRiskModel(new RlRiskConfig {
+            var model = new RlRiskModel(config: new RlRiskConfig {
                 Endpoint = "tcp://127.0.0.1:59999", FallbackAlpha = 0.3m, TimeoutMs = 50 });
             var sym = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
             var targets = new[] { new PortfolioTarget(sym, 100m) };
@@ -46,7 +46,7 @@ namespace QuantConnect.Tests.Algorithm.Models
         [Test]
         public void FallbackAlpha_NeverThrows()
         {
-            var model = new RlRiskModel(new RlRiskConfig {
+            var model = new RlRiskModel(config: new RlRiskConfig {
                 Endpoint = "tcp://127.0.0.1:59999", FallbackAlpha = 0.5m, TimeoutMs = 10 });
             var sym = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
             for (int i = 0; i < 11; i++)
@@ -54,6 +54,27 @@ namespace QuantConnect.Tests.Algorithm.Models
                 var result = model.ManageRisk(new TestAlgo(), new[] { new PortfolioTarget(sym, 100m) }).ToList();
                 Assert.AreEqual(50m, result[0].Quantity);
             }
+        }
+
+        [Test]
+        public void AlphaTrace_ReplayMode_ReturnsSequenceAlpha()
+        {
+            var tracePath = System.IO.Path.GetTempFileName();
+            System.IO.File.WriteAllLines(tracePath, new[] {
+                "{\"bar\":0,\"alpha\":0.3}",
+                "{\"bar\":1,\"alpha\":0.7}",
+            });
+            try
+            {
+                var model = new RlRiskModel(algorithm: null, new RlRiskConfig {
+                    AlphaTracePath = tracePath, FallbackAlpha = 0.5m });
+                var sym = Symbol.Create("510300", SecurityType.Equity, Market.SSE);
+                var r1 = model.ManageRisk(new TestAlgo(), new[] { new PortfolioTarget(sym, 100m) }).ToList();
+                var r2 = model.ManageRisk(new TestAlgo(), new[] { new PortfolioTarget(sym, 100m) }).ToList();
+                Assert.AreEqual(30m, r1[0].Quantity);  // 100 * 0.3
+                Assert.AreEqual(70m, r2[0].Quantity);  // 100 * 0.7
+            }
+            finally { System.IO.File.Delete(tracePath); }
         }
 
         private class TestAlgo : QCAlgorithm { }

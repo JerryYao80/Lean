@@ -28,17 +28,42 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
         private bool _killSwitchTripped;
         private readonly int _killSwitchThreshold = 5;
         private DateTime _lastLogUtc = DateTime.MinValue;
+        private readonly List<decimal> _alphaTrace = new();
+        private int _alphaTraceIdx = 0;
 
         public string Name => "RlRiskModel";
 
-        public RlRiskModel(RlRiskConfig config = null)
+        public RlRiskModel(QCAlgorithm algorithm = null, RlRiskConfig config = null)
         {
             _config = config ?? new RlRiskConfig();
             _client = new RlRiskClient(_config.Endpoint, _config.TimeoutMs);
+            if (!string.IsNullOrEmpty(_config.AlphaTracePath) && System.IO.File.Exists(_config.AlphaTracePath))
+            {
+                foreach (var line in System.IO.File.ReadAllLines(_config.AlphaTracePath))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var jo = Newtonsoft.Json.Linq.JObject.Parse(line);
+                        var a = jo.Value<decimal?>("alpha") ?? 1.0m;
+                        _alphaTrace.Add(a);
+                    }
+                    catch { _alphaTrace.Add(_config.FallbackAlpha); }
+                }
+                algorithm?.Log($"[RlRiskModel] alpha-trace 回放模式: {_alphaTrace.Count} bars loaded (无 IPC)");
+            }
         }
 
         public IEnumerable<IPortfolioTarget> ManageRisk(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
+            if (_alphaTrace.Count > 0)
+            {
+                var traceAlpha = _alphaTraceIdx < _alphaTrace.Count ? _alphaTrace[_alphaTraceIdx] : _config.FallbackAlpha;
+                _alphaTraceIdx++;
+                var clampedAlpha = ClampAlpha(traceAlpha);
+                return targets.Select(t => new PortfolioTarget(t.Symbol, t.Quantity * clampedAlpha));
+            }
+
             // Kill-switch 已触发: 永久降级 (结构性 fail-safe, 不依赖逻辑判断)
             if (_killSwitchTripped)
             {

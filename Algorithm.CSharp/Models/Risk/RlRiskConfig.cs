@@ -11,5 +11,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
         public decimal FallbackAlpha { get; set; } = 0.5m;
         /// <summary>请求超时 ms</summary>
         public int TimeoutMs { get; set; } = 200;
+        /// <summary>alpha trace 回放模式: 读 jsonl 序列逐 bar 回放 alpha (供离线 RL 数据生成). null 则走 IPC.</summary>
+        public string AlphaTracePath { get; set; } = null;
     }
 }
