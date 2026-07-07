@@ -11,7 +11,7 @@ import json, pathlib, sys, argparse
 import optuna
 import yaml
 from manifest_loader import load_manifest
-from lean_runner import run_backtest
+from lean_runner import run_backtest, _REPO_ROOT
 from reward import compute_stationary_reward, compute_dsr_gate
 from ridge_monitor import check_convergence
 
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     ap.add_argument("--storage", default=None, help="sqlite:///path.db (供 dsrdiag 经验分析)")
     ap.add_argument("--study-name", default=None)
     args = ap.parse_args()
-    config = yaml.safe_load(pathlib.Path("Scripts/auto_optimize/config.yaml").read_text())
+    config = yaml.safe_load((_REPO_ROOT / "Scripts" / "auto_optimize" / "config.yaml").read_text())
     result = optimize(args.manifest, config, args.n_trials,
                       storage=args.storage, study_name=args.study_name)
     print(json.dumps(result, indent=2, default=str))
