@@ -32,8 +32,8 @@ endpoints:
   base_port: 5555
 offline_rl:
   algorithm: cql                # cql | iol
-  var_budget: 0.02
-  max_dd: 0.2
+  var_budget: 0.50              # 修复: 用 trace var 分布的中位数分位 (旧 0.02 在 var 均值 0.72 下无梯度)
+  max_dd: 0.05                  # 修复: trace drawdown 实际范围 [0,0.028], 0.2 太松无惩罚梯度
   reward_terms:
     - {term: scaled_pnl, weight: 1.0}
     - {term: var_excess_penalty, weight: 0.5}

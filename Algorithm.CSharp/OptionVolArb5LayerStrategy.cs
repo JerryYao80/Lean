@@ -60,6 +60,8 @@ namespace QuantConnect.Algorithm.CSharp
         private int _dayIndex = 0;
         // RL risk model 引用 (rl mode 下用于读取当期实际 alpha, 写入 trace 供离线 RL 训练)
         private RlRiskModel _rlRiskModel;
+        // 组合环比 PnL (tpv - prevTpv) / prevTpv, 供 trace_to_mdp_dataset scaled_pnl reward 项
+        private decimal _prevTpv = 0m;
 
         public override void Initialize()
         {
@@ -201,6 +203,7 @@ namespace QuantConnect.Algorithm.CSharp
                 method: VaRMethod.BootstrapHistorical);
             _peakTpv = Portfolio.TotalPortfolioValue;
             _peakDate = StartDate;
+            _prevTpv = Portfolio.TotalPortfolioValue;
 
             SetWarmUp(60, Resolution.Daily);
 
@@ -258,6 +261,8 @@ namespace QuantConnect.Algorithm.CSharp
                     _prevClose[sym] = slice.Bars[sym].Close;
                 }
             }
+            // 更新 _prevTpv 供下一 bar 计算组合环比 PnL
+            _prevTpv = tpv;
         }
 
         // auto-update2.md 第一步b: RL_TRACE_PATH env 触发逐 bar 状态写盘
@@ -347,6 +352,9 @@ namespace QuantConnect.Algorithm.CSharp
                 // auto-evolution A1.5: 写入当期实际 alpha (供离线 RL 训练 trace_to_mdp_dataset).
                 // composite mode 无 RlRiskModel → alpha=1.0 (满仓); rl mode 读 LastAppliedAlpha.
                 alpha = _rlRiskModel?.LastAppliedAlpha ?? 1.0m,
+                // 顶层组合环比 PnL (tpv - prevTpv)/prevTpv, 供 scaled_pnl reward 项 (修复 A 阶段 reward 退化).
+                // OnData 写 trace 时 _prevTpv 仍为昨 tpv → 真实 bar-on-bar PnL.
+                pnl = _prevTpv > 0 ? (tpv - _prevTpv) / _prevTpv : 0m,
             };
             return JsonConvert.SerializeObject(state);
         }
