@@ -34,5 +34,5 @@ reward_config:
     - {term: drawdown_excess_penalty, weight: 2.0}
     - {term: over_clearance_penalty, weight: 0.1}
 universe:
-  symbols: ["510050", "510300", "510500", "588000", "588080"]
+  symbols: ["510300", "510500", "588000", "588080"]
   timezone: Asia/Shanghai

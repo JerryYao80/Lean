@@ -65,9 +65,9 @@ namespace QuantConnect.Algorithm.CSharp
 
         public override void Initialize()
         {
-            // Universe 候选池: 默认 5 个 A股 ETF 期权标的, 可经 "universe-tickers" 参数覆盖
+            // Universe 候选池: 默认 4 个 A股 ETF 期权标的 (排除 510050: IV 数据仅 49 行限制交集窗口).
             // 支持任意子集 / 任意提供 IV 数据的标的 (由 L1 门控自动剔除无数据者)
-            var tickersParam = GetParameterOrDefault("universe-tickers", "510050,510300,510500,588000,588080");
+            var tickersParam = GetParameterOrDefault("universe-tickers", "510300,510500,588000,588080");
             _candidateTickers = tickersParam.Split(',')
                 .Select(t => t.Trim())
                 .Where(t => t.Length > 0)
