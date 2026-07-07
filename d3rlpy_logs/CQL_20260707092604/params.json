@@ -1,0 +1,163 @@
+{
+  "observation_shape": [
+    8
+  ],
+  "action_size": 1,
+  "config": {
+    "type": "cql",
+    "params": {
+      "batch_size": 256,
+      "gamma": 0.99,
+      "observation_scaler": {
+        "type": "standard",
+        "params": {
+          "mean": [
+            0.496189393196255,
+            0.5342808474600315,
+            0.5046902525285258,
+            0.5335501834494062,
+            0.07286231962731109,
+            0.4561845762701705,
+            0.45307630297960716,
+            0.5141190148144961
+          ],
+          "std": [
+            0.27653278813414495,
+            0.3029337783903856,
+            0.2870481719404345,
+            0.2870856653545964,
+            0.04485435471754121,
+            0.2898737460232095,
+            0.28121044802400114,
+            0.2955488836126808
+          ],
+          "eps": 0.001
+        }
+      },
+      "action_scaler": {
+        "type": "min_max",
+        "params": {
+          "minimum": [
+            0.0
+          ],
+          "maximum": [
+            1.0
+          ]
+        }
+      },
+      "reward_scaler": {
+        "type": "standard",
+        "params": {
+          "mean": -0.065506711602211,
+          "std": 0.06705973297357559,
+          "eps": 0.001,
+          "multiplier": 1.0
+        }
+      },
+      "compile_graph": false,
+      "actor_learning_rate": 0.001,
+      "critic_learning_rate": 0.001,
+      "temp_learning_rate": 0.001,
+      "alpha_learning_rate": 0.001,
+      "actor_optim_factory": {
+        "type": "adam",
+        "params": {
+          "clip_grad_norm": null,
+          "lr_scheduler_factory": {
+            "type": "none",
+            "params": {}
+          },
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0,
+          "amsgrad": false
+        }
+      },
+      "critic_optim_factory": {
+        "type": "adam",
+        "params": {
+          "clip_grad_norm": null,
+          "lr_scheduler_factory": {
+            "type": "none",
+            "params": {}
+          },
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0,
+          "amsgrad": false
+        }
+      },
+      "temp_optim_factory": {
+        "type": "adam",
+        "params": {
+          "clip_grad_norm": null,
+          "lr_scheduler_factory": {
+            "type": "none",
+            "params": {}
+          },
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0,
+          "amsgrad": false
+        }
+      },
+      "alpha_optim_factory": {
+        "type": "adam",
+        "params": {
+          "clip_grad_norm": null,
+          "lr_scheduler_factory": {
+            "type": "none",
+            "params": {}
+          },
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0,
+          "amsgrad": false
+        }
+      },
+      "actor_encoder_factory": {
+        "type": "default",
+        "params": {
+          "activation": "relu",
+          "use_batch_norm": false,
+          "dropout_rate": null
+        }
+      },
+      "critic_encoder_factory": {
+        "type": "default",
+        "params": {
+          "activation": "relu",
+          "use_batch_norm": false,
+          "dropout_rate": null
+        }
+      },
+      "q_func_factory": {
+        "type": "mean",
+        "params": {
+          "share_encoder": false
+        }
+      },
+      "tau": 0.005,
+      "n_critics": 2,
+      "initial_temperature": 1.0,
+      "initial_alpha": 1.0,
+      "alpha_threshold": 10.0,
+      "conservative_weight": 5.0,
+      "n_action_samples": 10,
+      "soft_q_backup": false,
+      "max_q_backup": false
+    }
+  }
+}
