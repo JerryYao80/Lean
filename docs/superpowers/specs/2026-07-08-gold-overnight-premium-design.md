@@ -100,7 +100,7 @@ Z(T)               = (Signal(T) − mean_60(Signal)) / std_60(Signal)
 
 tushare `fut_daily` 对 SHFE 的 `open` 可能指夜盘开盘（21:00 cal T-1，只覆盖 15:00→21:00 这 6h 晚盘缺口）或日盘开盘（09:00 cal T，覆盖完整 18h 隔夜）。日线粒度**无法**干净切出 21:00→02:30 这段 COMEX/SHFE 夜盘主力交易窗口——那需要 `ft_mins` 分钟级数据（`api_registry.py` 中 `enabled=False`，需 10000+ 积分）。因此 AU.SHF 日线信号**至多是部分代理**。
 
-**Gate 0 实测确定 `open` 约定；Gate 2（IC）是有效性 kill switch**：若 OOS IC 不达标，策略标记 `EFFECTIVENESS_FAIL`、排除灰度发布，附升级说明"需 `ft_mins`（10000 积分）做真夜盘隔离"。这是"有效而非仅可用"的硬执行——策略上线仅当 IC 证明日线代理有效。
+**Gate 0 记录 `open` 约定诊断（不判定有效无效）；Gate 2（IC）才是有效性 kill switch**：Gate 0 只算并记录 AU `open/pre_close` 与 518880 `open/pre_close` 的相关性及强度分布，用于事后归因；真正判定"这个日线代理是否有效"的是 Gate 2 的 OOS IC。若 OOS IC 不达标，策略标记 `EFFECTIVENESS_FAIL`、排除灰度发布，附升级说明"需 `ft_mins`（10000 积分）做真夜盘隔离"。这是"有效而非仅可用"的硬执行——策略上线仅当 IC 证明日线代理有效。
 
 ### 3.3 交叉校验（FXCM XAUUSD 降为旁路，不替代主信号）
 
