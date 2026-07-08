@@ -1,0 +1,33 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "GoldOvernightPremiumAlgorithm",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+  "history-provider": "FallbackTushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "../../../Results/gold-overnight-premium",
+  "influxdb-enabled": true,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "parameters": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
+    "start-date": "2020-01-01",
+    "end-date": "2026-06-23",
+    "position-size": "0.30",
+    "target-vol": "0.12",
+    "vol-lookback-days": "60",
+    "z-threshold": "1.5",
+    "atr-multiple": "0.5",
+    "tp-fraction": "0.6",
+    "initial-capital": "1000000",
+    "fee-rate": "0.0005"
+  }
+}
