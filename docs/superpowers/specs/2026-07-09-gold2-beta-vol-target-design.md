@@ -118,8 +118,7 @@ w_t = min(w_max=1.0, σ_target / σ_annual_t)    ← σ_target=0.11
 w_smooth_t = α·w_t + (1-α)·w_smooth_{t-1}      ← α=0.25
 ```
 
-- `Compute()` 返回 `FactorValue{ Value=(decimal)w_smooth_t, RawValue=(decimal)σ_annual_t }`。
-- 状态: 因子持有 `σ_prev`、`w_smooth_prev`。
+- `Compute(symbol, time)` 返回 `FactorValue{ Value=(decimal)w_smooth_t, RawValue=(decimal)σ_annual_t }`。状态(σ_prev、w_smooth_prev)在因子内持有,由 `Update()` 推进;`Compute` 是查询接口,无需额外状态输入。
 - **冷启动**: 前 60 日累积收益,第 60 日算简单方差作种子,之后切 EWMA;冷启动期 `w=0`。
 
 ### 4.3 Gold2ExtremeRiskFactor(极端开关,L4 输入)
