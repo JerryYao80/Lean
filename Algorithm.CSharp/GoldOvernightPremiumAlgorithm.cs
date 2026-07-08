@@ -73,8 +73,10 @@ namespace QuantConnect.Algorithm.CSharp
             AddRiskManagement(new NoOvernightPositionRiskModel());
             AddRiskManagement(new PositionLimitRiskModel(_positionSize));
 
-            Schedule.On(DateRules.EveryDay(_gold), TimeRules.AfterMarketOpen(_gold, 5), EvaluateEntry);
-            Schedule.On(DateRules.EveryDay(_gold), TimeRules.BeforeMarketClose(_gold, 15), ForceCloseCheck);
+            // SSE 市场日历在 LEAN 中配置为 00:00-24:00（全天），AfterMarketOpen/BeforeMarketClose 无法定位具体开收盘。
+            // 改用 TimeRules.At 显式指定北京时间：09:35 开盘后 5 分钟评估进场，14:45 强制平仓。
+            Schedule.On(DateRules.EveryDay(_gold), TimeRules.At(9, 35, TimeZones.Shanghai), EvaluateEntry);
+            Schedule.On(DateRules.EveryDay(_gold), TimeRules.At(14, 45, TimeZones.Shanghai), ForceCloseCheck);
         }
 
         public override void OnData(Slice data)

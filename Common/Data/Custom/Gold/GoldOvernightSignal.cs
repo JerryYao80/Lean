@@ -26,19 +26,21 @@ namespace QuantConnect.Data.Custom.Gold
             if (string.IsNullOrWhiteSpace(line) || line.StartsWith("trade_date"))
                 return null;
             var csv = line.Split(',');
-            if (csv.Length < 7) return null;
+            // CSV columns: trade_date, r_au_overnight, gap_expected, gap_actual, signal,
+            //              z_signal, regime, skip_reason, freshness_flag, cross_check_alert, forward_return
+            if (csv.Length < 8) return null;
             if (!DateTime.TryParseExact(csv[0], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
                 return null;
             var sig = new GoldOvernightSignal
             {
                 Symbol = config.Symbol,
                 Time = d,
-                ZSignal = decimal.TryParse(csv[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var z) ? z : 0m,
-                Regime = csv[2],
-                SkipReason = csv[3],
-                GapExpected = decimal.TryParse(csv[4], NumberStyles.Any, CultureInfo.InvariantCulture, out var ge) ? ge : 0m,
-                GapActual = decimal.TryParse(csv[5], NumberStyles.Any, CultureInfo.InvariantCulture, out var ga) ? ga : 0m,
-                Signal = decimal.TryParse(csv[6], NumberStyles.Any, CultureInfo.InvariantCulture, out var s) ? s : 0m,
+                GapExpected = decimal.TryParse(csv[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var ge) ? ge : 0m,
+                GapActual = decimal.TryParse(csv[3], NumberStyles.Any, CultureInfo.InvariantCulture, out var ga) ? ga : 0m,
+                Signal = decimal.TryParse(csv[4], NumberStyles.Any, CultureInfo.InvariantCulture, out var s) ? s : 0m,
+                ZSignal = decimal.TryParse(csv[5], NumberStyles.Any, CultureInfo.InvariantCulture, out var z) ? z : 0m,
+                Regime = csv[6],
+                SkipReason = csv[7],
             };
             sig.Value = sig.ZSignal;
             return sig;
