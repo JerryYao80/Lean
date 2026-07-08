@@ -1,5 +1,6 @@
 using System;
 using NUnit.Framework;
+using QuantConnect.Algorithm.CSharp;
 using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Algorithm.CSharp.Models.Risk;
 
@@ -37,6 +38,23 @@ namespace QuantConnect.Tests.Algorithm
             var result = model.ManageRisk(algo, new[] { target });
             foreach (var t in result)
                 Assert.AreEqual(1000, t.Quantity, "10:00 应放行");
+        }
+
+        [Test]
+        public void EntryLogic_LongOnly_ZAboveThreshold()
+        {
+            // 设计 §5: Z > 1.5 做多；Z < -1.5 空仓观望（不可做空）；|Z|<=1.5 空仓。
+            Assert.AreEqual(1, GoldOvernightPremiumAlgorithm.EntryDirection(1.6m));   // 多
+            Assert.AreEqual(0, GoldOvernightPremiumAlgorithm.EntryDirection(-1.6m));  // 观望（不可做空）
+            Assert.AreEqual(0, GoldOvernightPremiumAlgorithm.EntryDirection(0.5m));   // 无 edge
+        }
+
+        [Test]
+        public void RegimeCap_RisingFast_ReducesTo03x()
+        {
+            Assert.AreEqual(0.3m, GoldOvernightPremiumAlgorithm.RegimeCap(QuantConnect.Factors.Forward.GoldRegime.RISING_FAST));
+            Assert.AreEqual(1.0m, GoldOvernightPremiumAlgorithm.RegimeCap(QuantConnect.Factors.Forward.GoldRegime.UNAVAILABLE));
+            Assert.AreEqual(1.0m, GoldOvernightPremiumAlgorithm.RegimeCap(QuantConnect.Factors.Forward.GoldRegime.STABLE));
         }
 
         public class TestAlgorithm : QuantConnect.Algorithm.QCAlgorithm
