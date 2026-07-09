@@ -1,4 +1,5 @@
 strategy_name: GoldOvernightPremiumAlgorithm
+lifecycle: deprecated   # 已除役:Gate 2 IC kill switch 判定 EFFECTIVENESS_FAIL(OOS IC=-0.065,日频 AU 代理信号无预测力);ft_mins 分钟数据无升级路径(权限不可得)。保留可回测,不进实盘轮换。详见 docs/superpowers/specs/2026-07-08-gold-overnight-premium-design.md §7.2。黄金 ETF 实盘改用 Gold2BetaVolTargetStrategy(EFFECTIVE,回撤改善 42.2%)。
 rl_state_completeness: partial
 lean_config: Launcher/config/config-gold-overnight-premium-backtest.json
 risk_model_target: NoOvernightPositionRiskModel
