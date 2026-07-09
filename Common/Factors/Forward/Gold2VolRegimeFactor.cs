@@ -32,6 +32,10 @@ namespace QuantConnect.Factors.Forward
 
         public Gold2VolRegimeFactor(decimal lambda, decimal volTarget, int warmup, decimal alpha)
         {
+            if (warmup <= 0) throw new ArgumentOutOfRangeException(nameof(warmup), "warmup must be positive");
+            if (lambda <= 0m || lambda >= 1m) throw new ArgumentOutOfRangeException(nameof(lambda), "lambda must be in (0,1)");
+            if (volTarget <= 0m) throw new ArgumentOutOfRangeException(nameof(volTarget), "volTarget must be positive");
+            if (alpha < 0m || alpha > 1m) throw new ArgumentOutOfRangeException(nameof(alpha), "alpha must be in [0,1]");
             _lambda = lambda; _volTarget = volTarget; _warmup = warmup; _alpha = alpha;
         }
 
@@ -78,7 +82,9 @@ namespace QuantConnect.Factors.Forward
         public FactorRankResult ComputeRank(IEnumerable<Symbol> symbols, DateTime time) => new FactorRankResult { Time = time, FactorId = Id };
         public bool IsAvailable(Symbol symbol, DateTime time) => _ewmaReady;
 
-        /// <summary>样本方差(总体方差，n 分母)。供本类 warmup 与后续任务(RVol 等)复用。</summary>
+        /// <summary>总体方差(n 分母,非样本方差 n-1)。EWMA warmup seeding 用总体方差;
+        /// HVFactor 实现波动用样本方差(n-1),二者用途不同( seeding vs 估计)故刻意不统一。
+        /// 供本类 warmup 与后续任务(RVol 等)复用。</summary>
         public static decimal Variance(IEnumerable<decimal> xs)
         {
             var list = new List<decimal>(xs);
