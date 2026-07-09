@@ -420,7 +420,11 @@ public void Update(decimal close, DateTime time)
 `Scripts/gold2_data_gates.py`:
 - `gate0_tushare_coverage`: 518880 daily 覆盖 2020-2026 无断点;AU.SHF 覆盖同期。
 - `gate0_fred_coverage`: VIX/DFII10 2015-2026 连续。
-- `gate0_alignment`: 518880/AU/VIX/DFII10 日期对齐(交易日 inner join ≥ 1500 日)。
+- `gate0_alignment`: 518880/AU/VIX/DFII10 日期对齐(交易日 inner join ≥ 1450 日)。
+  - 原阈值 1500 基于"同日历三方"(518880/AU/VIX 均为 A 股交易日历)。
+  - DFII10 为 FRED 美历,与 A 股日历假日互斥,4-way join 必然 < 518880 交易日数;
+    实测完整数据 4-way = 1495。下调至 1450(留 ~45 日余量,仍捕获 >45 日真实断点)。
+    见 `Scripts/gold2_data_gates.py` 模块头校准说明。
 - 任一不过 → 阻止回测,报缺失区间。
 
 ## 7. 测试与验证
