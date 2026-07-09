@@ -4,7 +4,6 @@
   "algorithm-language": "CSharp",
   "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
   "data-folder": "../../../Data",
-  "data-directory": "../../../Data",
   "history-provider": "FallbackTushareHistoryProvider",
   "data-provider": "DefaultDataProvider",
   "results-destination-folder": "../../../Results/gold2-volonly",
@@ -30,7 +29,9 @@
     "rebalance-threshold": "0.05",
     "extreme-vol-cap": "0.30",
     "realrate-cap": "0.60",
-    "trend-floor": "1.0",
+    "trend-disable": "true",
+    "trend-floor": "0.20",
     "initial-capital": "1000000"
   }
 }
+

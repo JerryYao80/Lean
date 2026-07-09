@@ -70,7 +70,10 @@ namespace QuantConnect.Algorithm.CSharp
             _realrate = new Gold2RealRateCapFactor(_realrateInner, GetDecimalParameter("realrate-cap", 0.6m));
 
             SetUniverseSelection(new Gold2UniverseSelectionModel());
-            SetAlpha(new Gold2TrendAlphaModel(_trend, _gold, GetDecimalParameter("trend-floor", 0.2m)));
+            // trend-disable(spec §7.2 vol_only 控制实验): 完全旁路趋势层,dirCoef 恒=1.0,
+            // 使 portfolio target = w_smooth × 1.0,即纯波动率目标。trend-floor 仅在 disabled=false 时生效。
+            bool trendDisabled = GetBoolParameter("trend-disable", false);
+            SetAlpha(new Gold2TrendAlphaModel(_trend, _gold, GetDecimalParameter("trend-floor", 0.2m), trendDisabled));
             SetPortfolioConstruction(new Gold2VolTargetPortfolioModel(_vol, _gold, GetDecimalParameter("rebalance-threshold", 0.05m)));
             AddRiskManagement(new Gold2ExtremeRiskModel(_ext, _gold, GetDecimalParameter("extreme-vol-cap", 0.3m)));
             AddRiskManagement(new Gold2RealRateCapModel(_realrate, _gold));
@@ -126,7 +129,8 @@ namespace QuantConnect.Algorithm.CSharp
         public IEnumerable<string> GetTunableParameterNames() => new[]
         {
             "trend-ma-short","trend-ma-long","ewma-lambda","vol-target","vol-warmup",
-            "smooth-alpha","rebalance-threshold","extreme-vol-cap","realrate-cap","trend-floor"
+            "smooth-alpha","rebalance-threshold","extreme-vol-cap","realrate-cap","trend-floor",
+            "trend-disable"
         };
 
         public string SerializeRlState(QCAlgorithm algo)
@@ -152,5 +156,11 @@ namespace QuantConnect.Algorithm.CSharp
             int.TryParse(GetParameter(n), out var v) ? v : d;
         private DateTime GetDateParameter(string n, DateTime d) =>
             DateTime.TryParse(GetParameter(n), CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var v) ? v : d;
+        private bool GetBoolParameter(string n, bool d)
+        {
+            var v = GetParameter(n);
+            if (string.IsNullOrWhiteSpace(v)) return d;
+            return v.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) || v.Trim().Equals("1", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

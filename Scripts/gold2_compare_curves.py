@@ -3,7 +3,7 @@
 
 对比 baseline / vol_only / full 三条净值曲线,主指标为最大回撤改善。
 - baseline: 满仓持有 518880(取 tushare fund_daily 518880.SH close,与回测同日历)
-- vol_only: config-gold2-volonly.json 回测(trend-floor=1.0,趋势层禁用 → 纯波动目标)
+- vol_only: config-gold2-volonly.json 回测(trend-disable=true,趋势层完全禁用 → 纯波动目标)
 - full:     config-gold2-beta-vol-target-backtest.json 回测(完整模型)
 
 判定线(spec §7.2 有效性 Gate):
@@ -17,17 +17,26 @@
 
 LEAN result JSON 结构(已核实 Results/gold2-betavol/*.json):
   charts."Strategy Equity".series.Equity.values = [[unix_ts, o, h, l, close], ...]
-  日度采样(close 即当日 equity)。部分 series(如 Benchmark)为 [ts, value] 二元组,loader 兼容。
+  LEAN equity 按 *日历日* 发射(周末 forward-fill 周五收盘),故 loader 做两步对齐:
+    (1) load_equity_series 过滤周末 forward-fill bar(dayofweek<5);
+    (2) main() 把 strategy reindex 到 baseline 的交易日索引(ffill),保证 n 与 baseline 一致。
+  部分 series(如 Benchmark)为 [ts, value] 二元组,loader 兼容。
   statistics."Total Orders" 给调仓次数。
+
+spec §8.5: 回测净值前 6 个月空仓,对比 baseline 时对齐起算点(从 2020-07 起)。
+  COMPARE_START=2020-07-01 同时裁剪 baseline 与 strategy,剔除 warmup 平台期。
 """
 from __future__ import annotations
-import os, sys, json
-from typing import Optional, Tuple
+import os, sys, json, datetime
+from typing import Optional
 import numpy as np
 import pandas as pd
 
 RESULTS = "/home/project/hope/Lean/Results"
-TUSHARE_518880 = "/home/project/tushare-downloader/tushare_data_v2/fund_daily/ts_code=518880.SH/data.parquet"
+TUSHARE_DIR = os.environ.get("GOLD2_TUSHARE_DIR", "/home/project/tushare-downloader/tushare_data_v2")
+TUSHARE_518880 = os.path.join(TUSHARE_DIR, "fund_daily", "ts_code=518880.SH", "data.parquet")
+# spec §8.5: 对比从 2020-07 起(剔除 ~120d warmup 空仓平台,避免 ann_ret 的 n 被稀释)。
+COMPARE_START = "2020-07-01"
 BACKTEST_START = "2020-01-01"
 BACKTEST_END = "2026-06-23"
 TRADING_DAYS = 252
@@ -65,10 +74,15 @@ def verdict(baseline_max_dd: float, full_max_dd: float) -> str:
     baseline_max_dd/full_max_dd 均为负小数(如 -0.20)。回撤越小(绝对值越小)越好。
     full < baseline×0.85 ⟺ |full| < |baseline|×0.85 ⟺ 改善比例 ≥ 15%。
     边界(恰好 15%)算 EFFECTIVE(包含)。
+
+    baseline 无回撤(baseline_max_dd >= 0)的边界:baseline 从未下跌意味着任何下跌都是劣化,
+    full_max_dd <= 0 仅表示"没有亏损"但并不构成对 baseline 的 *改善*;Gate 的本意是"full
+    相对 baseline 改善 ≥15%",baseline=0 时无改善空间,故此时仅当 full 也无回撤(==0)才视作
+    EFFECTIVE(等价于平价 pass-through),任何 full_max_dd < 0(实际下跌)都判 FAIL。
     """
     if baseline_max_dd >= 0:
-        # baseline 无回撤:full 只要非正即视为不劣化(effectively pass-through)
-        return "EFFECTIVE" if full_max_dd <= 0 else "EFFECTIVENESS_FAIL"
+        # baseline 无回撤:full 必须 *也无回撤* 才视作不劣化;任何实际回撤都是对"无回撤基准"的劣化。
+        return "EFFECTIVE" if full_max_dd >= 0 else "EFFECTIVENESS_FAIL"
     improvement = (abs(baseline_max_dd) - abs(full_max_dd)) / abs(baseline_max_dd)
     return "EFFECTIVE" if improvement >= IMPROVEMENT_THRESHOLD else "EFFECTIVENESS_FAIL"
 
@@ -79,11 +93,16 @@ def load_equity_series(folder: str) -> Optional[pd.Series]:
     folder: Results 下的子目录(如 gold2-betavol)。扫 *.json 找含 "Strategy Equity"
     chart 的文件,取 Equity series 的 close(5 元 candle 的最后一个元素;2 元点取第二个)。
     返回 pd.Series(index=DateTime, values=close);无数据返回 None。
+
+    LEAN equity 按 *日历日* 发射(周末 forward-fill 周五收盘),为使 ann_ret / Sharpe /
+    dd_duration 与 baseline(tushare 交易日)可比,这里过滤掉周末 bar(dayofweek<5)。
+    若不过滤,n_strategy≈2367 vs n_baseline≈1560,ann_ret 被 (252/n) 项稀释约 35-40%,
+    Sharpe 被 928 个零收益周末 bar 抬高分母稀释,dd_duration 也混用日历日 vs 交易日单位。
+    周一→周五的 forward-fill 仍保留(周一 bar 反映周五收盘价),仅剔除纯周末的冗余 bar。
     """
     folder_path = os.path.join(RESULTS, folder) if not os.path.isabs(folder) else folder
     if not os.path.isdir(folder_path):
         return None
-    import datetime as _dt
     for fname in sorted(os.listdir(folder_path)):
         if not fname.endswith(".json"):
             continue
@@ -116,7 +135,9 @@ def load_equity_series(folder: str) -> Optional[pd.Series]:
             ts = pt[0]
             close = pt[-1]  # 5 元 candle [ts,o,h,l,close] → close;2 元 [ts,v] → v
             try:
-                dt = _dt.datetime.utcfromtimestamp(int(ts)).date()
+                # datetime.utcfromtimestamp 已废弃(Python 3.12+ DeprecationWarning),
+                # 改用 timezone-aware fromtimestamp(UTC)。
+                dt = datetime.datetime.fromtimestamp(int(ts), datetime.timezone.utc).date()
             except (ValueError, OSError, TypeError):
                 continue
             times.append(pd.Timestamp(dt))
@@ -126,6 +147,11 @@ def load_equity_series(folder: str) -> Optional[pd.Series]:
         s = pd.Series(closes, index=pd.DatetimeIndex(times))
         # 去重(取最后一条),按时间排序
         s = s[~s.index.duplicated(keep="last")].sort_index()
+        # 过滤周末 forward-fill bar:LEAN equity 日历日发射,周末 bar 是周五收盘的冗余副本,
+        # 稀释 ann_ret 的 n 并用零收益抬高分母拉低 Sharpe。仅保留周一..周五。
+        s = s[s.index.dayofweek < 5]
+        if s.empty:
+            return None
         return s
     return None
 
@@ -157,6 +183,7 @@ def load_baseline_equity() -> Optional[pd.Series]:
     归一化为 1_000_000 起始净值,与回测日历对齐(2020-01-01..2026-06-23)。
 
     spec §7.2: baseline 不单独跑回测,直接用标的累计净值。
+    返回的 Series 仅含 tushare 的交易日索引(无周末),作为 strategy reindex 的对齐基准。
     """
     if not os.path.exists(TUSHARE_518880):
         print(f"WARN: baseline tushare parquet 不存在: {TUSHARE_518880}", file=sys.stderr)
@@ -177,20 +204,43 @@ def load_baseline_equity() -> Optional[pd.Series]:
     return baseline
 
 
+def align_to_baseline(strategy: pd.Series, baseline: pd.Series) -> pd.Series:
+    """把 strategy equity reindex 到 baseline 的交易日索引(ffill)。
+
+    spec §8.5 + annualization 修正:baseline(tushare fund_daily)仅含交易日,而 strategy
+    经 load_equity_series 已过滤周末但仍含少量 tushare 缺失的日(如临时停牌)。reindex 到
+    baseline 的交易日索引并用 ffill 补齐,确保:
+      - n_strategy == n_baseline(可比的年化天数分母)
+      - Sharpe 分母不含交易日之外的零收益 bar
+      - dd_duration 单位统一为"交易日"
+    baseline 本身已由 caller 裁剪到 COMPARE_START(spec §8.5)起,故这里只做纯 reindex+ffill。
+    """
+    return strategy.reindex(baseline.index, method="ffill").dropna()
+
+
 def main() -> int:
     baseline = load_baseline_equity()
+    # spec §8.5: 对比起算点从 2020-07 起(剔除 ~120d warmup 空仓平台)。
+    if baseline is not None:
+        baseline = baseline[baseline.index >= pd.Timestamp(COMPARE_START)]
     volonly = load_equity_series("gold2-volonly")
     full = load_equity_series("gold2-betavol")
+    # 把 strategy reindex 到 baseline 交易日索引,统一年化天数与 dd_duration 单位
+    if baseline is not None:
+        if volonly is not None:
+            volonly = align_to_baseline(volonly, baseline)
+        if full is not None:
+            full = align_to_baseline(full, baseline)
 
     rows = []
-    if baseline is not None:
+    if baseline is not None and len(baseline) >= 2:
         s = compute_stats(baseline)
         s["mode"] = "baseline"
         s["rebalances_per_yr"] = "-"
         rows.append(s)
     else:
-        print("baseline: 无 518880 数据")
-    if volonly is not None:
+        print("baseline: 无 518880 数据或对齐后不足两日")
+    if volonly is not None and len(volonly) >= 2:
         s = compute_stats(volonly)
         s["mode"] = "vol_only"
         n_orders = load_total_orders("gold2-volonly")
@@ -199,7 +249,7 @@ def main() -> int:
         rows.append(s)
     else:
         print("vol_only: 无 equity 数据(先跑 config-gold2-volonly.json)")
-    if full is not None:
+    if full is not None and len(full) >= 2:
         s = compute_stats(full)
         s["mode"] = "full"
         n_orders = load_total_orders("gold2-betavol")
