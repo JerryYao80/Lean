@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Factors.Forward;
-using QuantConnect.Securities;
 
 namespace QuantConnect.Algorithm.CSharp.Models.Gold2
 {
@@ -38,11 +37,21 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
             decimal target = wSmooth * dirCoef;
             target = ApplyDeadZone(_lastActualWeight, target, _threshold);
             _lastActualWeight = target;
-            yield return PortfolioTarget.Percent(algorithm, _gold, target);
+            // Null-guard: PortfolioTarget.Percent returns null during warmup (Price==0) or
+            // when the percent falls outside Settings.Min/MaxAbsolutePortfolioTargetPercentage.
+            // The base CreateTargets filters these via `if (target != null) targets.Add(target)`;
+            // mirror that here so the override never yields a null into the enumerable.
+            var portfolioTarget = PortfolioTarget.Percent(algorithm, _gold, target);
+            if (portfolioTarget != null)
+            {
+                yield return portfolioTarget;
+            }
         }
 
-        /// <summary>dead-zone 纯逻辑: |target-last| < threshold → 维持 last,否则更新。</summary>
-        public static decimal ApplyDeadZone(decimal lastActual, decimal target, decimal threshold)
+        /// <summary>dead-zone 纯逻辑: |target-last| < threshold → 维持 last,否则更新。
+        /// internal + InternalsVisibleTo(QuantConnect.Tests) 仅供单元测试可达,无运行期复用消费者
+        /// (对照 Gold2VolRegimeFactor.Variance 有明确的"供后续任务复用"语义)。</summary>
+        internal static decimal ApplyDeadZone(decimal lastActual, decimal target, decimal threshold)
             => Math.Abs(target - lastActual) < threshold ? lastActual : target;
     }
 }
