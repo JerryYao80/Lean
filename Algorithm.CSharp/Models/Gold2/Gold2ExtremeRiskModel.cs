@@ -28,12 +28,27 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
 
         public override IEnumerable<IPortfolioTarget> ManageRisk(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
-            var triggered = (int)_ext.Compute(_gold, algorithm.Time).Value == 1;
+            // 因子值直接判断,不做不必要的 (int) cast(因子返回 triggered ? 1m : 0m)。
+            var triggered = _ext.Compute(_gold, algorithm.Time).Value == 1m;
             foreach (var t in targets)
             {
+                // 只对本模型的 gold 标的施 cap;非 gold 标的直接透传(若 universe 扩展不会误伤)。
+                if (t.Symbol != _gold)
+                {
+                    yield return t;
+                    continue;
+                }
                 decimal w = TargetToWeight(algorithm, t);
                 w = ApplyCap(w, triggered, _extremeCap);
-                yield return PortfolioTarget.Percent(algorithm, t.Symbol, w);
+                // Null-guard: PortfolioTarget.Percent 在 warmup(Price==0)或 percent 越界
+                // (Min/MaxAbsolutePortfolioTargetPercentage)或未知 symbol 时返回 null。
+                // CompositeRiskManagementModel.ManageRisk 用 DistinctBy(t => t.Symbol) 合并,null 会导致 NRE,
+                // 与 sibling Gold2VolTargetPortfolioModel 一致地跳过。
+                var portfolioTarget = PortfolioTarget.Percent(algorithm, t.Symbol, w);
+                if (portfolioTarget != null)
+                {
+                    yield return portfolioTarget;
+                }
             }
         }
 
