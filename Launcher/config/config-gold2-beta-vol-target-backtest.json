@@ -31,7 +31,6 @@
     "extreme-vol-cap": "0.30",
     "realrate-cap": "0.60",
     "trend-floor": "0.20",
-    "initial-capital": "1000000",
-    "fee-rate": "0.0005"
+    "initial-capital": "1000000"
   }
 }

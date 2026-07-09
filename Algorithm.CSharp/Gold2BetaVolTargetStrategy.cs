@@ -29,7 +29,13 @@ namespace QuantConnect.Algorithm.CSharp
         private Gold2ExtremeRiskFactor _ext;
         private Gold2RealRateCapFactor _realrate;
         private GoldRealRateRegimeFactor _realrateInner;
-        private int _volWarmup;
+        // RVol_60d window is fixed at 60 days per spec §4.3, decoupled from vol-warmup
+        // (which seeds the EWMA variance). Tuning vol-warmup must NOT silently resize RVol.
+        private const int RvolWindow = 60;
+        // Simplified DFII10 regime thresholds (完整 5d/20d 斜率留作已知局限,spec §4.4)。
+        // ±0.5 are not in the spec's tunable table; kept as named constants for clarity.
+        private const decimal RealRateRisingFastThreshold = 0.5m;
+        private const decimal RealRateFallingFastThreshold = -0.5m;
         private readonly Queue<decimal> _rvolReturns = new();
 
         public override void Initialize()
@@ -38,14 +44,18 @@ namespace QuantConnect.Algorithm.CSharp
             SetCash(GetDecimalParameter("initial-capital", 1_000_000m));
             SetStartDate(GetDateParameter("start-date", new DateTime(2020, 1, 1)));
             SetEndDate(GetDateParameter("end-date", new DateTime(2026, 6, 23)));
-            SetBenchmark("518880");
 
+            // SetBenchmark must be called AFTER AddEquity so SymbolCache resolves "518880"
+            // to the SSE symbol; otherwise QCAlgorithm.SetBenchmark(string) falls through
+            // to Symbol.Create("518880", Equity, Market.USA) and the benchmark security
+            // has no A-share data → flat-0 benchmark → wrong Beta/Alpha/IR stats.
             var eq = AddEquity("518880", Resolution.Daily, Market.SSE);
             eq.FeeModel = new AShareStockFeeModel();
             eq.FillModel = new AShareStockFillModel();
             eq.BuyingPowerModel = new AShareStockBuyingPowerModel();
             eq.SettlementModel = new DelayedSettlementModel(0, TimeSpan.Zero);
             _gold = eq.Symbol;
+            SetBenchmark(_gold);
 
             _auSym = AddData<AuShfDailyBar>("AU.SHF", Resolution.Daily).Symbol;
             _vixSym = AddData<FredMacroData>("VIX", Resolution.Daily).Symbol;
@@ -58,7 +68,6 @@ namespace QuantConnect.Algorithm.CSharp
             _ext = new Gold2ExtremeRiskFactor();
             _realrateInner = new GoldRealRateRegimeFactor();
             _realrate = new Gold2RealRateCapFactor(_realrateInner, GetDecimalParameter("realrate-cap", 0.6m));
-            _volWarmup = GetIntParameter("vol-warmup", 60);
 
             SetUniverseSelection(new Gold2UniverseSelectionModel());
             SetAlpha(new Gold2TrendAlphaModel(_trend, _gold, GetDecimalParameter("trend-floor", 0.2m)));
@@ -74,10 +83,13 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 _trend.Update518880(bar518880.Close, bar518880.EndTime);
                 _vol.Update(bar518880.Close, bar518880.EndTime);
+                // RVol uses intraday open→close log return (excludes overnight gaps, by design:
+                // RVol_60d is meant as a session-volatility extreme-risk trigger distinct from
+                // the close→close EWMA vol in Gold2VolRegimeFactor). See spec §4.3.
                 if (bar518880.Open > 0)
                     _rvolReturns.Enqueue((decimal)Math.Log((double)(bar518880.Close / bar518880.Open)));
-                while (_rvolReturns.Count > _volWarmup) _rvolReturns.Dequeue();
-                if (_rvolReturns.Count >= _volWarmup)
+                while (_rvolReturns.Count > RvolWindow) _rvolReturns.Dequeue();
+                if (_rvolReturns.Count >= RvolWindow)
                 {
                     var variance = Gold2VolRegimeFactor.Variance(_rvolReturns);
                     var rvol = (decimal)Math.Sqrt((double)variance) * (decimal)Math.Sqrt(252);
@@ -104,8 +116,10 @@ namespace QuantConnect.Algorithm.CSharp
         private static GoldRegime ClassifyRealRateRegime(decimal dfii10)
         {
             // 简化阈值分类(完整 5d/20d 斜率留作已知局限,spec §4.4 包装已有 inner)。
-            if (dfii10 > 0.5m) return GoldRegime.RISING_FAST;
-            if (dfii10 < -0.5m) return GoldRegime.FALLING_FAST;
+            // ±0.5 是 named constants(见字段),非 spec tunable table 参数;Gold2RealRateCapFactor
+            // 仅在 RISING_FAST 时降仓,其余 regime 均 cap=1.0,故 STABLE/DRIFTING 行为等价。
+            if (dfii10 > RealRateRisingFastThreshold) return GoldRegime.RISING_FAST;
+            if (dfii10 < RealRateFallingFastThreshold) return GoldRegime.FALLING_FAST;
             return GoldRegime.STABLE;
         }
 
