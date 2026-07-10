@@ -45,7 +45,7 @@ class _GoodAdapter(StrategyReviewAdapter):
 class _BadAdapter(StrategyReviewAdapter):
     LAYERS = ["a", "b"]
     def layer_attribution(self, trade, context):
-        return {"a": Decimal("6")}  # sum != profit_loss; missing "b"
+        return {"a": Decimal("6"), "b": Decimal("0")}  # sum=6 != profit_loss=5
     def trade_narrative(self, trade, context):
         return {}
     @property
@@ -73,3 +73,23 @@ def test_review_result_holds_blocks():
     )
     assert rr.run_meta["strategy_name"] == "x"
     assert rr.tca is None
+
+
+def test_bad_adapter_raises_on_invariant_violation():
+    """Spec §6.1: BadAdapter (sum != profit_loss) must raise via validated_layer_attribution."""
+    import pytest
+    ad = _BadAdapter()
+    t = TradeRecord("518880", "t0", Decimal("1"), "t1", Decimal("1"),
+                    Decimal("1"), "long", Decimal("5"), Decimal("0"), Decimal("1"))
+    with pytest.raises(ValueError, match="sum"):
+        ad.validated_layer_attribution(t, None)
+
+
+def test_good_adapter_validated_passes():
+    import pytest
+    ad = _GoodAdapter()
+    t = TradeRecord("518880", "t0", Decimal("1"), "t1", Decimal("1"),
+                    Decimal("1"), "long", Decimal("5"), Decimal("0"), Decimal("1"))
+    result = ad.validated_layer_attribution(t, None)
+    assert set(result.keys()) == {"a", "b"}
+    assert sum(result.values()) == Decimal("5")

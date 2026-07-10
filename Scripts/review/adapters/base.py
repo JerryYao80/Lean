@@ -68,3 +68,22 @@ class StrategyReviewAdapter(ABC):
     @abstractmethod
     def sum_to_property(self) -> str:
         """Which TradeRecord field the layer contributions sum to. Always 'profit_loss'."""
+
+    def validated_layer_attribution(self, trade: TradeRecord, context: TradeContext) -> dict[str, Decimal]:
+        """Call layer_attribution + enforce sum-to-profit_loss invariant. Raises ValueError.
+
+        Spec §6.1: BadAdapter (sum != profit_loss, or keys != LAYERS) must raise.
+        The CLI (Task 8) calls this instead of layer_attribution directly so a
+        misimplemented adapter can never silently emit a non-reconciling breakdown.
+        """
+        result = self.layer_attribution(trade, context)
+        expected_keys = set(self.LAYERS)
+        if set(result.keys()) != expected_keys:
+            raise ValueError(
+                f"layer_attribution keys {set(result.keys())} != LAYERS {expected_keys}")
+        total = sum(result.values())
+        target = getattr(trade, self.sum_to_property)
+        if total != target:
+            raise ValueError(
+                f"layer_attribution sum {total} != {self.sum_to_property} {target}")
+        return result
