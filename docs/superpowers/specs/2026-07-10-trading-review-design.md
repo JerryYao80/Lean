@@ -89,7 +89,9 @@ Adapter 解析:`importlib.import_module(manifest.raw['review']['adapter_module']
 
 ### 1.5 管线 overlay(可选,永不默认阻断 deploy_gate)
 
-hook 点:`evolution_scheduler.fire_optimization()`(line 80),在状态文件写入(line 129)后调用,try/except 包裹 log+吞掉。(`_check_and_fire` 是 `main()` 内嵌套闭包 line 146,非外部可 hook。)
+**hook 链(统一描述,§5.3 同此)**:`_check_and_fire`(`evolution_scheduler.py:146`,`main()` 内嵌套闭包)在 line 153 调 `fire_optimization(args.manifest, config, args.state_path)`;`fire_optimization`(line 80)在状态文件写入(line 129)后是 review overlay 的**唯一挂载点**(因 `_check_and_fire` 是私有嵌套闭包,非外部可 hook)。review overlay 挂在 `fire_optimization` 末尾,try/except 包裹 log+吞掉。
+
+调用链:`main() → _check_and_fire() [line 158/164] → fire_optimization() [line 153 调用 line 80] → pipeline_overlay.run_if_scheduled() [新增,挂在 line 129 后] → run_review.py --write-manifest`。
 
 `pipeline_overlay.should_run()` 由 `manifest.raw.get('review',{}).get('review_schedule','manual')` 门控(weekly/on_backtest/manual);默认 `manual` → 不自动跑直到操作员加 `review:` 段。`deploy_gate` 保持 `manual`(config.yaml);review 纯粹附加观测。
 
@@ -108,6 +110,7 @@ review 层不碰任何 LEAN core 文件。唯一 C# 交互:读 natively 产出�
 - `strategy_name` = AlgorithmId = `Config.Get('algorithm-id', algorithm-type-name)` = result 文件名(非 `state.Name` 默认 "local")。与 `state_trace[0].strategy` 交叉校验,mismatch 时 warn,文件名值为准。
 - `backtest_id`(文件名)
 - `period_start` / `period_end`(`tradeStatistics.startDateTime`/`endDateTime`)
+- `total_closed_trade_pnl`(`= decimal.Parse(tradeStatistics.totalProfitLoss)`,gross closed-trade P&L,与 `layer_attribution` 求和目标同字段 — 供 tearsheet self-check 复用)
 - `generated_at`、`adapter_version`、`schema_version`
 
 ### 2.2 layer_attribution(必需,object,key=层名 + `_unattributed`)
@@ -158,6 +161,8 @@ slippage = 对 filled events 求 `(fillPrice - mid)/mid * 10000` 均值,`mid=(bi
 
 `order-events.Message` **不**作层标签(997/997 都是 LEAN fill-data 警告)。
 
+> **与 §3.2 的覆盖关系**:此 §2.7 机制是**框架级通用兜底**(无策略特定 adapter 时用 sourceModel 派生层 key)。gold2 由 adapter 的 §3.2 精确望远镜分解覆盖(`layer_attribution()` 返回 4 层 Decimal),**不**落回此 §2.7 路径。仅当 gold2 adapter 降级到 §3.5 残差模式时,`trend` 层才回退到 §2.7 的 sourceModel 派生。两者不并行,不冲突。
+
 ---
 
 ## 3. Adapter 协议 + gold2 归因数学
@@ -180,9 +185,9 @@ class StrategyReviewAdapter(ABC):
     def sum_to_property(self) -> str: ...   # "profit_loss" — LEAN Trade.ProfitLoss(gross, pre-fees)
 ```
 
-**TradeRecord**:`symbol, entry_time, entry_price, exit_time, exit_price, quantity(=Trade.Quantity,无符号), side, profit_loss(=Trade.ProfitLoss gross), fees(=Trade.TotalFees), tpv_entry(冻结), realized_pnl(派生 = profit_loss - fees)`。
+**TradeRecord**:`symbol, entry_time, entry_price, exit_time, exit_price, quantity(=Trade.Quantity,无符号), side(long|short), profit_loss(=Trade.ProfitLoss gross,已含方向符号 — LEAN 对 short 已乘 −1), fees(=Trade.TotalFees), tpv_entry(冻结), realized_pnl(派生 = profit_loss - fees)`。
 
-`profit_loss` 由 LEAN 在 `TradeBuilder.cs:328` 算成 `(ExitPrice-EntryPrice)*Quantity*sign*conversionRate*multiplier` — adapter **绝不**重算。
+> **方向语义**:`quantity` 无符号,方向信息在 `side` 与 `profit_loss` 内。`profit_loss` 由 LEAN 在 `TradeBuilder.cs:328` 算成 `(ExitPrice-EntryPrice)*Quantity*sign*conversionRate*multiplier`,其中 `sign` 由 `TradeDirection` 决定(long=+1,short=−1)— adapter **绝不**重算,只消费。gold2 adapter 对 long trade 用 §3.2 公式;short trade 走 guard(§3.2 long-only 约束)。`TradeRecord.quantity` 恒正,`Q_layer` 的符号由 adapter 在公式内处理(long 公式直接用,short 不进此路径)。
 
 **求和目标(用户确认)**:N 层求和 = `Trade.ProfitLoss`(gross),**非** net `realized_pnl`。LEAN 的 `Trade` 把 `ProfitLoss`(gross)与 `TotalFees`(恒正)分开(`Trade.cs:99,104`)。`sum_to_property = "profit_loss"`;`fees` 挂在 TradeRecord,narrative 里作调节行;`realized_pnl` 派生非求和目标。
 
@@ -197,6 +202,8 @@ class StrategyReviewAdapter(ABC):
 
 定义(long-only;`Δp = exit_price − entry_price`,带符号;LEAN ProfitLoss 对 Long 已乘 +1):
 
+> **long-only 约束(强制)**:gold2 永远只做多 — `Gold2TrendAlphaModel.cs:12,66-67` 明确"518880 不可做空,dir≤0(空头或 warmup)→ long-only Flat 保留底仓 floor",绝不发 `InsightDirection.Short`。故 §3.2 公式仅对 long 有效。adapter **必须**对每笔 trade 做方向 guard:`direction == 'short'` 时**不**套用 long 公式,直接 `raise` 或走 residual fallback(§3.5),绝不静默套用。`TradeRecord.direction` 字段保留是 schema 通用性(其他策略可能做空),gold2 adapter 断言 long-only。详见 §6.1 short-side test。
+
 ```
 scale  = TPV_e / p_e
 w_trend= dir_coef;  w_vol = w_after_vol
@@ -209,6 +216,8 @@ C_vol_target   = (Q_vol - Q_trend) * Δp
 C_extreme_risk = (Q_ext - Q_vol)   * Δp
 C_realrate     = (Q_real - Q_ext)  * Δp + δQ_lot * Δp
 ```
+
+`extreme_cap_was_protective = (Δp<0 AND extreme_triggered)` 按 long 语义(对 long,Δp<0 才是亏损)——仅 long trade 有效,short trade 由 guard 拦截不会到此分支。
 
 **求和不变式(望远镜,量纲正确)**:
 
@@ -351,16 +360,18 @@ review:
 
 (不写 state_trace 的策略,缺 state_trace **不**是 exit 3。)
 
-### 5.3 e2e 插入
+### 5.3 e2e 插入 + scheduler hook(与 §1.5 统一)
 
-`run_e2e.py`:在 `baseline = run_baseline_test(...)` 后、return 前插 review step,在 `e2e()` 内。gated by `review.review_schedule`;默认非阻断。
+两条挂载路径,都 gated by `review.review_schedule`,默认非阻断:
+
+**路径 A — `run_e2e.py`(on_backtest cadence)**:在 `baseline = run_baseline_test(...)` 后、return 前插 review step,在 `e2e()` 内。
 
 - `review_schedule == manual` 或 `review:` 缺失 → 跳过
 - `warn` → 永不阻断
 - `fail` + `block_deploy: false` → log,继续
 - `fail` + `block_deploy: true` → e2e 早返 `review.blocked_deploy: True`(唯一阻断路径)
 
-`evolution_scheduler.fire_optimization()`(line 80)是 `weekly` cadence 的 module-level hook — `_check_and_fire`(line 146 嵌套闭包)自调 `load_manifest()` 读 `.raw.get('review',{}).get('review_schedule')` 并在 try/except 中非阻断调 `run_review.py --write-manifest`。
+**路径 B — `evolution_scheduler.fire_optimization()`(weekly cadence)**:调用链为 `main() → _check_and_fire() [line 158/164] → fire_optimization() [line 153 调用 line 80] → pipeline_overlay.run_if_scheduled() [新增,挂在 line 129 状态文件写入后]`。`_check_and_fire`(line 146 嵌套闭包)本身**不**直接调 review — 它只是间接触发 `fire_optimization`,review overlay 挂在 `fire_optimization` 末尾,try/except 非阻断调 `run_review.py --write-manifest`。`fire_optimization` 内读 `load_manifest().raw.get('review',{}).get('review_schedule')` 决定是否跑。
 
 ### 5.4 manifest_loader 集成
 
@@ -376,6 +387,7 @@ raw-passthrough,**不加 `ReviewConfig` dataclass**(匹配 `cpcv`/`walk_forward`
 - **gold2 attribution sum-to-total**:property test — 随机 `TradeRecord` + `TradeContext`(sane 范围)→ `abs(sum(adapter.layer_attribution(t,c).values()) - t.profit_loss) < 1e-9`(Decimal)。并断言每个 `C_*` 有限,整手残差 `δQ_lot` 落在 `C_realrate`。
 - **review.json schema 验证**:`jsonschema.validate(doc, review_schema.json)` 对 (a) 手构良构 doc、(b) 逐个缺必需字段的 doc(必须 fail)、(c) `layer_attribution` 求和 ≠ `totalProfitLoss` 的 doc(adapter 侧,非 schema 强制 — schema 只查结构;求和不变式是 adapter 单测)。覆盖 string `totalProfitLoss` 的 `decimal.Parse`。
 - **No-lookahead spot checks**:用合成 `state_trace.jsonl`(`ts==entry` 行 `dir_coef` 反映 t−1 数据,`ts>entry` 行带 post-fill 权重)→ 断言 adapter 从 `ts>entry` 行读 `P`,绝不读 `ts==entry` 行。断言 `entry_signal` 按 `(symbol, entryTime)==(ticker, generatedTime)` 精确匹配,~0.1% 不匹配落 `entry_signal_source='absent...'`。
+- **short-side / direction guard**:构造 `direction=='short'` 的 `TradeRecord` → 断言 gold2 adapter `raise`(或走 residual fallback),**不**静默套用 long 公式(§3.2 long-only 约束)。再加一个 direction 混合 test case(同回测里 long + short 混合,gold2 应对 short 抛错、对 long 正常归因)。再加 schema 级校验:`direction=='short'` 时 `quantity` 恒正(无符号)、`profit_loss` 含方向符号(long 同号 short 反号)— CI 阶段抓 §3.2 long-only 假设违例。
 
 ### 6.2 已知局限
 
