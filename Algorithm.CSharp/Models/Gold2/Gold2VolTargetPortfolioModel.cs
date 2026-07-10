@@ -17,6 +17,10 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
         private readonly decimal _threshold;
         private decimal _lastActualWeight;
 
+        /// <summary>Last post-deadzone target weight. Review adapter reads this for the
+        /// vol_target-layer attribution (spec §3.3). 0 before first CreateTargets.</summary>
+        public decimal LastActualWeight => _lastActualWeight;
+
         public Gold2VolTargetPortfolioModel(Gold2VolRegimeFactor vol, Symbol gold, decimal threshold)
         {
             _vol = vol;

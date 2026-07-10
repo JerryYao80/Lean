@@ -20,6 +20,10 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
         private readonly decimal _floor;
         private readonly bool _disabled;
 
+        /// <summary>Last dirCoef emitted (insight.Weight). Review adapter reads this for the
+        /// trend-layer attribution (spec §3.3). 0 before first Update.</summary>
+        public decimal LastDirCoef;
+
         public override string Name => "Gold2TrendAlphaModel";
 
         public Gold2TrendAlphaModel(Gold2TrendFactor trend, Symbol gold, decimal floor, bool disabled = false)
@@ -37,6 +41,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
             /// 时生效(否则 floor 的"空头保留底仓"语义与"趋势层禁用"矛盾,故 disabled 时忽略 floor)。
             if (_disabled)
             {
+                LastDirCoef = 1.0m;
                 yield return new Insight(
                     _gold,
                     TimeSpan.FromDays(1),
@@ -67,6 +72,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
                 direction = InsightDirection.Flat;
                 weight = _floor;
             }
+            LastDirCoef = weight;
 
             yield return new Insight(
                 _gold,

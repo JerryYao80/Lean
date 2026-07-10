@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using QuantConnect.Algorithm.CSharp.Common;
@@ -38,6 +39,14 @@ namespace QuantConnect.Algorithm.CSharp
         private const decimal RealRateFallingFastThreshold = -0.5m;
         private readonly Queue<decimal> _rvolReturns = new();
 
+        // RL state trace: RL_TRACE_PATH env triggers per-bar state write (mirrors
+        // OptionVolArb5LayerStrategy.cs:270). Spec §3.3 — review adapter consumes this.
+        private string _rlTracePath;
+        private bool _trendDisabled;
+        private decimal _extremeCap;
+        private Gold2TrendAlphaModel _trendAlpha;
+        private Gold2VolTargetPortfolioModel _portfolio;
+
         public override void Initialize()
         {
             SetAccountCurrency(Currencies.CNY);
@@ -73,8 +82,12 @@ namespace QuantConnect.Algorithm.CSharp
             // trend-disable(spec §7.2 vol_only 控制实验): 完全旁路趋势层,dirCoef 恒=1.0,
             // 使 portfolio target = w_smooth × 1.0,即纯波动率目标。trend-floor 仅在 disabled=false 时生效。
             bool trendDisabled = GetBoolParameter("trend-disable", false);
-            SetAlpha(new Gold2TrendAlphaModel(_trend, _gold, GetDecimalParameter("trend-floor", 0.2m), trendDisabled));
-            SetPortfolioConstruction(new Gold2VolTargetPortfolioModel(_vol, _gold, GetDecimalParameter("rebalance-threshold", 0.05m)));
+            _trendDisabled = trendDisabled;
+            _extremeCap = GetDecimalParameter("extreme-vol-cap", 0.3m);
+            _trendAlpha = new Gold2TrendAlphaModel(_trend, _gold, GetDecimalParameter("trend-floor", 0.2m), trendDisabled);
+            SetAlpha(_trendAlpha);
+            _portfolio = new Gold2VolTargetPortfolioModel(_vol, _gold, GetDecimalParameter("rebalance-threshold", 0.05m));
+            SetPortfolioConstruction(_portfolio);
             AddRiskManagement(new Gold2ExtremeRiskModel(_ext, _gold, GetDecimalParameter("extreme-vol-cap", 0.3m)));
             AddRiskManagement(new Gold2RealRateCapModel(_realrate, _gold));
             SetExecution(new AShareLotSizeExecutionModel());
@@ -114,6 +127,24 @@ namespace QuantConnect.Algorithm.CSharp
                 var dfii10 = data.Get<FredMacroData>(_dfii10Sym);
                 if (dfii10 != null) _realrateInner.InjectRegime(_gold, ClassifyRealRateRegime(dfii10.MacroValue));
             }
+            WriteRlStateTraceIfNeeded(data.Time);
+        }
+
+        /// <summary>RL_TRACE_PATH env triggers per-bar state write. Mirrors OptionVolArb5LayerStrategy.
+        /// Called at end of OnData so LastDirCoef/LastActualWeight/extreme_triggered are current-bar.</summary>
+        private void WriteRlStateTraceIfNeeded(DateTime barTime)
+        {
+            if (_rlTracePath == null)
+                _rlTracePath = Environment.GetEnvironmentVariable("RL_TRACE_PATH") ?? "";
+            if (string.IsNullOrEmpty(_rlTracePath)) return;
+            try
+            {
+                File.AppendAllText(_rlTracePath, SerializeRlState(this) + "\n");
+            }
+            catch (Exception ex)
+            {
+                Log($"[Gold2] RL_TRACE_PATH write failed: {ex.Message}");
+            }
         }
 
         private static GoldRegime ClassifyRealRateRegime(decimal dfii10)
@@ -146,7 +177,12 @@ namespace QuantConnect.Algorithm.CSharp
                 w_smooth = _vol.Compute(_gold, algo.Time).Value,
                 trend_dir = (int)_trend.Compute(_gold, algo.Time).Value,
                 extreme_triggered = (int)_ext.Compute(_gold, algo.Time).Value == 1,
-                realrate_cap = _realrate.Compute(_gold, algo.Time).Value
+                realrate_cap = _realrate.Compute(_gold, algo.Time).Value,
+                // Review-adapter fields (spec §3.3): telescoping decomposition inputs.
+                dir_coef = _trendAlpha.LastDirCoef,
+                w_after_vol = _portfolio.LastActualWeight,
+                extreme_cap = _extremeCap,
+                trend_disabled = _trendDisabled
             });
         }
 
