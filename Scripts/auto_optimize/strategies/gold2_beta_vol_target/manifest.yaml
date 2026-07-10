@@ -14,6 +14,7 @@ parameter_space:
   - {name: extreme-vol-cap, type: float, range: [0.20, 0.50], default: 0.30, layer: L4_Risk}
   - {name: realrate-cap, type: float, range: [0.40, 0.80], default: 0.60, layer: L4_Risk}
   - {name: trend-floor, type: float, range: [0.0, 0.30], default: 0.20, layer: L2_Alpha}
+  - {name: trend-disable, type: bool, range: [false, true], default: false, layer: L2_Alpha}
 state_schema:
   fields:
     - {name: ts, type: string}
@@ -25,7 +26,11 @@ state_schema:
     - {name: trend_dir, type: int}
     - {name: extreme_triggered, type: bool}
     - {name: realrate_cap, type: float}
-  dim_hint: 9
+    - {name: dir_coef, type: float}
+    - {name: w_after_vol, type: float}
+    - {name: extreme_cap, type: float}
+    - {name: trend_disabled, type: bool}
+  dim_hint: 13
 reward_config:
   primary: dsr
   shaping:
@@ -34,3 +39,16 @@ reward_config:
 universe:
   symbols: ["518880"]
   timezone: Asia/Shanghai
+review:
+  adapter_module: adapters.gold2
+  adapter_class: Gold2ReviewAdapter
+  layer_names: [trend, vol_target, extreme_risk, realrate_cap]
+  review_schedule: on_backtest
+  block_deploy: false
+  last_review: null
+  review_status: null
+  review_artifact_path: null
+  thresholds:
+    max_layer_attribution_gap: 0.15
+    min_narrative_trades: 20
+    max_consecutive_dd_days: 15
