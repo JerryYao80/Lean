@@ -1,0 +1,8 @@
+[
+  ["Review Status", [8, 12, 0, 0], "stat"],
+  ["Layer Attribution", [8, 12, 0, 8], "barchart"],
+  ["Per-Trade pnl vs mae", [8, 6, 0, 16], "scatter"],
+  ["Drawdown Attribution", [8, 6, 6, 16], "table"],
+  ["Cumulative Return by Regime", [8, 12, 0, 24], "timeseries"],
+  ["Layer PnL %", [8, 12, 0, 32], "bargauge"]
+]
