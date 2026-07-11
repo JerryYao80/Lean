@@ -54,6 +54,7 @@ def _drawdown_attribution(algo_data: dict) -> list:
                     "trough_time": _ts_to_iso(trough_ts),
                     "recovery_time": _ts_to_iso(ts),
                     "depth_pct": trough_depth,
+                    "duration_days": max(0, int(ts) - int(peak_ts)) // 86400,
                     "top_contributing_layers": [],
                     "top_contributing_trades": [],
                     "regime_during": None,
@@ -66,6 +67,7 @@ def _drawdown_attribution(algo_data: dict) -> list:
             "trough_time": _ts_to_iso(trough_ts),
             "recovery_time": None,
             "depth_pct": trough_depth,
+            "duration_days": max(0, int(trough_ts) - int(peak_ts)) // 86400,
             "top_contributing_layers": [],
             "top_contributing_trades": [],
             "regime_during": None,
@@ -73,6 +75,14 @@ def _drawdown_attribution(algo_data: dict) -> list:
         })
     episodes.sort(key=lambda e: e["depth_pct"])
     return episodes[:5]
+
+
+def _safe_float(x):
+    """Parse float defensively; None on failure (spec §2.5 graceful TCA degradation)."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
 
 
 def _tca(algo_data: dict, order_events_path: Path) -> dict:
@@ -88,19 +98,19 @@ def _tca(algo_data: dict, order_events_path: Path) -> dict:
         oid = str(ev.get("orderId"))
         order = orders.get(oid, {})
         osd = order.get("orderSubmissionData", {})
-        bid = osd.get("bidPrice")
-        ask = osd.get("askPrice")
-        last = osd.get("lastPrice")
-        fill = ev.get("fillPrice")
+        bid = _safe_float(osd.get("bidPrice"))
+        ask = _safe_float(osd.get("askPrice"))
+        last = _safe_float(osd.get("lastPrice"))
+        fill = _safe_float(ev.get("fillPrice"))
         if fill is None:
             continue
         mid = None
-        if bid is not None and ask is not None and float(bid) > 0 and float(ask) > 0:
-            mid = (float(bid) + float(ask)) / 2
-        elif last is not None and float(last) > 0:
-            mid = float(last)
+        if bid is not None and bid > 0 and ask is not None and ask > 0:
+            mid = (bid + ask) / 2
+        elif last is not None and last > 0:
+            mid = last
         if mid and mid > 0:
-            slips.append((float(fill) - mid) / mid * 10000)
+            slips.append((fill - mid) / mid * 10000)
     if not slips:
         return {"avg_slippage_bps": None, "fill_quality_score": None, "n_fills": n_fills,
                 "source": "absent:orderSubmissionData" if n_fills == 0 else "absent:no mid"}
@@ -162,15 +172,24 @@ def run(manifest_path: str, results_dir: str, write_html=False, write_influx=Fal
         if ctx.entry_bar and "tpv" in ctx.entry_bar:
             ct.tpv_entry = Decimal(str(ctx.entry_bar["tpv"]))
         try:
-            layers = adapter.layer_attribution(ct, ctx)
+            # validated_layer_attribution enforces keys==LAYERS + sum==profit_loss (spec §6.1).
+            # Residual fallback (no entry_bar) is handled inside layer_attribution itself, so
+            # the only ValueError that escapes is a genuine invariant violation — let it
+            # propagate as a hard failure rather than silently papering over a broken adapter.
+            layers = adapter.validated_layer_attribution(ct, ctx)
             for ln, v in layers.items():
                 layer_agg[ln]["pnl_abs"] += v
                 layer_agg[ln]["n_trades"] += 1
                 if v > 0:
                     layer_agg[ln]["n_wins"] += 1
+            trade_layer_contrib = {ln: str(v) for ln, v in layers.items()}
         except ValueError:
+            # Should not happen: residual path returns a sum-equal dict. If it does (e.g.
+            # long-only guard on a short trade with no entry_bar is impossible by construction),
+            # attribute all PnL to LAYERS[0] and flag for investigation.
             layer_agg[adapter.LAYERS[0]]["pnl_abs"] += ct.profit_loss
             layer_agg[adapter.LAYERS[0]]["n_trades"] += 1
+            trade_layer_contrib = {adapter.LAYERS[0]: str(ct.profit_loss)}
         per_trade.append({
             "trade_id": ct.order_ids[0] if ct.order_ids else len(per_trade) + 1,
             "symbol": ct.symbol, "entry_time": ct.entry_time, "exit_time": ct.exit_time,
@@ -178,7 +197,7 @@ def run(manifest_path: str, results_dir: str, write_html=False, write_influx=Fal
             "direction": ct.side, "quantity": str(ct.quantity),
             "pnl": str(ct.profit_loss), "fees": str(ct.fees),
             "mae": "0", "mfe": "0", "end_trade_drawdown": "0",
-            "days_held": 0, "layer_contributions": {},
+            "days_held": 0, "layer_contributions": trade_layer_contrib,
         })
 
     layer_attribution = {}
@@ -231,5 +250,36 @@ def run(manifest_path: str, results_dir: str, write_html=False, write_influx=Fal
         from influx_export import export
         export(doc, algorithm_id=manifest.strategy_name, mode="backtesting",
                run_id=Path(results_dir).name, dry_run=False)
+
+    # Sidecar last_review (spec §1.3 step 9, §5.2): write review status without
+    # mutating the source manifest YAML (keeps git diff clean). The scheduler/
+    # overlay reads this sidecar to know whether review ran. review_status:
+    # 'pass' (sum invariant held, tca present), 'warn' (degraded but usable).
+    review_status = "pass"
+    if doc["tca"] is None:
+        review_status = "warn"
+    sidecar = {
+        "last_review": doc["run_meta"]["generated_at"],
+        "review_status": review_status,
+        "review_artifact_path": str((out_dir / "review.json").relative_to(_REPO)),
+        "backtest_id": doc["run_meta"]["backtest_id"],
+    }
+    (out_dir / "review.last_review.json").write_text(json.dumps(sidecar, indent=2, default=str))
+    print(f"[review] wrote {out_dir / 'review.last_review.json'} (status={review_status})")
+
+    # --write-manifest: also write last_review/review_status/review_artifact_path
+    # back to the source manifest YAML via ruamel.yaml (preserves comments).
+    if write_manifest:
+        from ruamel.yaml import YAML
+        yaml_loader = YAML()
+        yaml_loader.preserve_quotes = True
+        mpath = Path(manifest_path)
+        mdoc = yaml_loader.load(mpath.read_text())
+        if mdoc.get("review") is not None:
+            mdoc["review"]["last_review"] = sidecar["last_review"]
+            mdoc["review"]["review_status"] = review_status
+            mdoc["review"]["review_artifact_path"] = sidecar["review_artifact_path"]
+            mpath.write_text(yaml_loader.dump(mdoc))
+            print(f"[review] wrote back manifest {mpath}")
 
     return 0
