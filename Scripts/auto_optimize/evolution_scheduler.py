@@ -129,6 +129,20 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
     pathlib.Path(state_path).write_text(json.dumps(state, indent=2, default=str))
     print(f"  ✅ 优化完成, state 已更新: {state_path}")
     print(f"  ⚠️ deploy_gate=manual, 需人工审核后部署 ONNX")
+
+    # Review overlay (spec §1.5, §5.3): weekly cadence, non-blocking.
+    # fire_optimization is the ONLY module-level hook point (_check_and_fire at
+    # line 146 is a private nested closure, not externally hookable).
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "review"))
+        from pipeline_overlay import run_if_scheduled
+        from manifest_loader import load_manifest as _lm
+        m = _lm(manifest_path)
+        results_dir = str(_REPO_ROOT / "Results" / m.strategy_name)
+        run_if_scheduled(manifest_path, results_dir, m)
+    except Exception as ex:
+        print(f"  [review-overlay] non-blocking failure: {ex}")
     return True
 
 

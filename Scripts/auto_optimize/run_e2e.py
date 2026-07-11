@@ -1,5 +1,6 @@
 """End-to-end: Layer A optimize → Layer C train → export → baseline. Spec Phase 5."""
 import argparse, json, pathlib, subprocess
+from pathlib import Path
 from manifest_loader import load_manifest
 from bayesian_optimizer import optimize
 from overfitting_report import generate_report
@@ -18,7 +19,18 @@ def e2e(manifest_path: str, config: dict):
                              dsr_oos_std=0.1, ridge_converged=a_result["ridge_converged"])
     # 基线对比
     baseline = run_baseline_test({"dsr": a_result["best_value"]}, {"dsr": 0}, {"dsr": 0})
-    return {"layer_a": a_result, "overfitting": report, "baseline": baseline}
+    # Review overlay (spec §5.3): non-blocking, gated by review.review_schedule
+    review_result = None
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "review"))
+        from pipeline_overlay import run_if_scheduled
+        results_dir = str(Path(__file__).resolve().parents[2] / "Results" / manifest.strategy_name)
+        ran = run_if_scheduled(manifest_path, results_dir, manifest)
+        review_result = {"ran": ran}
+    except Exception as e:
+        review_result = {"ran": False, "error": str(e)}
+    return {"layer_a": a_result, "overfitting": report, "baseline": baseline, "review": review_result}
 
 if __name__ == "__main__":
     import yaml

@@ -1,5 +1,5 @@
 """CI manifest↔code consistency check. Spec §2.3 / 门0."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from manifest_loader import StrategyManifest
 
 
@@ -7,10 +7,12 @@ from manifest_loader import StrategyManifest
 class LintResult:
     ok: bool
     errors: list
+    warnings: list = field(default_factory=list)   # Spec §5.4: advisory, non-gate-failing
 
 
 def lint_manifest(manifest: StrategyManifest, code_params: set, state_fields: set) -> LintResult:
     errors = []
+    warnings = []
     completeness = getattr(manifest, "rl_state_completeness", "unaudited")
     if completeness in ("partial", "unaudited"):
         errors.append(
@@ -24,4 +26,9 @@ def lint_manifest(manifest: StrategyManifest, code_params: set, state_fields: se
         errors.append(f"state field '{f}' declared in manifest but not produced by SerializeRlState()")
     for f in state_fields - manifest_fields:
         errors.append(f"state field '{f}' produced by SerializeRlState() but not in manifest")
-    return LintResult(ok=len(errors) == 0, errors=errors)
+    # Spec §5.4: review-not-configured advisory warning (not an error → ok stays derivable from errors)
+    raw = getattr(manifest, "raw", None) or {}
+    review = raw.get("review", {})
+    if not review:
+        warnings.append("no review: block in manifest — trading-review (复盘) not configured")
+    return LintResult(ok=len(errors) == 0, errors=errors, warnings=warnings)
