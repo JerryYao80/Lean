@@ -60,5 +60,42 @@ class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
         return shaping
 
     def _downsample_per_bar(self, state_trace):
-        """Spec §3.3: per-bar telescoping. Implemented in Task 5."""
-        return []
+        """Spec §3.3: per-bar telescoping layer contributions from state_trace.
+        For each bar transition t-1→t:
+          scale = tpv_t / close_{t-1}; dp = close_t - close_{t-1}
+          C_trend = w_trend * scale * dp
+          C_vol_target = (w_vol - w_trend) * scale * dp
+          C_extreme_risk = (w_ext - w_vol) * scale * dp
+          C_realrate = (w_real - w_ext) * scale * dp
+        """
+        if not state_trace or len(state_trace) < 2:
+            return []
+        per_bar = []
+        for i in range(1, len(state_trace)):
+            prev = state_trace[i - 1]
+            curr = state_trace[i]
+            try:
+                close_prev = float(prev["close"])
+                close_curr = float(curr["close"])
+                tpv = float(curr["tpv"])
+                if close_prev <= 0:
+                    continue
+                scale = tpv / close_prev
+                dp = close_curr - close_prev
+                dir_coef = float(curr.get("dir_coef", 1.0))
+                w_vol = float(curr.get("w_after_vol", 0.0))
+                extreme_triggered = bool(curr.get("extreme_triggered", False))
+                extreme_cap = float(curr.get("extreme_cap", 0.3))
+                realrate_cap = float(curr.get("realrate_cap", 0.6))
+                w_trend = dir_coef
+                w_ext = min(w_vol, extreme_cap) if extreme_triggered else w_vol
+                w_real = min(w_ext, realrate_cap)
+                per_bar.append({
+                    "trend": w_trend * scale * dp,
+                    "vol_target": (w_vol - w_trend) * scale * dp,
+                    "extreme_risk": (w_ext - w_vol) * scale * dp,
+                    "realrate_cap": (w_real - w_ext) * scale * dp,
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return per_bar

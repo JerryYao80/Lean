@@ -101,3 +101,32 @@ def test_attribution_method_passthrough():
     ad = Gold2FeedbackAdapter()
     action = ad.feedback_signal(_manifest(), _review(), [])
     assert action.attribution_method == "telescoping"
+
+
+def test_per_bar_downsample_sums_to_telescoping():
+    """Spec §3.3: per-bar layer contributions (telescoping)."""
+    ad = Gold2FeedbackAdapter()
+    # close: 10→11→12 (Δp=+1 each); tpv=1000 → scale=1000/10=100
+    # w_trend=1.0, w_vol=0.5, w_ext=0.5 (no trigger), w_real=0.5
+    state_trace = [
+        {"ts": "2020-07-01T00:00:00", "tpv": 1000.0, "dir_coef": 1.0, "w_after_vol": 0.5,
+         "extreme_triggered": False, "extreme_cap": 0.3, "realrate_cap": 0.6, "close": 10.0},
+        {"ts": "2020-07-02T00:00:00", "tpv": 1000.0, "dir_coef": 1.0, "w_after_vol": 0.5,
+         "extreme_triggered": False, "extreme_cap": 0.3, "realrate_cap": 0.6, "close": 11.0},
+        {"ts": "2020-07-03T00:00:00", "tpv": 1000.0, "dir_coef": 1.0, "w_after_vol": 0.5,
+         "extreme_triggered": False, "extreme_cap": 0.3, "realrate_cap": 0.6, "close": 12.0},
+    ]
+    per_bar = ad._downsample_per_bar(state_trace)
+    assert len(per_bar) == 2  # 2 transitions
+    # bar 0→1: Δp=1, scale=100 → C_trend=1.0*100*1=100; C_vol=(0.5-1.0)*100*1=-50; C_ext=0; C_real=0
+    assert per_bar[0]["trend"] == 100.0
+    assert per_bar[0]["vol_target"] == -50.0
+    assert per_bar[0]["extreme_risk"] == 0.0
+    assert per_bar[0]["realrate_cap"] == 0.0
+
+
+def test_per_bar_downsample_empty_on_missing_fields():
+    ad = Gold2FeedbackAdapter()
+    state_trace = [{"ts": "2020-07-01"}]
+    per_bar = ad._downsample_per_bar(state_trace)
+    assert per_bar == []
