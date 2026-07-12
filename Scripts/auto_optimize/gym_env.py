@@ -65,8 +65,14 @@ class RlRiskEnv(gym.Env):
                 if alpha < 0.1: r -= term["weight"]
         return self._obs(), r, terminated, truncated, {}
 
-def eval_term(term_name, alpha, scaled_pnl, var_excess, dd_excess):
+def eval_term(term_name, alpha, scaled_pnl, var_excess, dd_excess, per_bar=None):
     """注册表, 供 manifest 扩展自定义 shaping 项."""
+    if term_name == "layer_contrib_penalty":
+        # Spec §3.3: weight * sum(-neg layer contrib) for protective layers
+        if per_bar:
+            neg_sum = sum(-v for row in per_bar for v in row.values() if v < 0)
+            return neg_sum
+        return 0
     table = {
         "scaled_pnl": scaled_pnl,
         "var_excess_penalty": -max(0, var_excess),
