@@ -47,6 +47,12 @@ namespace QuantConnect.Algorithm.CSharp
         private Gold2TrendAlphaModel _trendAlpha;
         private Gold2VolTargetPortfolioModel _portfolio;
 
+        // Feedback-loop fields (spec §3.5): drawdown + per-bar pnl + close for per-bar telescoping.
+        // Mirrors OptionVolArb5LayerStrategy.cs:252-265.
+        private decimal _peakTpv;
+        private decimal _prevTpv;
+        private decimal _lastClose;
+
         public override void Initialize()
         {
             SetAccountCurrency(Currencies.CNY);
@@ -99,6 +105,7 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 _trend.Update518880(bar518880.Close, bar518880.EndTime);
                 _vol.Update(bar518880.Close, bar518880.EndTime);
+                _lastClose = bar518880.Close;   // Feedback §3.5: for per-bar telescoping
                 // RVol uses intraday open→close log return (excludes overnight gaps, by design:
                 // RVol_60d is meant as a session-volatility extreme-risk trigger distinct from
                 // the close→close EWMA vol in Gold2VolRegimeFactor). See spec §4.3.
@@ -128,6 +135,10 @@ namespace QuantConnect.Algorithm.CSharp
                 if (dfii10 != null) _realrateInner.InjectRegime(_gold, ClassifyRealRateRegime(dfii10.MacroValue));
             }
             WriteRlStateTraceIfNeeded(data.Time);
+            // Feedback §3.5: update peak/prev for drawdown + per-bar pnl.
+            var tpvNow = Portfolio.TotalPortfolioValue;
+            if (tpvNow > _peakTpv) _peakTpv = tpvNow;
+            _prevTpv = tpvNow;
         }
 
         /// <summary>RL_TRACE_PATH env triggers per-bar state write. Mirrors OptionVolArb5LayerStrategy.
@@ -167,6 +178,8 @@ namespace QuantConnect.Algorithm.CSharp
         public string SerializeRlState(QCAlgorithm algo)
         {
             var tpv = Portfolio.TotalPortfolioValue;
+            var drawdown = _peakTpv > 0 ? Math.Max(0m, (_peakTpv - tpv) / _peakTpv) : 0m;
+            var pnl = _prevTpv > 0 ? (tpv - _prevTpv) / _prevTpv : 0m;
             var positions = Securities.Values
                 .Where(s => s.Holdings.Quantity != 0)
                 .Select(s => new { sym = s.Symbol.Value, w = s.Holdings.Quantity * s.Price / tpv }).ToList();
@@ -182,7 +195,9 @@ namespace QuantConnect.Algorithm.CSharp
                 dir_coef = _trendAlpha.LastDirCoef,
                 w_after_vol = _portfolio.LastActualWeight,
                 extreme_cap = _extremeCap,
-                trend_disabled = _trendDisabled
+                trend_disabled = _trendDisabled,
+                // Feedback-adapter fields (spec §3.5): observation + per-bar telescoping.
+                drawdown, pnl, close = _lastClose
             });
         }
 
