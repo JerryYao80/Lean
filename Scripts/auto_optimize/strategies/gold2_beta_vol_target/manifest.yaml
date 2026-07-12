@@ -30,7 +30,9 @@ state_schema:
     - {name: w_after_vol, type: float}
     - {name: extreme_cap, type: float}
     - {name: trend_disabled, type: bool}
-  dim_hint: 13
+    - {name: drawdown, type: float}
+    - {name: pnl, type: float}
+  dim_hint: 15
 reward_config:
   primary: dsr
   shaping:
@@ -52,3 +54,16 @@ review:
     max_layer_attribution_gap: 0.15
     min_narrative_trades: 20
     max_consecutive_dd_days: 15
+feedback:
+  adapter_module: feedback.adapters.gold2
+  adapter_class: Gold2FeedbackAdapter
+  trigger_thresholds:
+    review_status_fail: true
+    max_layer_attribution_gap: 0.15
+    min_narrative_trades: 20
+  shaping_term_map:
+    extreme_risk: extreme_risk_contrib_penalty
+    realrate_cap: realrate_cap_contrib_penalty
+  observation_fields: [tpv, cash_pct, w_smooth, trend_dir, extreme_triggered,
+                       realrate_cap, dir_coef, w_after_vol, extreme_cap, trend_disabled,
+                       drawdown, pnl, t]
