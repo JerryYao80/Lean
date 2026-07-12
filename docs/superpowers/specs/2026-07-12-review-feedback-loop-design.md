@@ -80,7 +80,8 @@ class StrategyFeedbackAdapter(ABC):
 ```
 背测 (LEAN, gold2 SerializeRlState callsite 已接, RL_TRACE_PATH 触发写盘)
   → state_trace.jsonl (per-bar 13 字段) + review.json (layer 归因) + sidecar
-  → feedback adapter.feedback_signal(manifest, review_doc, state_trace)
+  → signals.orchestrate(manifest): 合并 review.json + sidecar → review_doc
+  → adapter.feedback_signal(manifest, review_doc, state_trace)
   → FeedbackAction {trigger, shaping_overrides, observation_fields, per_bar_layer_contrib}
   → 三层注入:
      (1) evolution_scheduler.check_triggers 加 review_drift (读 FeedbackAction.trigger)
@@ -194,11 +195,14 @@ class StrategyFeedbackAdapter(ABC):
 
 ### 3.2 触发器层逻辑(gold2)
 
-`feedback_signal` 触发判定(读 manifest `feedback.trigger_thresholds`):
+`feedback_signal` 触发判定(读 manifest `feedback.trigger_thresholds`)。
+
+**`review_doc` 参数定义**:orchestrator(`signals.py`)合并 review.json + sidecar `review.last_review.json` 后传入的 dict。合并规则:`review_doc = {**review_json_content, "review_status": sidecar["review_status"], "last_review": sidecar["last_review"]}`。adapter 不直接读 sidecar 文件。
+
 ```
 trigger = False
 reasons = []
-if review_doc["review_status_or_sidecar"] == "fail":          # review_status_fail: true
+if review_doc.get("review_status") == "fail":               # review_status_fail: true (来自 sidecar)
     trigger = True; reasons.append("review_status=fail")
 for layer, agg in review_doc["layer_attribution"].items():
     if abs(agg["pnl_pct_of_total"]) > thresholds["max_layer_attribution_gap"]:  # 0.15
@@ -308,13 +312,13 @@ class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
 ```python
 # evolution_scheduler.py check_triggers 内,line 75 后加:
 # 5. review_drift (复盘反馈触发器, spec §4.1)
+# signals.orchestrate(manifest) 合并 review.json + sidecar → review_doc, load adapter, build FeedbackAction
+from feedback.signals import orchestrate as orchestrate_feedback
 review_path = pathlib.Path(results_dir) / manifest.strategy_name / "review" / "review.last_review.json"
-review_doc = _read_review(review_path)  # 同 _read_live_metrics 模式
-if review_doc:
+if review_path.exists():
     fb_cfg = manifest.raw.get("feedback", {})
     if fb_cfg:
-        adapter = _resolve_feedback_adapter(fb_cfg)  # importlib
-        action = adapter.feedback_signal(manifest, _read_full_review(review_path), state_trace)
+        action = orchestrate_feedback(manifest, results_dir)  # 内部读 review.json + sidecar + state_trace
         triggers["review_drift"] = action.trigger
         if action.trigger:
             # 把 shaping_overrides + observation_fields 写入临时文件,供 fire_optimization 读
