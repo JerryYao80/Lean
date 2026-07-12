@@ -30,4 +30,5 @@ def test_state_schema_has_4_review_fields():
     names = {f.name for f in m.state_schema.fields}
     for f in ["dir_coef", "w_after_vol", "extreme_cap", "trend_disabled"]:
         assert f in names, f"state field {f} missing (SerializeRlState emits it)"
-    assert m.state_schema.dim_hint == 13
+    # dim_hint: original 9 + 4 review fields + 2 feedback fields (drawdown/pnl) = 15
+    assert m.state_schema.dim_hint == 15
