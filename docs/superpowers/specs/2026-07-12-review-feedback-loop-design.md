@@ -93,9 +93,16 @@ class StrategyFeedbackAdapter(ABC):
   → ONNX → deploy_gate (manual)
 ```
 
-### 1.4 gold2 state_trace callsite 接入(依赖项)
+### 1.4 gold2 state_trace callsite + 路径约定(依赖项)
 
 gold2 `SerializeRlState`(`Gold2BetaVolTargetStrategy.cs:136`)已写 11 字段,`OnData` 末尾 `WriteRlStateTraceIfNeeded(data.Time)` callsite 已接(Task 3 review-layer 实现)。背测时设 `RL_TRACE_PATH` env 产 state_trace.jsonl,解锁 per-bar 归因。
+
+**state_trace 路径约定(eval-update2 衔接点修复)**:为避免"写入方靠 env var、读取方靠约定"的隐式双约定(踩过 CLI --parameters 被 LEAN 忽略同类坑),统一约定:
+
+- **背测产出路径固定**:`RL_TRACE_PATH` 背测时指向 `Results/<strategy_name>/state_trace.jsonl`(与 review.json 同 results 目录)。
+- **`orchestrate(manifest, results_dir)` 按约定拼路径读**:`Path(results_dir) / "state_trace.jsonl"`,不依赖 env var 在重训时还存在(重训是另一进程/另一次调用,env var 可能已失)。
+- **`alpha_perturbation_runner` 配合**:`run_perturbed_backtest` 的 `trace_output_path` 参数已接受自定义路径(`alpha_perturbation_runner.py:39`),改为指向约定路径。`merge_traces` 产 `state_trace_diverse.jsonl`(多 perturbation 合并)时也落在同目录。
+- **校验**:`manifest_lint` 加一条 warning(非 error)若 `feedback.observation_fields` 非空但 `Results/<strategy>/state_trace.jsonl` 不存在(预示 callsite 未接或 env 未设)。
 
 需补 2 字段(`drawdown`/`pnl`,见 §3.5)→ state_schema dim_hint 11→13。
 
@@ -132,14 +139,16 @@ feedback:
 
 ### 2.2 新 shaping term(通用,注册到 gym_env + trace_to_mdp_dataset)
 
-`layer_contrib_penalty` — 通用 term,按层负贡献加权惩罚:
+`layer_contrib_penalty` — 通用 term,对**保护性质层**(extreme_risk/realrate_cap)的负贡献做**非对称加权惩罚**:
 ```
 layer_contrib_penalty = weight * sum(
-    -C_layer_bar  for layer, C_layer_bar in per_bar_layer_contrib[layer].items()
+    -C_layer_bar  for layer in {extreme_risk, realrate_cap}
     if C_layer_bar < 0
-)   # 只惩罚负贡献层;正贡献层不奖励(避免 double-count 总 PnL)
+)
 ```
-per-bar 计算需 state_trace 含 per-bar 层贡献。gold2 telescoping per-bar 归因 = `Q_layer * Δp_bar`(同 §3 review 望远镜,但 per-bar 而非 per-trade)。adapter 在 `feedback_signal` 里把 review.json 的 per-trade 层归因**下采样**到 per-bar(用 state_trace 的 `w_after_vol/extreme_triggered` 等 per-bar 字段重算 per-bar 层贡献)。
+**设计意图(eval-update2 #1 澄清)**:这是**有意的非对称风险惩罚**,不是"避免 double-count"。理由:extreme_risk/realrate_cap 两层本应是**保护性质**(cap 在极端 regime 降仓以避险)。这两层出现负贡献,意味着保护逻辑在亏损 market 里仍在持仓(即保护**失效**),比 trend/vol_target 层的普通亏损更值得加权惩罚 — 后者是策略主动承担的风险,前者是保护机制失灵。故只对这两层负贡献额外惩罚;正贡献不额外奖励(保护层盈利是其本职,不应诱导 RL 为追求保护层盈利而降仓)。
+
+base reward 的 `scaled_pnl` 已含所有层总 PnL(含这两层负贡献),penalty 是**叠加的非对称加权**,目的是让 RL 对保护层失效更敏感。这与 `drawdown_excess_penalty`(对总回撤额外惩罚)是同类设计 — 都是有意的非对称风险厌恶,非"避免重复计算"。
 
 ### 2.3 reward 源统一(顺带修 divergent 缺陷)
 
@@ -199,17 +208,24 @@ class StrategyFeedbackAdapter(ABC):
 
 **`review_doc` 参数定义**:orchestrator(`signals.py`)合并 review.json + sidecar `review.last_review.json` 后传入的 dict。合并规则:`review_doc = {**review_json_content, "review_status": sidecar["review_status"], "last_review": sidecar["last_review"]}`。adapter 不直接读 sidecar 文件。
 
+**样本量前置 gate**(eval-update2 #3 修复):`min_narrative_trades` 是 layer_gap 的**前置门控**,不是独立判据。样本不足时 layer_gap 整体跳过(小样本噪声不应触发重训),只保留不依赖样本量的 `review_status=fail` 硬失败判据。
+
 ```
 trigger = False
 reasons = []
+# (1) 硬失败:不依赖样本量,始终生效
 if review_doc.get("review_status") == "fail":               # review_status_fail: true (来自 sidecar)
     trigger = True; reasons.append("review_status=fail")
-for layer, agg in review_doc["layer_attribution"].items():
-    if abs(agg["pnl_pct_of_total"]) > thresholds["max_layer_attribution_gap"]:  # 0.15
-        trigger = True; reasons.append(f"layer_gap {layer}={agg['pnl_pct_of_total']}>0.15")
-if len(review_doc["per_trade_narrative"]) < thresholds["min_narrative_trades"]:  # 20
-    # warn 不 trigger(数据不足,重训无意义)
-    pass
+# (2) 样本量前置 gate:不足时跳过 layer_gap(避免小样本噪声触发重训)
+n_trades = len(review_doc.get("per_trade_narrative", []))
+min_trades = thresholds.get("min_narrative_trades", 20)
+if n_trades < min_trades:
+    reasons.append(f"warn: n_trades={n_trades}<{min_trades}, layer_gap skipped (small-sample)")
+else:
+    # (3) layer_gap:仅在样本充足时生效
+    for layer, agg in review_doc["layer_attribution"].items():
+        if abs(agg["pnl_pct_of_total"]) > thresholds["max_layer_attribution_gap"]:  # 0.15
+            trigger = True; reasons.append(f"layer_gap {layer}={agg['pnl_pct_of_total']}>0.15")
 ```
 
 ### 3.3 reward shaping 层(per-bar 层贡献下采样)
@@ -232,13 +248,15 @@ gold2 telescoping per-bar(同 review §3.2 公式,但 Δp 用 bar 间 close 变�
 ```
 per-bar 求和 == per-trade 归因 telescoping 不变式(同 review spec §3.2,bar 级 telescoping)。
 
-**新 shaping term `layer_contrib_penalty`**(注册到 `gym_env.eval_term` + `trace_to_mdp_dataset._compute_reward`):
+**新 shaping term `layer_contrib_penalty`**(注册到 `gym_env.eval_term` + `trace_to_mdp_dataset._compute_reward`)— 仅对 `shaping_term_map` 声明的**保护性质层**(gold2: extreme_risk/realrate_cap)的负贡献做非对称加权惩罚(设计意图见 §2.2):
 ```
 layer_contrib_penalty = weight * sum(
-    -C_layer_bar  for layer, C_layer_bar in per_bar_layer_contrib[layer].items()
+    -C_layer_bar  for layer in shaping_term_map.keys()
     if C_layer_bar < 0
-)   # 只惩罚负贡献层;正贡献层不奖励(避免 double-count 总 PnL)
+)   # 仅保护层负贡献;正贡献不奖励(保护层盈利是本职,非对称风险惩罚)
 ```
+**代际权重溯源**(eval-update2 #2):每代重训实际生效的 shaping 权重是**非平稳**的(逐轮由 review gap 决定)。`FeedbackAction.shaping_overrides` 必须写入训练 log + `.feedback.json`(已含),`offline_rl_trainer` 把生效的 `{term: weight}` 落入 `Results/auto_optimize/<strategy>/generation_<N>_shaping.json`,供回溯"这一代变好/变差是策略学到东西还是 reward 变了"。版本间不可直接比 FQE 分数,需同代际 shaping 对比。
+
 `shaping_overrides` = `{layer_term: weight}`,权重由 adapter 按 review 归因 gap 强度定:
 ```
 weight = clamp(abs(agg["pnl_pct_of_total"]) / gap_threshold, 0.5, 3.0)
@@ -395,7 +413,8 @@ fire_optimization
   - review_status=fail → trigger=True
   - layer gap extreme_risk=0.32>0.15 → trigger=True,reason 含 "extreme_risk=0.32"
   - 全 pass + 小 gap → trigger=False
-  - min_narrative_trades<20 → warn 不 trigger
+  - min_narrative_trades<20 → layer_gap **跳过**(不 trigger);若同时 review_status=fail 仍 trigger(eval-update2 #3 回归测试)
+  - 小样本 + 大噪声 gap(n_trades=5, extreme_risk gap=0.32)→ **不 trigger**(layer_gap 被前置 gate 拦)
 - **per-bar 层贡献下采样**(`test_feedback_gold2.py`):合成 state_trace + close 序列 → per-bar 求和 == per-trade telescoping 归因(同 review §3.2 不变式,bar 级)。无 state_trace → per_bar=[]。
 - **shaping_overrides 权重**:`gap=0.32,threshold=0.15 → weight=clamp(0.32/0.15,0.5,3.0)=2.13`。
 - **reward 源统一**(`test_reward_injection.py`):manifest shaping 2 terms + feedback overrides 1 term → 合并 3 terms;同 term 权重覆盖。
@@ -416,13 +435,15 @@ fire_optimization
 
 ### 5.3 已知局限
 
-1. **依赖 gold2 state_trace callsite**:per-bar 层贡献 + observation 13 维需 state_trace.jsonl。gold2 SerializeRlState 已写 11 字段,需补 drawdown/pnl 2 字段(§3.5)。callsite 已接(Task 3 review-layer),但需 `RL_TRACE_PATH` env 触发写盘。未设 env → 降级。
+1. **依赖 gold2 state_trace callsite**:per-bar 层贡献 + observation 13 维需 state_trace.jsonl。gold2 SerializeRlState 已写 11 字段,需补 drawdown/pnl 2 字段(§3.5)。callsite 已接(Task 3 review-layer),路径约定见 §1.4(固定 `Results/<strategy>/state_trace.jsonl`)。未产文件 → 降级。
 2. **per-bar 归因近似**:bar 级 telescoping 用 close_t - close_{t-1} 作 Δp,与 per-trade(EntryPrice→ExitPrice)求和严格相等需 state_trace 覆盖每 bar;若 state_trace 缺 bar(hold bar 未写)→ 求和有残差,`layer_contrib_penalty` 近似。spec 标注 `attribution_method` 让下游知晓精度。
 3. **reward 源统一破坏 PPO**:当前 `ppo_trainer.py:9` 读 manifest shaping(2 terms);统一后 manifest 是 source of truth,PPO 自动跟随。但 `config.yaml:offline_rl.reward_terms` 删除会 break 旧调用方(若有 hardcoded 依赖)— 需 grep 确认无其他消费者。
 4. **CQL observation 维度变更不向后兼容**:旧 ONNX(obs_dim=8)与新 CQL(obs_dim=13)不兼容;deploy_gate 需校验 ONNX obs_dim == manifest observation_fields 长度,否则拒绝部署。
 5. **触发器非阻断**:review_drift trigger 触发重训,但 deploy_gate 仍 manual;review_status=fail 不阻断部署(保持 review 层 non-blocking 设计)。block_deploy 仍由 manifest `review.block_deploy` 控制(默认 false)。
 6. **gold2 是首个 adapter**:其他策略无 feedback adapter → triggers["review_drift"]=False,feedback 段缺失警告进 manifest_lint.warnings(非 error)。
 7. **alpha_perturbation 不联动**:本 spec 不改 `alpha_perturbation_runner.py`(固定 Beta 采样);feedback 不喂 perturbation 分布。留作后续。
+8. **归因窗口与训练窗口重合的过拟合风险(eval-update2 #4,未本 spec 解决,标注待定)**:per-bar 层贡献从**同一次**回测的 state_trace 重算,若该 trace 就是 CQL 训练样本来源,等于"模型在某段路径某层表现差 → 惩罚模型在那段路径做过的动作 → 重训"。若该"差"只是特定市场状态的正常噪声(非可泛化 regime 模式),则是对单次实现路径过拟合,与项目 Gate 验证/样本外稳健性原则冲突。**本 spec v1 不分离诊断期与训练期**(工程复杂度高);作为缓解,(a) 代际 shaping 权重溯源(见 §3.3 #2)让过拟合可被察觉;(b) `min_narrative_trades` 前置 gate(§3.2)过滤小样本噪声;(c) **建议下一 spec 引入滚动 OOS 诊断期**(review 期 = 训练窗口之外的最近一段),让 reward shaping 来自与训练窗口不完全重合的路径。实现 `Gold2FeedbackAdapter` 前需用户拍板:是否本 spec 内分离窗口(增加复杂度)还是留下一 spec(接受 v1 过拟合风险 + 缓解措施)。
+9. **champion/challenger 影子部署未接(eval-update2 #5,留下一 spec)**:本 spec 自动触发重训但 `deploy_gate` 仍 manual,无 champion-challenger 影子对比机制。自动化程度越高,人工 gate 越易变形式主义("看 FQE 分数过了就点头")。**建议紧接本 spec 的下一个 spec 补 champion/challenger 影子部署**(新 policy 先影子对比 champion,达胜率阈值才升 champion),否则本闭环跑起来后缺口风险放大。
 
 ### 5.4 不改
 
