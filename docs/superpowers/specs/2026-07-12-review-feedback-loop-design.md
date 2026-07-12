@@ -445,6 +445,22 @@ fire_optimization
 8. **归因窗口与训练窗口重合的过拟合风险(eval-update2 #4,未本 spec 解决,标注待定)**:per-bar 层贡献从**同一次**回测的 state_trace 重算,若该 trace 就是 CQL 训练样本来源,等于"模型在某段路径某层表现差 → 惩罚模型在那段路径做过的动作 → 重训"。若该"差"只是特定市场状态的正常噪声(非可泛化 regime 模式),则是对单次实现路径过拟合,与项目 Gate 验证/样本外稳健性原则冲突。**本 spec v1 不分离诊断期与训练期**(工程复杂度高);作为缓解,(a) 代际 shaping 权重溯源(见 §3.3 #2)让过拟合可被察觉;(b) `min_narrative_trades` 前置 gate(§3.2)过滤小样本噪声;(c) **建议下一 spec 引入滚动 OOS 诊断期**(review 期 = 训练窗口之外的最近一段),让 reward shaping 来自与训练窗口不完全重合的路径。实现 `Gold2FeedbackAdapter` 前需用户拍板:是否本 spec 内分离窗口(增加复杂度)还是留下一 spec(接受 v1 过拟合风险 + 缓解措施)。
 9. **champion/challenger 影子部署未接(eval-update2 #5,留下一 spec)**:本 spec 自动触发重训但 `deploy_gate` 仍 manual,无 champion-challenger 影子对比机制。自动化程度越高,人工 gate 越易变形式主义("看 FQE 分数过了就点头")。**建议紧接本 spec 的下一个 spec 补 champion/challenger 影子部署**(新 policy 先影子对比 champion,达胜率阈值才升 champion),否则本闭环跑起来后缺口风险放大。
 
+### 5.3.1 deploy_gate 人工核对 checklist(v1 必需,低成本兜底)
+
+**背景(eval-update2 #4+#5 组合风险)**:本 spec v1 接受归因窗口与训练窗口重合的过拟合风险(§5.3 #8,缓解三招可观测),且 champion/challenger 影子部署推到下一 spec(§5.3 #9)。两者同时 delay = "reward 可能背答案 + 没人在部署前看一眼" 同时成立 — 不可接受。故在完整 champion/challenger 落地前,给 `deploy_gate` 的 manual review 加一条**必需的低成本人工核对点**(不是自动化诊断期,只是一次手动检查):
+
+**review_drift 触发的每一代 CQL,部署前人工必须做**(champion = 当前线上 ONNX,challenger = 本代新 ONNX):
+
+1. **归因窗口外近期数据对比**:用归因窗口(本代 state_trace 覆盖期)**之外**的一段近期数据(如最近 1-3 个月,未参与 reward shaping),手动跑一次 challenger vs champion 的 FQE + 1-day 回测。
+   - 不需要自动化诊断期设计,只需手动 `python3 ope_evaluator.py --policy challenger.onnx --observations <近期>...` + `dotnet run --project Launcher --config config-<strategy>-challenger-recent.json`。
+   - 目的:确认 challenger 在归因窗口外不劣化(防 reward 过拟合单次路径)。
+2. **代际 shaping 权重核对**:读 `generation_<N>_shaping.json`(§3.3 #2),人工对比本代 vs 上代 shaping 权重变化。若某 term 权重跳变 >2×(如 extreme_risk_contrib_penalty 0.5→3.0),需在部署前口头确认"这是 review gap 真实反映,还是单次噪声"(配合 §3.2 min_trades gate 已过滤小样本)。
+3. **observation 维度校验**:确认 challenger ONNX `obs_dim` == manifest `feedback.observation_fields` 长度(§5.3 #4),否则拒绝部署。
+
+**checklist 落地形式**:在 `fire_optimization` 末尾(deploy_gate 提示前)打印一段 `[deploy_gate checklist]` 文本块,列上述 3 项 + 各自的命令/文件路径,操作员手动执行并核对后人工 confirm deploy。**不阻断自动化**(review_drift 仍触发重训),但 deploy 必须过此 checklist。代码改动:`evolution_scheduler.fire_optimization` 加一个 `_print_deploy_checklist()` 函数(纯打印,无副作用)。
+
+**退出路径**:下一 spec 落地 champion/challenger 影子部署后,第 1 项(归因窗口外对比)自动化为影子对比,champion 升级阈值替代人工;第 2/3 项保留为 deploy_gate 常驻 checklist。
+
 ### 5.4 不改
 
 - `bayesian_optimizer.py` / `parameter_space` / Layer A(正交,见 `docs/update2-feedback.md`)
