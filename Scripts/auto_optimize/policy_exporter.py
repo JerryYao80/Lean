@@ -105,8 +105,19 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--policy", required=True)
     ap.add_argument("--output", required=True)
-    ap.add_argument("--obs-dim", type=int, default=8)
+    ap.add_argument("--obs-dim", type=int, default=None)
     args = ap.parse_args()
+    # Spec §3.4: default obs-dim from manifest feedback.observation_fields (fallback 8)
+    obs_dim = args.obs_dim
+    if obs_dim is None:
+        import pathlib as _p
+        mp = _p.Path("Scripts/auto_optimize/strategies/gold2_beta_vol_target/manifest.yaml")
+        if mp.exists():
+            import yaml as _yaml
+            mdoc = _yaml.safe_load(mp.read_text())
+            obs_dim = len(mdoc.get("feedback", {}).get("observation_fields", [])) or 8
+        else:
+            obs_dim = 8
     model = d3rlpy.load_learnable(args.policy)
-    info = export_policy_onnx(model, args.obs_dim, args.output)
+    info = export_policy_onnx(model, obs_dim, args.output)
     print(json.dumps(info))
