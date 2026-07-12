@@ -1,0 +1,1 @@
+"""Strategy feedback adapters."""
