@@ -187,7 +187,49 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
         run_if_scheduled(manifest_path, results_dir, m)
     except Exception as ex:
         print(f"  [review-overlay] non-blocking failure: {ex}")
+
+    # Spec §5.3.1: deploy_gate manual checklist (non-blocking, pure print)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "feedback"))
+        fb_action = _load_feedback_action(state_path + ".feedback.json")
+        if fb_action:
+            prev_gen_path = pathlib.Path(state_path + ".feedback.json.prev")
+            prev_shaping = {}
+            if prev_gen_path.exists():
+                import json as _json
+                prev_shaping = _json.loads(prev_gen_path.read_text()).get("shaping_overrides", {})
+            _print_deploy_checklist(fb_action, onnx_path=policy_pt.replace(".pt", ".onnx"),
+                                    manifest_path=manifest_path, prev_gen_shaping=prev_shaping)
+    except Exception as ex:
+        print(f"  [deploy_checklist] non-blocking failure: {ex}")
     return True
+
+
+def _print_deploy_checklist(action, onnx_path, manifest_path, prev_gen_shaping=None):
+    """Spec §5.3.1: print deploy_gate manual checklist (pure print, non-blocking).
+    3 items: (1) out-of-attribution-window comparison, (2) shaping weight delta,
+    (3) ONNX obs_dim check. Returns the printed string."""
+    prev = prev_gen_shaping or {}
+    lines = ["[deploy_gate checklist] (spec §5.3.1 — manual review before deploy)"]
+    lines.append("1. 归因窗口外近期数据对比 (out-of-attribution-window):")
+    lines.append("   手动跑 challenger vs champion FQE + 1-day 回测 on 近期数据 (非 state_trace 期):")
+    lines.append(f"     python3 ope_evaluator.py --policy {onnx_path} --observations <recent>...")
+    lines.append(f"     dotnet run --project Launcher --config config-<strategy>-challenger-recent.json")
+    lines.append("   确认 challenger 在归因窗口外不劣化 (防 reward 过拟合单次路径).")
+    lines.append("2. 代际 shaping 权重核对 (generation_<N>_shaping.json):")
+    for term, w in action.shaping_overrides.items():
+        prev_w = prev.get(term)
+        if prev_w is not None and prev_w != 0 and abs(w / prev_w) > 2.0:
+            lines.append(f"   ⚠ {term}: {prev_w}→{w} jump >2x — 确认 review gap 真实 vs 噪声")
+        else:
+            lines.append(f"   {term}: {w} (prev: {prev_w})")
+    lines.append("3. ONNX obs_dim 校验:")
+    lines.append(f"   challenger ONNX obs_dim == manifest feedback.observation_fields 长度 ({len(action.observation_fields)})")
+    lines.append(f"   manifest: {manifest_path}")
+    out = "\n".join(lines)
+    print(out)
+    return out
 
 
 def main():
