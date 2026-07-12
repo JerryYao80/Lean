@@ -40,8 +40,35 @@ def _read_live_metrics(metrics_path: str) -> dict:
         return {}
 
 
-def check_triggers(config: dict, state: dict, metrics_path: str) -> dict:
-    """检查 4 个触发器, 返回 {trigger_name: should_fire}."""
+def _write_feedback_action(action, path):
+    """Spec §4.1: write FeedbackAction to <state_path>.feedback.json for fire_optimization."""
+    import json as _json
+    from dataclasses import asdict
+    try:
+        pathlib.Path(path).write_text(_json.dumps(asdict(action), default=str))
+    except Exception as ex:
+        print(f"  [review_drift] write feedback action failed: {ex}")
+
+
+def _load_feedback_action(path):
+    """Spec §4.2: load FeedbackAction written by check_triggers."""
+    import json as _json
+    p = pathlib.Path(path)
+    if not p.exists():
+        return None
+    try:
+        d = _json.loads(p.read_text())
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "feedback"))
+        from adapters.base import FeedbackAction
+        return FeedbackAction(**d)
+    except Exception:
+        return None
+
+
+def check_triggers(config: dict, state: dict, metrics_path: str,
+                   results_dir: str = None, manifest=None) -> dict:
+    """检查 5 个触发器 (review_drift 新增, spec §4.1), 返回 {trigger_name: should_fire}."""
     triggers = {}
     ppo_cfg = config.get("ppo_training", {})
 
@@ -73,6 +100,23 @@ def check_triggers(config: dict, state: dict, metrics_path: str) -> dict:
 
     # 4. kill-switch
     triggers["kill_switch"] = live.get("kill_switch_tripped", False)
+
+    # 5. review_drift (复盘反馈触发器, spec §4.1) — orchestrate(manifest, results_dir)
+    triggers["review_drift"] = False
+    if results_dir and manifest:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "feedback"))
+            from signals import orchestrate as orchestrate_feedback
+            action = orchestrate_feedback(manifest, results_dir)
+            if action is not None:
+                triggers["review_drift"] = action.trigger
+                if action.trigger:
+                    state_path = state.get("_state_path",
+                        str(_REPO_ROOT / "Results" / "auto_optimize" / "evolution_state.json"))
+                    _write_feedback_action(action, state_path + ".feedback.json")
+        except Exception as ex:
+            print(f"  [review_drift] orchestrate failed: {ex}")
 
     return triggers
 
@@ -159,7 +203,11 @@ def main():
 
     def _check_and_fire():
         state = json.loads(pathlib.Path(args.state_path).read_text()) if pathlib.Path(args.state_path).exists() else {}
-        triggers = check_triggers(config, state, args.metrics_path)
+        state["_state_path"] = args.state_path
+        from manifest_loader import load_manifest
+        manifest = load_manifest(args.manifest)
+        triggers = check_triggers(config, state, args.metrics_path,
+                                  results_dir=str(_REPO_ROOT / "Results"), manifest=manifest)
         print(f"[{datetime.utcnow():%Y-%m-%d %H:%M}] 触发器状态: {triggers}")
         if any(triggers.values()):
             fired = [k for k, v in triggers.items() if v]
