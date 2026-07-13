@@ -251,6 +251,8 @@ def normalize_origin(source: str | None, default: str = "web") -> str:
         return "local"
     if src == "cli":
         return "cli"
+    if src == "review_inspiration":
+        return "review_inspiration"
     if src.startswith("data_driven_"):
         return "web"
     if src in {

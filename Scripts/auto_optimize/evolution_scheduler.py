@@ -233,6 +233,8 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
     try:
         import sys as _sys
         _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "feedback"))
+        from manifest_loader import load_manifest as _lm_dep
+        _m_dep = _lm_dep(manifest_path)
         fb_action = _load_feedback_action(state_path + ".feedback.json")
         if fb_action:
             prev_gen_path = pathlib.Path(state_path + ".feedback.json.prev")
@@ -241,7 +243,8 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
                 import json as _json
                 prev_shaping = _json.loads(prev_gen_path.read_text()).get("shaping_overrides", {})
             _print_deploy_checklist(fb_action, onnx_path=policy_pt.replace(".pt", ".onnx"),
-                                    manifest_path=manifest_path, prev_gen_shaping=prev_shaping)
+                                    manifest_path=manifest_path, prev_gen_shaping=prev_shaping,
+                                    state_path=state_path, manifest_strategy_name=_m_dep.strategy_name)
     except Exception as ex:
         print(f"  [deploy_checklist] non-blocking failure: {ex}")
 
@@ -303,10 +306,11 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
     return True
 
 
-def _print_deploy_checklist(action, onnx_path, manifest_path, prev_gen_shaping=None):
-    """Spec §5.3.1: print deploy_gate manual checklist (pure print, non-blocking).
+def _print_deploy_checklist(action, onnx_path, manifest_path, prev_gen_shaping=None,
+                             state_path=None, manifest_strategy_name=None):
+    """Spec §5.3.1 & §4.5.1: print deploy_gate manual checklist (pure print, non-blocking).
     3 items: (1) out-of-attribution-window comparison, (2) shaping weight delta,
-    (3) ONNX obs_dim check. Returns the printed string."""
+    (3) ONNX obs_dim check. §4.5.1: inspiration 候选策略待审提醒 (spirit2 #3 / spirit3 #1)."""
     prev = prev_gen_shaping or {}
     lines = ["[deploy_gate checklist] (spec §5.3.1 — manual review before deploy)"]
     lines.append("1. 归因窗口外近期数据对比 (out-of-attribution-window):")
@@ -324,6 +328,20 @@ def _print_deploy_checklist(action, onnx_path, manifest_path, prev_gen_shaping=N
     lines.append("3. ONNX obs_dim 校验:")
     lines.append(f"   challenger ONNX obs_dim == manifest feedback.observation_fields 长度 ({len(action.observation_fields)})")
     lines.append(f"   manifest: {manifest_path}")
+    # Spec §4.5.1: inspiration 候选策略待审提醒 (spirit2 #3 / spirit3 #1)
+    if state_path and manifest_strategy_name:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "inspiration"))
+            from layer_state import load_layer_states
+            _states = load_layer_states(state_path, manifest_strategy_name)
+            for _layer, _ls in _states.items():
+                if _ls.status == "redesigned" and _ls.candidate_status == "pending_review":
+                    lines.append(f"⚠ inspiration 候选策略待审: layer={_layer}, "
+                                 f"inspired_strategy_id={_ls.inspired_strategy_id}, "
+                                 f"请去 create-strategy pipeline 产物审/部署/拒绝 (回填 candidate_status)")
+        except Exception:
+            pass
     out = "\n".join(lines)
     print(out)
     return out
