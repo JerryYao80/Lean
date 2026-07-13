@@ -443,8 +443,9 @@ Expected: FAIL — `ModuleNotFoundError`.
 
 `Scripts/inspiration/trigger.py`:
 ```python
-"""trigger.detect: continuous N-gen non-convergence + ceiling判据. Spec §2.4, spirit2 #1."""
-from .layer_state import LayerState
+"""trigger.detect: continuous N-gen non-convergence + ceiling判据. Spec §2.4, spirit2 #1.
+注意:平铺导入风格(sys.path.insert Scripts/inspiration 后 from trigger import detect),
+不用相对导入。detect() 只用 ls.status 鸭子类型,不需导入 LayerState 类型(spirit3 #2)。"""
 
 
 def detect(strategy: str, last_n_gens: list, layer_states: dict, thresholds: dict,
@@ -1134,15 +1135,15 @@ Add generation log + hypothesize call in `fire_optimization` (before `return Tru
         _shaping = _fb_action.shaping_overrides if _fb_action else {}
         _layer_gaps = {}
         _review_status = "unknown"
-        for _cand in [_REPO_ROOT / "Results" / _m.strategy_name / "review" / "review.json",
-                      _REPO_ROOT / "Results" / "gold2-betavol" / "review" / "review.json"]:
-            if _cand.exists():
-                _rj = json.loads(_cand.read_text())
-                _review_status = "pass"
-                for _layer, _agg in _rj.get("layer_attribution", {}).items():
-                    _layer_gaps[_layer] = {"pnl_pct_of_total": _agg.get("pnl_pct_of_total", 0),
-                                            "gap": abs(_agg.get("pnl_pct_of_total", 0))}
-                break
+        # review.json 路径:优先 manifest 声明的 results 子目录,回退 strategy_name (spirit3 #3: 无 gold2 硬编码)
+        _review_subdir = _m.raw.get("review", {}).get("results_subdir") or _m.strategy_name
+        _rj_path = _REPO_ROOT / "Results" / _review_subdir / "review" / "review.json"
+        if _rj_path.exists():
+            _rj = json.loads(_rj_path.read_text())
+            _review_status = "pass"
+            for _layer, _agg in _rj.get("layer_attribution", {}).items():
+                _layer_gaps[_layer] = {"pnl_pct_of_total": _agg.get("pnl_pct_of_total", 0),
+                                        "gap": abs(_agg.get("pnl_pct_of_total", 0))}
         _gen_n = state.get("generation_count", 0) + 1
         state["generation_count"] = _gen_n
         log_generation(_m.strategy_name, _gen_n, _layer_gaps, _shaping, _review_status, repo_root=str(_REPO_ROOT))
@@ -1161,11 +1162,11 @@ Add generation log + hypothesize call in `fire_optimization` (before `return Tru
             _insp_cfg = _m.raw.get("inspiration", {})
             _min_gens = _insp_cfg.get("persistence", {}).get("min_generations", 3)
             _review_doc = {}
-            for _cand in [_REPO_ROOT / "Results" / _m.strategy_name / "review" / "review.json",
-                          _REPO_ROOT / "Results" / "gold2-betavol" / "review" / "review.json"]:
-                if _cand.exists():
-                    _review_doc = json.loads(_cand.read_text())
-                    break
+            # spirit3 #3: 无 gold2 硬编码,优先 manifest results_subdir
+            _review_subdir = _m.raw.get("review", {}).get("results_subdir") or _m.strategy_name
+            _rj_path = _REPO_ROOT / "Results" / _review_subdir / "review" / "review.json"
+            if _rj_path.exists():
+                _review_doc = json.loads(_rj_path.read_text())
             _history = read_history(_m.strategy_name, _min_gens, repo_root=str(_REPO_ROOT))
             for _layer in _inspired:
                 try:
@@ -1241,23 +1242,269 @@ Modify `Scripts/soloquant_orchestrator.py` `normalize_origin` — add `review_in
 ```
 (Insert after the `if src == "cli"` branch, before `data_driven_` check.)
 
+**deploy checklist 待审提醒**(spirit3 #1: 之前 Task 9 标题写了但实现里消失,补回)。修改 `Scripts/auto_optimize/evolution_scheduler.py` 的 `_print_deploy_checklist` — 在函数末尾(`return out` 前)追加 inspiration 候选待审扫描:
+```python
+    # Spec §4.5.1: inspiration 候选策略待审提醒 (spirit2 #3 / spirit3 #1)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "inspiration"))
+        from layer_state import load_layer_states
+        _states = load_layer_states(state_path, manifest_strategy_name)
+        for _layer, _ls in _states.items():
+            if _ls.status == "redesigned" and _ls.candidate_status == "pending_review":
+                lines.append(f"⚠ inspiration 候选策略待审: layer={_layer}, "
+                             f"inspired_strategy_id={_ls.inspired_strategy_id}, "
+                             f"请去 create-strategy pipeline 产物审/部署/拒绝 (回填 candidate_status)")
+    except Exception:
+        pass
+```
+`_print_deploy_checklist` 需新增 `state_path` + `manifest_strategy_name` 参数;在 `fire_optimization` 调用处传入(`state_path=args.state_path` / `manifest_strategy_name=_m.strategy_name`)。同时在 `Tests/test_deploy_checklist.py` 加一个测试 `test_print_deploy_checklist_inspiration_candidate_reminder`:构造一个 `redesigned + pending_review` 的 layer_state,断言输出含 "inspiration 候选策略待审"。
+
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd /home/project/hope/Lean && python3 -m pytest Tests/test_inspiration_origin_enum.py -v
+cd /home/project/hope/Lean && python3 -m pytest Tests/test_inspiration_origin_enum.py Tests/test_deploy_checklist.py -v
 ```
-Expected: PASS (2 tests).
+Expected: PASS (origin enum 2 + deploy checklist 2 + new reminder 1).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Scripts/soloquant_orchestrator.py Tests/test_inspiration_origin_enum.py
-git commit -m "feat(inspiration): origin enum review_inspiration (§3.5)"
+git add Scripts/soloquant_orchestrator.py Scripts/auto_optimize/evolution_scheduler.py Tests/test_inspiration_origin_enum.py Tests/test_deploy_checklist.py
+git commit -m "feat(inspiration): origin enum review_inspiration + deploy checklist candidate reminder (§3.5, §4.5.1)"
 ```
 
 ---
 
-## Task 10: 端到端集成验证
+## Task 10: GATE 3 通过 → redesigned 回写钩子(生产路径接入)
+
+> spirit3 #1: 之前 plan 的 redesigned 回写只存在于独立函数+手工测试,没接入 GATE 3 通过的真实代码点。本 task 补上:GATE 3(`backtest_sharpe` PASS)后自动触发 `verify_layer_improvement` + `provenance.write` + `transition→redesigned` + 写 deploy-reminder 文件。
+
+**Files:**
+- Create: `Scripts/inspiration/on_gate3_pass.py`
+- Modify: `/root/.claude/skills/create-strategy/SKILL.md`(GATE 3 PASS 后加一行调用)
+- Test: `Tests/test_inspiration_gate3_hook.py`
+
+**GATE 3 通过点(已核查)**:`create-strategy` skill 在 GATE 3 通过时调 `python3 Scripts/strategy_trace.py record-gate --gate backtest_sharpe --result PASS ...`(`strategy_trace.py:98 cmd_record_gate`)。本钩子在同一时机、同一 strategy_id 上调用 `on_gate3_pass.py`。
+
+- [ ] **Step 1: Write the failing test**
+
+`Tests/test_inspiration_gate3_hook.py`:
+```python
+"""Tests for GATE 3 pass → redesigned writeback hook (production path). Spec §4.6, spirit3 #1."""
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "Scripts" / "inspiration"))
+sys.path.insert(0, str(_REPO / "Scripts" / "feedback"))
+from on_gate3_pass import on_pass  # noqa: E402
+from layer_state import load_layer_states  # noqa: E402
+
+
+def _setup(tmp_path, parent_layer_status="inspiration_pending", new_layer_pct=-0.10):
+    # parent strategy state: extreme_risk in inspiration_pending since gen 3
+    parent_state_path = str(tmp_path / "parent_state.json")
+    parent_states = {"extreme_risk": {
+        "layer": "extreme_risk", "status": parent_layer_status, "pending_since_generation": 3,
+        "inspired_strategy_id": "", "retired_shaping_terms": [],
+        "candidate_deployed": False, "candidate_status": "none"}}
+    Path(parent_state_path).write_text(json.dumps({"layer_states": {"Gold2": parent_states}}))
+    # parent review.json
+    parent_review_path = tmp_path / "parent_review.json"
+    parent_review_path.write_text(json.dumps({"layer_attribution": {"extreme_risk": {"pnl_pct_of_total": -0.32}}}))
+    # new strategy manifest w/ provenance
+    new_manifest_path = tmp_path / "new_manifest.json"
+    new_manifest_path.write_text(json.dumps({
+        "strategy_id": "NewStrategy-abc",
+        "provenance": {"source": "review_inspiration", "parent_strategy": "Gold2",
+                       "inspired_layer": "extreme_risk", "review_artifact": str(parent_review_path),
+                       "inspired_at_generation": 3}}))
+    # new review.json (post-backtest)
+    new_review_path = tmp_path / "new_review.json"
+    new_review_path.write_text(json.dumps({"layer_attribution": {"extreme_risk": {"pnl_pct_of_total": new_layer_pct}}}))
+    return parent_state_path, str(new_manifest_path), str(new_review_path)
+
+
+def test_on_pass_redesigns_when_layer_improved(tmp_path):
+    parent_state_path, new_manifest, new_review = _setup(tmp_path, new_layer_pct=-0.10)
+    result = on_pass(strategy_id="NewStrategy-abc", manifest_path=new_manifest,
+                     new_review_path=new_review, parent_state_path=parent_state_path)
+    assert result["redesigned"] is True
+    assert result["improvement"] > 0
+    # parent layer → redesigned
+    states = load_layer_states(parent_state_path, "Gold2")
+    assert states["extreme_risk"].status == "redesigned"
+    assert states["extreme_risk"].candidate_status == "pending_review"
+    assert states["extreme_risk"].inspired_strategy_id == "NewStrategy-abc"
+    # provenance updated with real improvement
+    doc = json.loads(Path(new_manifest).read_text())
+    assert doc["provenance"]["improvement_verified"] is True
+    assert doc["provenance"]["layer_improvement"] > 0
+    # deploy-reminder file written
+    reminder = tmp_path / "deploy_reminder_Gold2_extreme_risk.txt"
+    # on_pass writes reminder next to parent_state_path
+    reminders = list(Path(parent_state_path).parent.glob("deploy_reminder_*.txt"))
+    assert len(reminders) >= 1
+    assert "待审" in reminders[0].read_text() or "pending" in reminders[0].read_text()
+
+
+def test_on_pass_no_redesign_when_layer_not_improved(tmp_path):
+    parent_state_path, new_manifest, new_review = _setup(tmp_path, new_layer_pct=-0.40)  # worse than parent -0.32
+    result = on_pass(strategy_id="NewStrategy-abc", manifest_path=new_manifest,
+                     new_review_path=new_review, parent_state_path=parent_state_path)
+    assert result["redesigned"] is False
+    # parent layer stays inspiration_pending (not redesigned)
+    states = load_layer_states(parent_state_path, "Gold2")
+    assert states["extreme_risk"].status == "inspiration_pending"
+    doc = json.loads(Path(new_manifest).read_text())
+    assert doc["provenance"]["improvement_verified"] is False
+
+
+def test_on_pass_noop_when_not_review_inspiration(tmp_path):
+    # manifest without review_inspiration provenance → no-op
+    new_manifest = tmp_path / "new_manifest.json"
+    new_manifest.write_text(json.dumps({"strategy_id": "PaperStrategy", "provenance": {"source": "web"}}))
+    result = on_pass(strategy_id="PaperStrategy", manifest_path=str(new_manifest),
+                     new_review_path=str(tmp_path / "new_review.json"),
+                     parent_state_path=str(tmp_path / "parent_state.json"))
+    assert result["redesigned"] is False
+    assert result["reason"] == "not_review_inspiration"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+cd /home/project/hope/Lean && python3 -m pytest Tests/test_inspiration_gate3_hook.py -v
+```
+Expected: FAIL — `ModuleNotFoundError: No module named 'on_gate3_pass'`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+`Scripts/inspiration/on_gate3_pass.py`:
+```python
+"""GATE 3 pass → redesigned writeback hook (production path). Spec §4.6, spirit3 #1.
+
+Called by create-strategy skill after GATE 3 (backtest_sharpe) PASS.
+If new strategy manifest.provenance.source == review_inspiration:
+  verify_layer_improvement(parent_review, new_review, inspired_layer)
+  → if improved: provenance.write + transition→redesigned + deploy-reminder file
+  → if not: provenance.write(improvement_verified=False), layer stays inspiration_pending
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from provenance import write as write_provenance, verify_layer_improvement  # noqa: E402
+from layer_state import load_layer_states, transition, save_layer_states  # noqa: E402
+
+
+def on_pass(strategy_id: str, manifest_path: str, new_review_path: str,
+            parent_state_path: str) -> dict:
+    """Hook called after GATE 3 PASS. Returns {redesigned, improvement, reason}."""
+    mpath = Path(manifest_path)
+    if not mpath.exists():
+        return {"redesigned": False, "reason": "manifest_missing"}
+    manifest = json.loads(mpath.read_text())
+    provenance = manifest.get("provenance", {})
+    if provenance.get("source") != "review_inspiration":
+        return {"redesigned": False, "reason": "not_review_inspiration"}
+
+    parent_strategy = provenance["parent_strategy"]
+    inspired_layer = provenance["inspired_layer"]
+    parent_review_path = provenance.get("review_artifact", "")
+
+    parent_review = {}
+    if Path(parent_review_path).exists():
+        parent_review = json.loads(Path(parent_review_path).read_text())
+    new_review = {}
+    if Path(new_review_path).exists():
+        new_review = json.loads(Path(new_review_path).read_text())
+
+    result = verify_layer_improvement(parent_review, new_review, inspired_layer)
+
+    if result["improved"]:
+        # provenance.write with real improvement
+        write_provenance(manifest_path, parent_strategy, parent_review_path,
+                         inspired_layer, provenance.get("hypothesis", ""),
+                         provenance.get("inspired_at_generation", 0),
+                         improvement_verified=True, layer_improvement=result["improvement"],
+                         improvement_claim=provenance.get("improvement_claim", ""))
+        # layer → redesigned
+        states = load_layer_states(parent_state_path, parent_strategy)
+        shaping_term = f"{inspired_layer}_contrib_penalty"
+        try:
+            transition(states, inspired_layer, "redesigned",
+                       inspired_strategy_id=strategy_id,
+                       retired_shaping_terms=[shaping_term],
+                       candidate_status="pending_review")
+            save_layer_states(parent_state_path, parent_strategy, states)
+        except ValueError as ex:
+            # already redesigned or illegal state — log, don't crash GATE 3
+            print(f"  [on_gate3_pass] transition skipped: {ex}")
+        # deploy-reminder file (human sees at deploy_gate)
+        reminder_path = Path(parent_state_path).parent / f"deploy_reminder_{parent_strategy}_{inspired_layer}.txt"
+        reminder_path.write_text(
+            f"[inspiration 候选策略待审]\n"
+            f"父策略: {parent_strategy}\n失效层: {inspired_layer}\n"
+            f"新策略: {strategy_id}\n层改善: {result['improvement']:.4f}\n"
+            f"manifest: {manifest_path}\n"
+            f"请审/部署/拒绝后回填 layer_state.candidate_status (deployed/rejected)\n")
+        return {"redesigned": True, "improvement": result["improvement"], "reason": "improved"}
+    else:
+        # not improved: provenance records failure, layer stays inspiration_pending (consumes timeout)
+        write_provenance(manifest_path, parent_strategy, parent_review_path,
+                         inspired_layer, provenance.get("hypothesis", ""),
+                         provenance.get("inspired_at_generation", 0),
+                         improvement_verified=False, layer_improvement=result["improvement"],
+                         improvement_claim=provenance.get("improvement_claim", ""))
+        print(f"  [on_gate3_pass] layer '{inspired_layer}' NOT improved ({result['improvement']:.4f}), staying inspiration_pending")
+        return {"redesigned": False, "improvement": result["improvement"], "reason": "not_improved"}
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--strategy-id", required=True)
+    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--new-review", required=True)
+    ap.add_argument("--parent-state", required=True)
+    args = ap.parse_args()
+    print(json.dumps(on_pass(args.strategy_id, args.manifest, args.new_review, args.parent_state), indent=2))
+```
+
+Modify `/root/.claude/skills/create-strategy/SKILL.md` GATE 3 section — after the `record-gate --gate backtest_sharpe --result PASS` call, add:
+```bash
+# Spec §4.6: inspiration redesigned writeback hook (spirit3 #1)
+python3 Scripts/inspiration/on_gate3_pass.py \
+  --strategy-id <strategy-id> \
+  --manifest <new-strategy-manifest.json> \
+  --new-review Results/<strategy>/review/review.json \
+  --parent-state Results/auto_optimize/evolution_state.json
+```
+(仅在 GATE 3 PASS 时调用;非 review_inspiration 来源的策略该脚本自动 no-op。)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+```bash
+cd /home/project/hope/Lean && python3 -m pytest Tests/test_inspiration_gate3_hook.py -v
+```
+Expected: PASS (3 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Scripts/inspiration/on_gate3_pass.py Tests/test_inspiration_gate3_hook.py
+git commit -m "feat(inspiration): GATE 3 pass → redesigned writeback hook (production path, spirit3 #1)"
+```
+(SKILL.md 编辑单独 commit 或与本 commit 合并;若 SKILL.md 在用户级 skill 目录,实现者确认路径后编辑。)
+
+---
+
+## Task 11: 端到端集成验证
 
 **Files:**
 - Test: `Tests/test_inspiration_e2e.py`
@@ -1384,10 +1631,14 @@ git commit -m "feat(inspiration): e2e integration — trigger→hypothesis→pro
 - §4.3 per-layer 互斥 → Task 7
 - §4.4 hypothesize 调用 → Task 8
 - §4.5 超时回收 → Task 8
-- §4.6 redesigned 回写 → Task 10(e2e)
+- §4.5.1 候选待审提醒 → Task 9(checklist)+ Task 10(deploy-reminder 文件)
+- §4.6 redesigned 回写 → **Task 10(GATE 3 生产路径接入,spirit3 #1)**
 - spirit2 #1 ceiling → Task 3
-- spirit2 #2 层改善验证 → Task 5
-- spirit2 #3 candidate_status → Task 1
+- spirit2 #2 层改善验证 → Task 5 + Task 10(生产路径调用)
+- spirit2 #3 candidate_status → Task 1 + Task 10(回填 pending_review)
+- spirit3 #1 redesigned 回写接入 → Task 10(新增)
+- spirit3 #2 trigger 相对导入 bug → Task 3(已删 from .layer_state)
+- spirit3 #3 gold2-betavol 硬编码 → Task 8(改 manifest results_subdir)
 - origin enum → Task 9
 
 **2. Placeholder scan:** 无 TBD/TODO。所有代码完整。
@@ -1396,7 +1647,8 @@ git commit -m "feat(inspiration): e2e integration — trigger→hypothesis→pro
 - `LayerState` 字段跨 task 一致
 - `detect(strategy, last_n_gens, layer_states, thresholds, ceiling=3.0, eps=0.01)` 跨 Task 3/8 一致
 - `run(strategy_name, inspired_layer, review_doc, gen_history, manifest_raw, llm_cfg, hypothesis_dir)` 跨 Task 4/8 一致
-- `write(manifest_path, ..., improvement_verified, layer_improvement, improvement_claim)` 跨 Task 5/10 一致
+- `write(manifest_path, ..., improvement_verified, layer_improvement, improvement_claim)` 跨 Task 5/10/11 一致
+- `on_pass(strategy_id, manifest_path, new_review_path, parent_state_path)` 跨 Task 10 一致
 - `orchestrate(manifest, results_dir, layer_states=None)` 跨 Task 7 一致
 
 ---
