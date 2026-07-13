@@ -56,15 +56,25 @@ class LayerState:
     pending_since_generation: int = -1  # 进入 inspiration_pending 时的代数
     inspired_strategy_id: str = ""      # 启发产出的策略 id (redesigned 时填)
     retired_shaping_terms: list = field(default_factory=list)  # 退役的 shaping term
+    candidate_deployed: bool = False    # spirit2 #3: 候选策略是否已部署
+    candidate_status: str = "none"      # "none" | "pending_review" | "deployed" | "rejected"
 ```
 
 **状态机合法转移**:
 ```
 optimizing --(连续N代不收敛)--> inspiration_pending
-inspiration_pending --(启发产物过GATE1-4)--> redesigned
+inspiration_pending --(启发产物过GATE1-4 且 层改善验证通过)--> redesigned
 inspiration_pending --(超时M代)--> optimizing
 redesigned --(新策略也失效,再次N代不收敛)--> inspiration_pending  (允许二次启发)
 ```
+
+**二次启发前置检查**(spirit2 #3):`redesigned → inspiration_pending` 的二次触发,不纯粹依赖父策略 gap 持续超标(父策略没变,缺陷还在,会反复生成相似假设)。**先检查 `candidate_status`**:
+- `candidate_status == "pending_review"`(候选已产出但未部署)→ **不重复触发** inspiration,改为在 deploy_gate checklist 里提醒"已有候选策略待审"(防死信箱)
+- `candidate_status == "deployed"`(候选已部署但仍失效)→ 允许二次触发(部署了也没解决,真需新一轮启发)
+- `candidate_status == "rejected"`(候选被人工拒绝)→ 允许二次触发
+- `candidate_status == "none"`(异常状态)→ 允许触发(容错)
+
+`candidate_status` 由 deploy_gate checklist 人工回填(部署→deployed,拒绝→rejected)。新策略产出未审 → `pending_review`。
 
 持久化在 `evolution_state.json` 的 `layer_states: {strategy: {layer: LayerState}}` 字段(per-strategy,per-layer)。
 
@@ -196,12 +206,17 @@ inspiration:
 对每个 status == "optimizing" 的层 L:
   取最近 min_generations 代的 layer_gaps[L].gap 序列 [g1, g2, ..., gN]
   条件1: 所有 gi > gap_threshold (连续 N 代超阈)
-  条件2: weight 未收敛:
+  条件2: weight 未收敛(spirit2 #1 修复,含 ceiling 判据):
     取同代的 shaping_overrides[L_term] 序列 [w1, ..., wN]
-    未收敛 = (wN - w1 > weight_nonconvergence_delta)  # 单调升(惩罚加大仍没解决)
-         OR (max(w) - min(w) > weight_nonconvergence_delta)  # 或波动不降
+    未收敛 = (a) weight 趋势未降: (wN - w1 > weight_nonconvergence_delta)  # 单调升(惩罚加大仍没解决)
+          OR (b) weight 波动: (max(w) - min(w) > weight_nonconvergence_delta)  # 波动不降
+          OR (c) ceiling 封顶且 gap 仍超阈: all(wi >= CEILING - EPS for wi in [w1..wN])  # 惩罚顶格但 gap 没解决
+                 (CEILING = feedback spec §3.3 的 clamp 上限 3.0; EPS = 0.01)
+                 —— clamp 会把 [3.0,3.0,3.0] 抹平 delta=0 误判收敛,此判据独立兜底
   条件1 AND 条件2 → L 进入 inspiration_pending
 ```
+
+**ceiling 判据说明**(spirit2 #1):`weight = clamp(gap/0.15, 0.5, 3.0)` 有上限。若某层 gap 从 0.32 恶化到 0.60,weight 早已封顶 3.0,序列 `[3.0, 3.0, 3.0]` 的 `max-min=0` 会被(a)(b)判为"收敛",但实际是**惩罚力度顶格了问题仍没解决**——恰恰最该触发启发。条件(c)独立兜底:weight 连续 N 代贴 ceiling AND gap 仍超阈 → 直接判未收敛,不依赖 delta 计算。`CEILING` 从 manifest `feedback` 段或 feedback spec §3.3 的 clamp 上限读(默认 3.0)。
 
 ### 2.5 gold2 manifest 完整 `inspiration:` 段
 
@@ -341,6 +356,31 @@ shaping weight 从 1.0 升到 2.13 仍未收敛。根因:cap 是二元阈值触�
 - **假设文档 < 100 字符**(LLM 产空/过短):不写 `local-strategies/`,记 log,该层保持 pending
 - **GATE 1-4 未通过**(假设落地失败):新策略 BLOCK,layer_state 保持 `inspiration_pending`,消耗一个 `timeout_generations` 计数;超时后打回 `optimizing`
 
+### 3.7 层级改善验证(spirit2 #2)
+
+**问题**:GATE 3 只检查新策略整体 Sharpe≥0,与 LLM 假设里"该层贡献从 -32%→-10%"的可验证主张脱钩。新策略可能因其他层碰巧表现好而 Sharpe 过关,但被诊断失效的 `inspired_layer` 压根没被验证是否真改善,系统却已标 `redesigned`。
+
+**修复**:对 `origin == review_inspiration` 的策略,GATE 3 通过后加一条**层归因改善校验**(轻量,复用现有 review pipeline):
+
+1. 对新策略跑 `run_review.py`(产新 review.json)
+2. 比较新策略 vs 父策略同层归因:
+   - `new_layer_pct = new_review.layer_attribution[inspired_layer].pnl_pct_of_total`
+   - `old_layer_pct = parent_review.layer_attribution[inspired_layer].pnl_pct_of_total`
+   - 改善 = `new_layer_pct - old_layer_pct`(负贡献减小 = 改善为正)
+3. **校验通过条件**:`改善 > 0`(新策略该层贡献优于老策略)。若假设文档含明确数字主张(如"-32%→-10%"),校验 `new_layer_pct >= 主张目标`。
+4. 校验通过 → `provenance.write` 时记 `improvement_verified: true` + `layer_improvement: 改善值` → layer_state `redesigned`
+5. **校验未通过**(改善≤0):**不**标 `redesigned`,layer_state 保持 `inspiration_pending`(消耗一个 timeout 计数),provenance 记 `improvement_verified: false`。等下一轮启发重试或超时打回。
+
+`provenance.py` 的 provenance block 加 2 字段:
+```json
+{
+  "improvement_verified": true,
+  "layer_improvement": 0.22,
+  "improvement_claim": "该层贡献从 -32% → -10% 以内"
+}
+```
+`improvement_claim` 从假设 Markdown 的"预期改善"节正则抽取(若有数字主张),否则留空(校验降级为只看 `改善>0`)。
+
 ---
 
 ## 4. evolution_scheduler 第 6 触发器 + 代际日志写入 + per-layer 互斥
@@ -383,11 +423,17 @@ review_drift 的 gap 判定跳过 `status != "optimizing"` 的层(§1.4)。`sign
 - 若 `pending_gens >= timeout_generations` → `transition(states, layer, "optimizing")`(打回)
 - `save_layer_states`
 
+### 4.5.1 候选策略待审提醒(spirit2 #3)
+
+`redesigned` 状态下,若 `candidate_status == "pending_review"`(候选已产出未部署),**该层不因父策略 gap 持续超标而二次触发 inspiration**(避免反复生成相似假设)。改为:
+- `_print_deploy_checklist` 加一条 "inspiration 候选策略待审" 提醒项:列出 `inspired_strategy_id` + provenance.hypothesis 路径,提示人工去 create-strategy pipeline 产物里审/部署/拒绝
+- 人工回填 `candidate_status`(deployed/rejected)后,二次触发判据才恢复
+
 ### 4.6 redesigned 触发(新策略验证通过后)
 
-新策略过 GATE 3 后(`create-strategy` pipeline Step 5 回测 Sharpe ≥ 0),`provenance.write` 时顺带回写父策略 layer_state:
+新策略过 GATE 3 且**层改善验证通过**(§3.7)后,`provenance.write` 时回写父策略 layer_state:
 - `load_layer_states(parent_state_path, parent_strategy)`
-- `transition(states, inspired_layer, "redesigned", inspired_strategy_id=new_id, retired_shaping_terms=[shaping_term])`
+- `transition(states, inspired_layer, "redesigned", inspired_strategy_id=new_id, retired_shaping_terms=[shaping_term], candidate_status="pending_review")`(候选已产出,待审)
 - `save_layer_states`
 
 父策略 `state_path` 通过 manifest `inspiration.parent_state_path` 或约定 `Results/auto_optimize/evolution_state.json` 推断。
