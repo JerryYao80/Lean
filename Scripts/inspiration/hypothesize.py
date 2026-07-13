@@ -66,7 +66,7 @@ def _call_llm(system_prompt, user_prompt, llm_cfg):
         "temperature": llm_cfg.get("temperature", 0.7),
         "max_tokens": 4096,
     }
-    response = client(request_payload)
+    response = client.summarize_with_llm(request_payload)
     if isinstance(response, dict):
         choices = response.get("choices", [])
         if choices:

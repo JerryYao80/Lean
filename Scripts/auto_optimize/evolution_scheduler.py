@@ -261,10 +261,20 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
         _review_status = "unknown"
         # review.json 路径:优先 manifest 声明的 results 子目录,回退 strategy_name (spirit3 #3: 无 gold2 硬编码)
         _review_subdir = _m.raw.get("review", {}).get("results_subdir") or _m.strategy_name
-        _rj_path = _REPO_ROOT / "Results" / _review_subdir / "review" / "review.json"
+        _review_dir = _REPO_ROOT / "Results" / _review_subdir / "review"
+        # review_status 从 sidecar last_review 读真实状态(fail/warn/pass),回退 "unknown" (code-review fix)
+        _sidecar_path = _review_dir / "review.last_review.json"
+        if _sidecar_path.exists():
+            try:
+                _sidecar = json.loads(_sidecar_path.read_text())
+                _review_status = _sidecar.get("review_status", "unknown")
+            except Exception:
+                _review_status = "unknown"
+        _rj_path = _review_dir / "review.json"
         if _rj_path.exists():
             _rj = json.loads(_rj_path.read_text())
-            _review_status = "pass"
+            if _review_status == "unknown":
+                _review_status = "pass"
             for _layer, _agg in _rj.get("layer_attribution", {}).items():
                 _layer_gaps[_layer] = {"pnl_pct_of_total": _agg.get("pnl_pct_of_total", 0),
                                         "gap": abs(_agg.get("pnl_pct_of_total", 0))}
