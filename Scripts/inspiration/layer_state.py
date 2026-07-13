@@ -47,7 +47,12 @@ def load_layer_states(state_path: str, strategy: str) -> dict:
     except Exception:
         return {}
     raw = state.get("layer_states", {}).get(strategy, {})
-    return {layer: LayerState(**data) for layer, data in raw.items()}
+    out = {}
+    for layer, data in raw.items():
+        if isinstance(data, dict):
+            data = {**data, "layer": data.get("layer", layer)}
+        out[layer] = LayerState(**data) if isinstance(data, dict) else LayerState(layer=layer)
+    return out
 
 
 def save_layer_states(state_path: str, strategy: str, states: dict):

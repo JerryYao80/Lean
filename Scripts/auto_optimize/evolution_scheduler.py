@@ -118,6 +118,47 @@ def check_triggers(config: dict, state: dict, metrics_path: str,
         except Exception as ex:
             print(f"  [review_drift] orchestrate failed: {ex}")
 
+    # 6. inspiration (启发新策略触发器, spec §4.2)
+    triggers["inspiration"] = False
+    if results_dir and manifest:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "inspiration"))
+            from trigger import detect as detect_inspiration
+            from layer_state import load_layer_states, transition, save_layer_states
+            from generations import read_history
+            _insp_cfg = (manifest.raw if manifest else {}).get("inspiration", {})
+            if _insp_cfg:
+                _strat = manifest.strategy_name
+                _sp = state.get("_state_path", "")
+                _states = load_layer_states(_sp, _strat)
+                _min_gens = _insp_cfg.get("persistence", {}).get("min_generations", 3)
+                # results_dir may be repo_root (test) or .../Results (production);
+                # read_history expects repo_root (parent of Results/).
+                _rd_path = pathlib.Path(results_dir)
+                _history_root = str(_rd_path.parent) if _rd_path.name == "Results" else str(_rd_path)
+                _history = read_history(_strat, _min_gens, repo_root=_history_root)
+                _to_inspire = detect_inspiration(_strat, _history, _states,
+                    _insp_cfg.get("persistence", {}), ceiling=3.0)
+                for _layer in _to_inspire:
+                    transition(_states, _layer, "inspiration_pending",
+                               pending_since_generation=state.get("generation_count", 0))
+                    print(f"  [inspiration] layer '{_layer}' → inspiration_pending")
+                # timeout回收
+                _timeout = _insp_cfg.get("timeout_generations", 5)
+                _gen_now = state.get("generation_count", 0)
+                for _layer, _ls in list(_states.items()):
+                    if _ls.status == "inspiration_pending":
+                        if _gen_now - _ls.pending_since_generation >= _timeout:
+                            transition(_states, _layer, "optimizing")
+                            print(f"  [inspiration] layer '{_layer}' timeout, 打回 optimizing")
+                save_layer_states(_sp, _strat, _states)
+                if _to_inspire:
+                    triggers["inspiration"] = True
+                    state["inspired_layers"] = _to_inspire
+        except Exception as ex:
+            print(f"  [inspiration] detect failed: {ex}")
+
     return triggers
 
 
@@ -203,6 +244,62 @@ def fire_optimization(manifest_path: str, config: dict, state_path: str):
                                     manifest_path=manifest_path, prev_gen_shaping=prev_shaping)
     except Exception as ex:
         print(f"  [deploy_checklist] non-blocking failure: {ex}")
+
+    # Spec §4.1: 代际日志
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "inspiration"))
+        from generations import log as log_generation
+        from manifest_loader import load_manifest
+        _m = load_manifest(manifest_path)
+        _fb_action = _load_feedback_action(state_path + ".feedback.json")
+        _shaping = _fb_action.shaping_overrides if _fb_action else {}
+        _layer_gaps = {}
+        _review_status = "unknown"
+        # review.json 路径:优先 manifest 声明的 results 子目录,回退 strategy_name (spirit3 #3: 无 gold2 硬编码)
+        _review_subdir = _m.raw.get("review", {}).get("results_subdir") or _m.strategy_name
+        _rj_path = _REPO_ROOT / "Results" / _review_subdir / "review" / "review.json"
+        if _rj_path.exists():
+            _rj = json.loads(_rj_path.read_text())
+            _review_status = "pass"
+            for _layer, _agg in _rj.get("layer_attribution", {}).items():
+                _layer_gaps[_layer] = {"pnl_pct_of_total": _agg.get("pnl_pct_of_total", 0),
+                                        "gap": abs(_agg.get("pnl_pct_of_total", 0))}
+        _gen_n = state.get("generation_count", 0) + 1
+        state["generation_count"] = _gen_n
+        log_generation(_m.strategy_name, _gen_n, _layer_gaps, _shaping, _review_status, repo_root=str(_REPO_ROOT))
+    except Exception as ex:
+        print(f"  [generations] non-blocking failure: {ex}")
+
+    # Spec §4.4: inspiration hypothesize
+    _inspired = state.get("inspired_layers", [])
+    if _inspired:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(_REPO_ROOT / "Scripts" / "inspiration"))
+            from hypothesize import run as run_hypothesize
+            from generations import read_history
+            from manifest_loader import load_manifest
+            _m = load_manifest(manifest_path)
+            _insp_cfg = _m.raw.get("inspiration", {})
+            _min_gens = _insp_cfg.get("persistence", {}).get("min_generations", 3)
+            _review_doc = {}
+            # spirit3 #3: 无 gold2 硬编码,优先 manifest results_subdir
+            _review_subdir = _m.raw.get("review", {}).get("results_subdir") or _m.strategy_name
+            _rj_path = _REPO_ROOT / "Results" / _review_subdir / "review" / "review.json"
+            if _rj_path.exists():
+                _review_doc = json.loads(_rj_path.read_text())
+            _history = read_history(_m.strategy_name, _min_gens, repo_root=str(_REPO_ROOT))
+            for _layer in _inspired:
+                try:
+                    _md_path = run_hypothesize(_m.strategy_name, _layer, _review_doc, _history,
+                                               _m.raw, _insp_cfg.get("llm", {}))
+                    print(f"  [inspiration] wrote hypothesis: {_md_path}")
+                except Exception as ex:
+                    print(f"  [inspiration] hypothesize layer '{_layer}' failed: {ex}")
+            state["inspired_layers"] = []
+        except Exception as ex:
+            print(f"  [inspiration] non-blocking failure: {ex}")
     return True
 
 

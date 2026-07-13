@@ -71,3 +71,31 @@ def test_load_missing_strategy_returns_empty():
     with tempfile.TemporaryDirectory() as d:
         loaded = load_layer_states(str(Path(d) / "state.json"), "Nonexistent")
         assert loaded == {}
+
+
+def test_load_without_layer_field():
+    """Tests backward compatibility: layer_state dict without explicit 'layer' field."""
+    with tempfile.TemporaryDirectory() as d:
+        state_path = str(Path(d) / "state.json")
+        # Simulate serialized dict without 'layer' field (backward compatibility)
+        Path(state_path).write_text(json.dumps({
+            'layer_states': {
+                'Gold2': {
+                    'extreme_risk': {
+                        'status': 'inspiration_pending',
+                        'pending_since_generation': 3,
+                        'inspired_strategy_id': 'NewStrategy-abc',
+                        'retired_shaping_terms': ['extreme_risk_contrib_penalty'],
+                        'candidate_deployed': False,
+                        'candidate_status': 'pending_review'
+                    }
+                }
+            }
+        }))
+        loaded = load_layer_states(state_path, "Gold2")
+        assert loaded["extreme_risk"].status == "inspiration_pending"
+        assert loaded["extreme_risk"].layer == "extreme_risk"  # Auto-inferred from key
+        assert loaded["extreme_risk"].pending_since_generation == 3
+        assert loaded["extreme_risk"].inspired_strategy_id == "NewStrategy-abc"
+        assert loaded["extreme_risk"].candidate_status == "pending_review"
+
