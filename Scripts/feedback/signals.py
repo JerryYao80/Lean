@@ -19,7 +19,7 @@ def _load_json(path):
         return None
 
 
-def orchestrate(manifest, results_dir):
+def orchestrate(manifest, results_dir, layer_states=None):
     """Merge review.json + sidecar → review_doc, load state_trace by convention,
     dispatch adapter.feedback_signal. Returns FeedbackAction or None.
 
@@ -64,4 +64,4 @@ def orchestrate(manifest, results_dir):
     sys.path.insert(0, str(_scripts_dir))                 # makes feedback.adapters.<x> importable
     mod = importlib.import_module(fb["adapter_module"])
     adapter = getattr(mod, fb["adapter_class"])()
-    return adapter.feedback_signal(manifest, review_doc, state_trace)
+    return adapter.feedback_signal(manifest, review_doc, state_trace, layer_states)

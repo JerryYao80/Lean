@@ -23,5 +23,7 @@ class StrategyFeedbackAdapter(ABC):
     LAYERS: list
 
     @abstractmethod
-    def feedback_signal(self, manifest, review_doc: dict, state_trace: list) -> FeedbackAction:
-        """Read review.json + state_trace → FeedbackAction. Pure function."""
+    def feedback_signal(self, manifest, review_doc: dict, state_trace: list,
+                        layer_states: dict = None) -> FeedbackAction:
+        """Read review.json + state_trace → FeedbackAction. Pure function.
+        layer_states: per-layer state dict (inspiration互斥); None = all optimizing."""

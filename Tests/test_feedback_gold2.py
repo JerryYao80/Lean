@@ -103,6 +103,23 @@ def test_attribution_method_passthrough():
     assert action.attribution_method == "telescoping"
 
 
+def test_layer_states_skips_inspiration_pending():
+    """Spec §1.4: layer in inspiration_pending → review_drift skips its gap判定."""
+    ad = Gold2FeedbackAdapter()
+    class _LS:
+        status = "inspiration_pending"
+    layer_states = {"extreme_risk": _LS()}
+    action = ad.feedback_signal(_manifest(), _review(layer_pcts={"extreme_risk": -0.32}), [], layer_states=layer_states)
+    assert "extreme_risk" not in action.trigger_reason
+    assert "extreme_risk_contrib_penalty" not in action.shaping_overrides
+
+
+def test_layer_states_none_is_backward_compatible():
+    ad = Gold2FeedbackAdapter()
+    action = ad.feedback_signal(_manifest(), _review(layer_pcts={"extreme_risk": -0.32}), [])
+    assert "extreme_risk" in action.trigger_reason
+
+
 def test_per_bar_downsample_sums_to_telescoping():
     """Spec §3.3: per-bar layer contributions (telescoping)."""
     ad = Gold2FeedbackAdapter()

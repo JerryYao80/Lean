@@ -8,14 +8,14 @@ from .base import StrategyFeedbackAdapter, FeedbackAction
 class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
     LAYERS = ["trend", "vol_target", "extreme_risk", "realrate_cap"]
 
-    def feedback_signal(self, manifest, review_doc, state_trace):
+    def feedback_signal(self, manifest, review_doc, state_trace, layer_states=None):
         fb = (manifest.raw if manifest else {}).get("feedback", {})
         thresholds = fb.get("trigger_thresholds", {})
         term_map = fb.get("shaping_term_map", {})
         obs_fields = fb.get("observation_fields", [])
 
-        trigger, reasons = self._check_triggers(review_doc, thresholds)
-        shaping = self._compute_shaping_overrides(review_doc, thresholds, term_map)
+        trigger, reasons = self._check_triggers(review_doc, thresholds, layer_states)
+        shaping = self._compute_shaping_overrides(review_doc, thresholds, term_map, layer_states)
         per_bar = self._downsample_per_bar(state_trace) if state_trace else []
 
         return FeedbackAction(
@@ -27,8 +27,8 @@ class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
             per_bar_layer_contrib=per_bar,
         )
 
-    def _check_triggers(self, review_doc, thresholds):
-        """Spec §3.2: review_status=fail (hard) + layer_gap (gated by min_trades)."""
+    def _check_triggers(self, review_doc, thresholds, layer_states=None):
+        """Spec §3.2 + §1.4: review_status=fail (hard) + layer_gap (gated by min_trades + per-layer mutex)."""
         trigger = False
         reasons = []
         if review_doc.get("review_status") == "fail" and thresholds.get("review_status_fail", True):
@@ -41,17 +41,25 @@ class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
         else:
             gap_thresh = thresholds.get("max_layer_attribution_gap", 0.15)
             for layer, agg in review_doc.get("layer_attribution", {}).items():
+                # per-layer mutex: skip non-optimizing layers (§1.4)
+                ls = layer_states.get(layer) if layer_states else None
+                if ls and getattr(ls, "status", "optimizing") != "optimizing":
+                    continue
                 pct = abs(agg.get("pnl_pct_of_total", 0))
                 if pct > gap_thresh:
                     trigger = True
                     reasons.append(f"layer_gap {layer}={agg.get('pnl_pct_of_total')}>{gap_thresh}")
         return trigger, reasons
 
-    def _compute_shaping_overrides(self, review_doc, thresholds, term_map):
-        """Spec §3.3: weight = clamp(gap/threshold, 0.5, 3.0) for layers exceeding gap."""
+    def _compute_shaping_overrides(self, review_doc, thresholds, term_map, layer_states=None):
+        """Spec §3.3: weight = clamp(gap/threshold, 0.5, 3.0) for layers exceeding gap (skip non-optimizing)."""
         shaping = {}
         gap_thresh = thresholds.get("max_layer_attribution_gap", 0.15)
         for layer, term in term_map.items():
+            # per-layer mutex: skip non-optimizing layers (§1.4)
+            ls = layer_states.get(layer) if layer_states else None
+            if ls and getattr(ls, "status", "optimizing") != "optimizing":
+                continue
             agg = review_doc.get("layer_attribution", {}).get(layer, {})
             gap = abs(agg.get("pnl_pct_of_total", 0))
             if gap > gap_thresh:
