@@ -200,15 +200,15 @@ def test_inspection_rejects_file_swapped_for_parse_then_restored(tmp_path, monke
     path = tmp_path / "prices.csv"
     original_bytes = b"date\n2024-01-02\n"
     path.write_bytes(original_bytes)
-    original_read = data_sources._read_frame
+    original_read = data_sources._read_bytes
 
-    def read_swapped(source_path, suffix):
+    def read_swapped(source_path):
         source_path.write_bytes(b"date\n2025-01-03\n")
-        frame = original_read(source_path, suffix)
+        content = original_read(source_path)
         source_path.write_bytes(original_bytes)
-        return frame
+        return content
 
-    monkeypatch.setattr(data_sources, "_read_frame", read_swapped)
+    monkeypatch.setattr(data_sources, "_read_bytes", read_swapped)
 
     with pytest.raises(ValueError, match="changed"):
         inspect_source(

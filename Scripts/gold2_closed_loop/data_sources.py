@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 import hashlib
+from io import BytesIO
 from pathlib import Path
 import re
 from types import MappingProxyType
@@ -75,13 +76,13 @@ def inspect_source(
             )
 
     before = resolved_path.stat()
-    before_digest = _sha256(resolved_path)
-    frame = _read_frame(resolved_path, suffix)
+    content = _read_bytes(resolved_path)
+    frame = _read_frame(BytesIO(content), suffix)
+    digest = hashlib.sha256(content).hexdigest()
     after_parse = resolved_path.stat()
     if _file_identity(before) != _file_identity(after_parse):
         raise ValueError("source file changed during inspection")
-    digest = _sha256(resolved_path)
-    if digest != before_digest:
+    if _sha256(resolved_path) != digest:
         raise ValueError("source file changed during inspection")
     try:
         after_resolved = requested_path.resolve(strict=True)
@@ -122,8 +123,16 @@ def inspect_source(
     )
 
 
-def _read_frame(path: Path, suffix: str) -> pd.DataFrame:
-    return pd.read_parquet(path) if suffix == ".parquet" else pd.read_csv(path)
+def _read_frame(source: object, suffix: str) -> pd.DataFrame:
+    return pd.read_parquet(source) if suffix == ".parquet" else pd.read_csv(source)
+
+
+def _read_bytes(path: Path) -> bytes:
+    chunks: list[bytes] = []
+    with path.open("rb") as source:
+        while block := source.read(_HASH_BLOCK_SIZE):
+            chunks.append(block)
+    return b"".join(chunks)
 
 
 def _parse_date(value: object) -> datetime:
