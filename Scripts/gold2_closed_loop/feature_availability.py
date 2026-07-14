@@ -33,6 +33,10 @@ def asof_available(
     if not isfinite(maximum_staleness) or maximum_staleness < 0:
         raise ValueError("maximum_staleness must be finite and non-negative")
     _require_compatible_timezones(sessions, releases)
+    if sessions.hasnans:
+        raise ValueError("sessions must not contain NaT")
+    if releases.hasnans:
+        raise ValueError("releases must not contain NaT")
 
     if sessions.empty or releases.empty:
         return pd.Series(False, index=sessions, dtype=bool)

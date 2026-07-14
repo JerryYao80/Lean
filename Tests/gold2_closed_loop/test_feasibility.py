@@ -129,6 +129,30 @@ def test_source_publication_lag_is_applied_before_availability():
     assert result[0].reasons == ("UNAVAILABLE_SESSION_GAP:VIX:1>0",)
 
 
+def test_utc_equivalents_use_shanghai_dates_at_exact_w1_boundaries():
+    shanghai_boundaries = pd.DatetimeIndex(
+        ["2018-01-02 00:00", "2022-12-31 23:59:59"], tz=TZ
+    )
+    utc_sessions = shanghai_boundaries.tz_convert("UTC")
+    releases = {
+        source: pd.DatetimeIndex([shanghai_boundaries[-1] - timedelta(minutes=1)])
+        for source in SOURCES
+    }
+
+    shanghai_result = evaluate_fixed_windows(
+        shanghai_boundaries, releases, policies()
+    )
+    utc_result = evaluate_fixed_windows(utc_sessions, releases, policies())
+
+    assert utc_result == shanghai_result
+    assert utc_result[0] == WindowEligibility(
+        "W1",
+        False,
+        ("UNAVAILABLE_SESSION_GAP:518880:1>0", "UNAVAILABLE_SESSION_GAP:AU:1>0", "UNAVAILABLE_SESSION_GAP:VIX:1>0", "UNAVAILABLE_SESSION_GAP:DFII10:1>0"),
+        (proof_windows()[0].train[0], proof_windows()[0].blind[1]),
+    )
+
+
 def test_three_eligible_windows_pass_and_two_are_blocked():
     three = [eligibility("W1"), eligibility("W2"), eligibility("W3"), eligibility("W4", False)]
     two = [eligibility("W1"), eligibility("W2"), eligibility("W3", False), eligibility("W4", False)]

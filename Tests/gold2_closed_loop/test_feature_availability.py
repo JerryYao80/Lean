@@ -47,6 +47,22 @@ def test_invalid_staleness_is_rejected(maximum_staleness):
         asof_available(index("2024-01-02 15:00"), index("2024-01-01 15:00"), maximum_staleness)
 
 
+def test_nat_sessions_are_rejected():
+    sessions = pd.DatetimeIndex([pd.NaT, "2024-01-02 15:00"], tz=TZ)
+
+    with pytest.raises(ValueError, match="sessions must not contain NaT"):
+        asof_available(sessions, index("2024-01-01 15:00"), 1)
+
+
+def test_all_nat_and_mixed_nat_releases_are_rejected():
+    all_nat = pd.DatetimeIndex([pd.NaT], tz=TZ)
+    mixed_nat = pd.DatetimeIndex(["2024-01-01 15:00", pd.NaT], tz=TZ)
+
+    for releases in (all_nat, mixed_nat):
+        with pytest.raises(ValueError, match="releases must not contain NaT"):
+            asof_available(index("2024-01-02 15:00"), releases, 1)
+
+
 def test_timezone_aware_consistent_indices_are_required():
     aware = index("2024-01-02 15:00")
     naive = index("2024-01-01 15:00", tz=None)

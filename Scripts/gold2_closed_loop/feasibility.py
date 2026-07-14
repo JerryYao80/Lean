@@ -16,6 +16,7 @@ from Scripts.gold2_closed_loop.phase0_types import (
 
 REQUIRED_SOURCES = ("518880", "AU", "VIX", "DFII10")
 REQUIRED_WINDOW_IDS = ("W1", "W2", "W3", "W4")
+CANONICAL_SESSION_TIMEZONE = "Asia/Shanghai"
 
 
 @dataclass(frozen=True)
@@ -91,13 +92,16 @@ def evaluate_fixed_windows(
         raise TypeError("sessions must be a pandas DatetimeIndex")
     if sessions.tz is None:
         raise ValueError("sessions must be timezone-aware")
+    if sessions.hasnans:
+        raise ValueError("sessions must not contain NaT")
+    canonical_sessions = sessions.tz_convert(CANONICAL_SESSION_TIMEZONE)
     _validate_source_keys(source_releases, "source_releases")
     _validate_source_keys(source_policies, "source_policies")
 
     results = []
     for window in proof_windows():
         fixed_range = (window.train[0], window.blind[1])
-        relevant_sessions = _window_sessions(sessions, window)
+        relevant_sessions = _window_sessions(canonical_sessions, window)
         reasons = []
         if relevant_sessions.empty:
             reasons.append("NO_SESSIONS_IN_FIXED_WINDOW")
