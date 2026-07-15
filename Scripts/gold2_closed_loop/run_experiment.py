@@ -16,7 +16,6 @@ import stat
 import sys
 import tempfile
 from typing import Any
-import uuid
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -112,20 +111,6 @@ def _interface_artifact() -> dict[str, Any]:
         "phase0_gate_effect": "INFORMATIONAL_ONLY",
         "status": "NOT_ASSESSED",
     }
-
-
-def _unexpected_output_entries(output: Path) -> list[str]:
-    if not output.exists():
-        return []
-    return sorted(path.name for path in output.iterdir() if path.name not in ARTIFACT_NAMES)
-
-
-def _validate_output(output: Path) -> None:
-    if output.exists() and not output.is_dir():
-        raise ValueError("output must be a directory")
-    unexpected = _unexpected_output_entries(output)
-    if unexpected:
-        raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
 
 
 @contextmanager
@@ -294,7 +279,7 @@ def load_artifact_set(output: Path) -> dict[str, dict[str, Any]]:
 def _verify_published_set(output: Path, expected_hash: str, generation_id: str) -> None:
     fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        loaded = _read_generation_fd(fd, generation_id)
+        _read_generation_fd(fd, generation_id)
     finally:
         os.close(fd)
     if generation_id != expected_hash:
@@ -380,7 +365,7 @@ def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> No
                 raise ValueError("managed generations root changed during pin")
             enriched = _artifact_set(artifacts)
             generation_id = enriched[ARTIFACT_NAMES[0]]["generation_id"]
-            stage_name = f".stage-{uuid.uuid4().hex}"
+            stage_name = f".stage-{os.urandom(16).hex()}"
             os.mkdir(stage_name, mode=0o700, dir_fd=root_fd)
             stage = Path(f"/proc/self/fd/{root_fd}") / stage_name
             stage_created = True
@@ -473,7 +458,7 @@ def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> No
                         if swapped and any("restore" in str(error) for error in errors[1:])
                         else "artifact publication and cleanup failed"
                     )
-                    raise ExceptionGroup(label, errors)
+                    raise ExceptionGroup(label, errors) from primary
                 raise
         finally:
             os.close(root_fd)

@@ -458,7 +458,6 @@ def test_failure_after_generation_rename_before_pointer_preserves_old(tmp_path: 
     output = tmp_path / "audit"
     module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
     old_target = output.resolve()
-    real_symlink = module.os.symlink
     monkeypatch.setattr(module.os, "symlink", lambda *a: (_ for _ in ()).throw(OSError("after rename")))
     with pytest.raises(OSError, match="after rename"):
         module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
@@ -467,15 +466,25 @@ def test_failure_after_generation_rename_before_pointer_preserves_old(tmp_path: 
 
 
 def test_concurrent_publishers_leave_coherent_pointer(tmp_path: Path):
+    import threading
+
     module = load_cli_module()
     output = tmp_path / "audit"
-    import threading
-    errors=[]
+    errors = []
+
     def publish(tag):
-        try: module._publish_artifacts(output, {name: {tag: name} for name in ARTIFACTS})
-        except Exception as e: errors.append(e)
-    threads=[threading.Thread(target=publish,args=(tag,)) for tag in ("a","b")]
-    [t.start() for t in threads]; [t.join() for t in threads]
+        try:
+            module._publish_artifacts(
+                output, {name: {tag: name} for name in ARTIFACTS}
+            )
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=publish, args=(tag,)) for tag in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
     assert not errors
     module.load_artifact_set(output)
     assert output.is_symlink()
