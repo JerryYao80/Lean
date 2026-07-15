@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, time
 import hashlib
 import json
 import os
@@ -50,6 +50,10 @@ GENERATION_RECORD_FIELDS = (
     "trigger_observation_valid",
     "terminal_reason",
 )
+CANONICAL_REVIEW_INPUT = "frozen_formal_review_bundle"
+CANONICAL_FAILURE_BUDGET_POLICY = (
+    "failed_generation_consumes_budget_and_breaks_adjacency"
+)
 KNOWN_INTERFACE_BLOCKERS = (
     "production optimizer hard-codes OptionVolArb CQL trace and policy paths",
     "production optimizer hard-codes ONNX observation dimension 8",
@@ -81,6 +85,7 @@ def _blocked_artifacts(message: str) -> dict[str, dict[str, Any]]:
             "verdict": FeasibilityVerdict.BLOCKED_INSUFFICIENT_DATA.value,
             "evaluation_status": "NOT_EVALUATED",
             "proof_conclusion": "UNPROVEN",
+            "overall_status": "BLOCKED",
             "windows": windows,
         },
         "g3_observability.json": {
@@ -157,6 +162,54 @@ def _read_dates(source: dict[str, Any], expected_sha256: str | None = None) -> p
     ).drop_duplicates().sort_values()
 
 
+def _read_china_calendar(
+    config: dict[str, Any], timezone: ZoneInfo, close_time: time
+) -> tuple[pd.DatetimeIndex, dict[str, Any], pd.DatetimeIndex]:
+    calendar = _require_mapping(config.get("china_calendar"), "china_calendar")
+    required = ("path", "date_column", "date_format", "is_open_column", "source_version")
+    missing = [field for field in required if field not in calendar]
+    if missing:
+        raise ValueError(f"china_calendar missing: {', '.join(missing)}")
+    path = Path(str(calendar["path"])).expanduser().resolve(strict=True)
+    content = path.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    suffix = path.suffix.lower()
+    if suffix not in (".csv", ".parquet"):
+        raise ValueError(f"unsupported China calendar suffix: {suffix}")
+    from io import BytesIO
+    frame = pd.read_parquet(BytesIO(content)) if suffix == ".parquet" else pd.read_csv(BytesIO(content))
+    date_column = str(calendar["date_column"])
+    open_column = str(calendar["is_open_column"])
+    if date_column not in frame or open_column not in frame:
+        raise ValueError("China calendar date or is_open column does not exist")
+    parsed = pd.to_datetime(
+        frame[date_column].astype(str), format=str(calendar["date_format"]), errors="raise"
+    )
+    if parsed.duplicated().any():
+        raise ValueError("China calendar contains duplicate dates")
+    all_dates = pd.DatetimeIndex(parsed).sort_values()
+    open_values = pd.to_numeric(frame.set_index(parsed)[open_column], errors="raise")
+    if not set(open_values.unique()).issubset({0, 1}):
+        raise ValueError("China calendar is_open values must be 0 or 1")
+    open_dates = open_values[open_values == 1].index.sort_values()
+    sessions = pd.DatetimeIndex(
+        [datetime.combine(value.date(), close_time, timezone) for value in open_dates]
+    )
+    report = {
+        "date_column": date_column,
+        "date_format": str(calendar["date_format"]),
+        "first_date": all_dates.min().date().isoformat(),
+        "is_open_column": open_column,
+        "last_date": all_dates.max().date().isoformat(),
+        "open_session_count": len(sessions),
+        "path": str(path),
+        "sha256": digest,
+        "source_id": "china_calendar",
+        "source_version": str(calendar["source_version"]),
+    }
+    return sessions, report, all_dates
+
+
 def _duration(value: Any, label: str) -> pd.Timedelta:
     try:
         duration = pd.Timedelta(value)
@@ -167,7 +220,13 @@ def _duration(value: Any, label: str) -> pd.Timedelta:
     return duration
 
 
-def _assess_data(config: dict[str, Any]) -> tuple[dict[str, Any], pd.DatetimeIndex, dict[str, pd.DatetimeIndex], dict[str, SourcePolicy]]:
+def _assess_data(config: dict[str, Any]) -> tuple[
+    dict[str, Any],
+    pd.DatetimeIndex,
+    pd.DatetimeIndex,
+    dict[str, pd.DatetimeIndex],
+    dict[str, SourcePolicy],
+]:
     declared = _require_mapping(config.get("data_sources"), "data_sources")
     if set(declared) != set(REQUIRED_SOURCES):
         raise ValueError("data_sources must define exactly 518880, AU, VIX, DFII10")
@@ -187,8 +246,11 @@ def _assess_data(config: dict[str, Any]) -> tuple[dict[str, Any], pd.DatetimeInd
         if missing:
             raise ValueError(f"data_sources.{source_id} missing: {', '.join(missing)}")
         declared_id = str(source["source_id"])
+        instrument = str(source.get("instrument", ""))
         if declared_id != source_id:
             raise ValueError(f"{source_id} source must use canonical source_id {source_id}")
+        if instrument != source_id:
+            raise ValueError(f"{source_id} source must use canonical instrument {source_id}")
         kind_text = str(source.get("source_kind", "tradable" if source_id == "518880" else "feature"))
         kind = SourceKind(kind_text)
         if source_id == "518880" and kind is not SourceKind.TRADABLE:
@@ -198,7 +260,7 @@ def _assess_data(config: dict[str, Any]) -> tuple[dict[str, Any], pd.DatetimeInd
             Path(str(source["path"])).expanduser(),
             str(source["date_column"]),
             source_kind=kind,
-            instrument=str(source.get("instrument", source_id)),
+            instrument=instrument,
             date_format=str(source["date_format"]),
         )
         report_value = {
@@ -229,28 +291,30 @@ def _assess_data(config: dict[str, Any]) -> tuple[dict[str, Any], pd.DatetimeInd
             timezone=str(source["timezone"]),
         )
 
-    calendar_source = declared["518880"]
     session_timezone = ZoneInfo(str(config.get("session_timezone", "Asia/Shanghai")))
     close_time = datetime.strptime(str(config.get("session_close_time", "15:00:00")), "%H:%M:%S").time()
-    tradable_dates = _read_dates(calendar_source, reports["518880"]["sha256"])
-    sessions = pd.DatetimeIndex(
-        [datetime.combine(value.date(), close_time, session_timezone) for value in tradable_dates]
-    ).drop_duplicates().sort_values()
+    sessions, calendar_report, calendar_dates = _read_china_calendar(
+        config, session_timezone, close_time
+    )
     artifact = {
         "calendar_basis": {
-            "description": "518880 observed tradable dates at configured China session close",
+            "description": "explicit China trade calendar open sessions at configured close",
+            "observed_first_date": calendar_report["first_date"],
+            "observed_last_date": calendar_report["last_date"],
             "session_close_time": close_time.isoformat(),
             "timezone": str(session_timezone),
-            "source_id": "518880",
+            "source_id": "china_calendar",
         },
+        "china_calendar": calendar_report,
         "sources": reports,
         "status": "PASS",
     }
-    return artifact, sessions, releases, policies
+    return artifact, sessions, calendar_dates, releases, policies
 
 
 def _assess_windows(
     sessions: pd.DatetimeIndex,
+    calendar_dates: pd.DatetimeIndex,
     releases: dict[str, pd.DatetimeIndex],
     policies: dict[str, SourcePolicy],
 ) -> dict[str, Any]:
@@ -258,6 +322,19 @@ def _assess_windows(
     windows = []
     for window, definition in zip(decision.windows, proof_windows(), strict=True):
         reasons = list(window.reasons)
+        calendar_start = definition.train[0]
+        calendar_end = definition.blind[1]
+        if calendar_dates.empty or calendar_dates.min().date() > calendar_start:
+            reasons.append(f"INCOMPLETE_CALENDAR_START:{calendar_start.isoformat()}")
+        if calendar_dates.empty or calendar_dates.max().date() < calendar_end:
+            reasons.append(f"INCOMPLETE_CALENDAR_END:{calendar_end.isoformat()}")
+        if not calendar_dates.empty:
+            expected_dates = pd.date_range(calendar_start, calendar_end, freq="D")
+            missing_dates = expected_dates.difference(calendar_dates.tz_localize(None))
+            if not missing_dates.empty:
+                reasons.append(
+                    f"INCOMPLETE_CALENDAR_INTERNAL:{missing_dates[0].date().isoformat()}"
+                )
         relevant = sessions[
             (sessions.date >= definition.train[0]) & (sessions.date <= definition.blind[1])
         ]
@@ -298,10 +375,24 @@ def _assess_g3(config: dict[str, Any]) -> dict[str, Any]:
         number = value.get(field)
         if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
             errors.append(f"{field} must be a positive integer")
-    if not isinstance(value.get("review_input"), str) or not value.get("review_input", "").strip():
-        errors.append("review_input must be present")
-    if not isinstance(value.get("failure_budget_policy"), str) or not value.get("failure_budget_policy", "").strip():
-        errors.append("failure_budget_policy must be present")
+    if value.get("review_input") != CANONICAL_REVIEW_INPUT:
+        errors.append(f"review_input must equal {CANONICAL_REVIEW_INPUT}")
+    if value.get("failure_budget_policy") != CANONICAL_FAILURE_BUDGET_POLICY:
+        errors.append(
+            f"failure_budget_policy must equal {CANONICAL_FAILURE_BUDGET_POLICY}"
+        )
+    minimum = value.get("minimum_required_generation_count")
+    per_generation = value.get("per_generation_candidate_budget")
+    per_window = value.get("per_window_candidate_budget")
+    if (
+        isinstance(minimum, int) and not isinstance(minimum, bool)
+        and isinstance(per_generation, int) and not isinstance(per_generation, bool)
+        and isinstance(per_window, int) and not isinstance(per_window, bool)
+        and per_window < minimum * per_generation
+    ):
+        errors.append(
+            "per_window_candidate_budget must cover every required generation budget"
+        )
     fields = value.get("required_generation_record_fields")
     if fields != list(GENERATION_RECORD_FIELDS):
         errors.append("required_generation_record_fields must exactly match the proof specification")
@@ -310,22 +401,27 @@ def _assess_g3(config: dict[str, Any]) -> dict[str, Any]:
         "minimum_required_generation_count": value.get("minimum_required_generation_count"),
         "per_generation_candidate_budget": value.get("per_generation_candidate_budget"),
         "per_window_candidate_budget": value.get("per_window_candidate_budget"),
+        "review_input": value.get("review_input"),
+        "failure_budget_policy": value.get("failure_budget_policy"),
         "required_generation_record_fields": list(GENERATION_RECORD_FIELDS),
         "status": "PASS" if not errors else "BLOCKED",
     }
 
 
 def assess(config: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], bool]:
-    data, sessions, releases, policies = _assess_data(config)
-    windows = _assess_windows(sessions, releases, policies)
+    data, sessions, calendar_dates, releases, policies = _assess_data(config)
+    windows = _assess_windows(sessions, calendar_dates, releases, policies)
     g3 = _assess_g3(config)
+    passed = windows["verdict"] == FeasibilityVerdict.PASS.value and g3["status"] == "PASS"
+    windows["overall_status"] = "PASS" if passed else "BLOCKED"
+    windows["evaluation_status"] = "READY" if passed else "NOT_EVALUATED"
+    windows["proof_conclusion"] = "PENDING_PROOF" if passed else "UNPROVEN"
     artifacts = {
         "data_coverage_audit.json": data,
         "window_inventory.json": windows,
         "g3_observability.json": g3,
         "interface_readiness.json": _interface_artifact(),
     }
-    passed = windows["verdict"] == FeasibilityVerdict.PASS.value and g3["status"] == "PASS"
     return artifacts, passed
 
 

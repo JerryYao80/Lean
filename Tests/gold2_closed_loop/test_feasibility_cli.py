@@ -72,6 +72,14 @@ def source_policy(path: Path, source_id: str, *, fmt: str = "%Y-%m-%d") -> dict:
 
 
 def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-12-31") -> dict:
+    calendar_days = pd.date_range("2018-01-01", "2025-12-31", freq="D")
+    calendar = tmp_path / "china_trade_cal.csv"
+    pd.DataFrame(
+        {
+            "cal_date": calendar_days.strftime("%Y%m%d"),
+            "is_open": (calendar_days.dayofweek < 5).astype(int),
+        }
+    ).to_csv(calendar, index=False)
     dates = pd.bdate_range(start, end)
     tradable = tmp_path / "518880.parquet"
     pd.DataFrame(
@@ -90,6 +98,7 @@ def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-1
             "date_column": "trade_date",
             "source_kind": "tradable",
             "instrument": "518880",
+            "maximum_staleness_days": 0,
             "calendar_basis": True,
         }
     }
@@ -98,20 +107,30 @@ def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-1
         pd.DataFrame({"date": dates.strftime("%Y-%m-%d"), "value": 1.0}).to_csv(
             path, index=False
         )
-        sources[source_id] = source_policy(path, source_id)
+        sources[source_id] = {
+            **source_policy(path, source_id),
+            "instrument": source_id,
+        }
 
     return {
         "experiment_id": "synthetic-proof",
         "paths": {"experiment_root": "Results/forbidden-proof-root"},
         "session_close_time": "15:00:00",
         "session_timezone": "Asia/Shanghai",
+        "china_calendar": {
+            "path": str(calendar),
+            "date_column": "cal_date",
+            "date_format": "%Y%m%d",
+            "is_open_column": "is_open",
+            "source_version": "synthetic-calendar-v1",
+        },
         "data_sources": sources,
         "g3_observability": {
             "minimum_required_generation_count": 3,
             "per_generation_candidate_budget": 2,
             "per_window_candidate_budget": 8,
-            "review_input": "frozen_feedback_evidence_bundle",
-            "failure_budget_policy": "a failed generation consumes budget and breaks continuity",
+            "review_input": "frozen_formal_review_bundle",
+            "failure_budget_policy": "failed_generation_consumes_budget_and_breaks_adjacency",
             "required_generation_record_fields": GENERATION_FIELDS,
         },
     }
@@ -131,7 +150,9 @@ def test_minimal_missing_draft_writes_all_blocked_artifacts_without_results(tmp_
     assert result.returncode == 2
     assert "Traceback" not in result.stderr
     assert {path.name for path in output.iterdir()} == ARTIFACTS
-    assert load(output, "window_inventory.json")["verdict"] == "BLOCKED_INSUFFICIENT_DATA"
+    inventory = load(output, "window_inventory.json")
+    assert inventory["verdict"] == "BLOCKED_INSUFFICIENT_DATA"
+    assert inventory["overall_status"] == "BLOCKED"
     assert not (tmp_path / "Results").exists()
 
 
@@ -148,7 +169,7 @@ def test_complete_four_source_data_passes_at_least_three_windows(tmp_path: Path)
     assert inventory["verdict"] == "PASS"
     assert [item["window_id"] for item in inventory["windows"]] == ["W1", "W2", "W3", "W4"]
     coverage = load(output, "data_coverage_audit.json")
-    assert coverage["calendar_basis"]["source_id"] == "518880"
+    assert coverage["calendar_basis"]["source_id"] == "china_calendar"
     assert set(coverage["sources"]) == {"518880", "AU", "VIX", "DFII10"}
     assert all("sha256" in report for report in coverage["sources"].values())
     assert all("publication_lag" in report for report in coverage["sources"].values())
@@ -193,7 +214,110 @@ def test_invalid_g3_blocks_otherwise_complete_assessment(tmp_path: Path):
     result = run_cli(draft, output, tmp_path)
 
     assert result.returncode == 2
-    assert load(output, "g3_observability.json")["status"] == "BLOCKED"
+    g3 = load(output, "g3_observability.json")
+    inventory = load(output, "window_inventory.json")
+    assert g3["status"] == "BLOCKED"
+    assert inventory["overall_status"] == "BLOCKED"
+    assert inventory["evaluation_status"] == "NOT_EVALUATED"
+    assert inventory["proof_conclusion"] == "UNPROVEN"
+
+
+def test_unknown_g3_policy_and_impossible_budget_are_rejected(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    config["g3_observability"]["review_input"] = "other"
+    config["g3_observability"]["failure_budget_policy"] = "other"
+    config["g3_observability"]["per_window_candidate_budget"] = 5
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    artifact = load(output, "g3_observability.json")
+    assert artifact["status"] == "BLOCKED"
+    assert artifact["review_input"] == "other"
+    assert artifact["failure_budget_policy"] == "other"
+    assert len(artifact["errors"]) == 3
+
+
+def test_substituted_instrument_is_rejected(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    config["data_sources"]["AU"]["instrument"] = "SILVER"
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert load(output, "data_coverage_audit.json")["status"] == "BLOCKED"
+
+
+def test_deleted_internal_518880_session_blocks_affected_windows(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    path = Path(config["data_sources"]["518880"]["path"])
+    frame = pd.read_parquet(path)
+    frame = frame[frame["trade_date"] != 20220103]
+    frame.to_parquet(path, index=False)
+    config["data_sources"]["518880"]["maximum_consecutive_gap_sessions"] = 0
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    inventory = load(output, "window_inventory.json")
+    assert inventory["eligible_blind_window_count"] < 3
+    assert any(
+        "UNAVAILABLE_SESSION_GAP:518880" in reason
+        for window in inventory["windows"]
+        for reason in window["reasons"]
+    )
+
+
+def test_internal_calendar_date_gap_blocks_affected_windows(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    calendar = Path(config["china_calendar"]["path"])
+    frame = pd.read_csv(calendar)
+    frame = frame[frame["cal_date"] != 20220108]  # closed Saturday still required inventory
+    frame.to_csv(calendar, index=False)
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    inventory = load(output, "window_inventory.json")
+    assert any(
+        reason == "INCOMPLETE_CALENDAR_INTERNAL:2022-01-08"
+        for window in inventory["windows"]
+        for reason in window["reasons"]
+    )
+
+
+def test_same_year_truncated_calendar_blocks_exact_fixed_intervals(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    calendar = Path(config["china_calendar"]["path"])
+    frame = pd.read_csv(calendar)
+    frame = frame[(frame["cal_date"] >= 20180601) & (frame["cal_date"] <= 20250630)]
+    frame.to_csv(calendar, index=False)
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    inventory = load(output, "window_inventory.json")
+    assert inventory["eligible_blind_window_count"] < 3
+    assert any(
+        reason.startswith("INCOMPLETE_CALENDAR_")
+        for window in inventory["windows"]
+        for reason in window["reasons"]
+    )
 
 
 def test_fund_nav_and_proxy_tradable_inputs_are_rejected(tmp_path: Path):
