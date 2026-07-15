@@ -21,6 +21,7 @@ _PROHIBITED_DECLARATION = re.compile(r"(?:^|[^a-z])(proxy|prelisting)(?:[^a-z]|$
 class SourceKind(StrEnum):
     TRADABLE = "tradable"
     BENCHMARK = "benchmark"
+    FEATURE = "feature"
     FUND_NAV = "fund_nav"
 
 
@@ -44,6 +45,7 @@ def inspect_source(
     *,
     source_kind: SourceKind,
     instrument: str,
+    date_format: str | None = None,
 ) -> SourceReport:
     if not isinstance(source_kind, SourceKind):
         raise ValueError("source kind must be a canonical SourceKind")
@@ -104,7 +106,7 @@ def inspect_source(
     }.issubset(frame.columns):
         raise ValueError("518880 tradable source requires OHLC columns")
 
-    dates = [_parse_date(value) for value in frame[date_column]]
+    dates = [_parse_date(value, date_format) for value in frame[date_column]]
     distinct_dates = set(dates)
     annual_counts: dict[int, int] = {}
     for value in dates:
@@ -135,10 +137,15 @@ def _read_bytes(path: Path) -> bytes:
     return b"".join(chunks)
 
 
-def _parse_date(value: object) -> datetime:
+def _parse_date(value: object, date_format: str | None = None) -> datetime:
     if pd.isna(value):
         raise ValueError("date column contains null or unparseable values")
     text = str(value)
+    if date_format:
+        try:
+            return datetime.strptime(text, date_format)
+        except ValueError as error:
+            raise ValueError(f"date column contains unparseable value: {value!r}") from error
     try:
         if re.fullmatch(r"\d{8}", text):
             return datetime.strptime(text, "%Y%m%d")

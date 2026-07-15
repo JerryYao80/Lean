@@ -1,0 +1,256 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import pandas as pd
+import yaml
+
+
+REPO = Path(__file__).resolve().parents[2]
+CLI = REPO / "Scripts/gold2_closed_loop/run_experiment.py"
+ARTIFACTS = {
+    "data_coverage_audit.json",
+    "window_inventory.json",
+    "g3_observability.json",
+    "interface_readiness.json",
+}
+GENERATION_FIELDS = [
+    "generation_id",
+    "generation_index",
+    "parent_generation_id",
+    "generation_cutoff",
+    "input_evidence_sha256",
+    "candidate_set_sha256",
+    "attribution_gap",
+    "shaping_weight",
+    "pending_candidate_count",
+    "convergence_status",
+    "trigger_observation_valid",
+    "terminal_reason",
+]
+
+
+def run_cli(draft: Path, output: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "assess-feasibility",
+            "--input",
+            str(draft),
+            "--output",
+            str(output),
+        ],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def write_yaml(path: Path, value: object) -> None:
+    path.write_text(yaml.safe_dump(value, sort_keys=True), encoding="utf-8")
+
+
+def source_policy(path: Path, source_id: str, *, fmt: str = "%Y-%m-%d") -> dict:
+    return {
+        "source_id": source_id,
+        "path": str(path),
+        "date_column": "date",
+        "date_format": fmt,
+        "timezone": "Asia/Shanghai",
+        "observation_time": "15:00:00",
+        "publication_lag": "0 days",
+        "maximum_staleness_days": 5,
+        "maximum_consecutive_gap_sessions": 3,
+        "adjustment_rule": "none",
+        "source_version": "synthetic-v1",
+    }
+
+
+def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-12-31") -> dict:
+    dates = pd.bdate_range(start, end)
+    tradable = tmp_path / "518880.parquet"
+    pd.DataFrame(
+        {
+            "trade_date": dates.strftime("%Y%m%d").astype(int),
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.0,
+        }
+    ).to_parquet(tradable, index=False)
+
+    sources = {
+        "518880": {
+            **source_policy(tradable, "518880", fmt="%Y%m%d"),
+            "date_column": "trade_date",
+            "source_kind": "tradable",
+            "instrument": "518880",
+            "calendar_basis": True,
+        }
+    }
+    for source_id in ("AU", "VIX", "DFII10"):
+        path = tmp_path / f"{source_id}.csv"
+        pd.DataFrame({"date": dates.strftime("%Y-%m-%d"), "value": 1.0}).to_csv(
+            path, index=False
+        )
+        sources[source_id] = source_policy(path, source_id)
+
+    return {
+        "experiment_id": "synthetic-proof",
+        "paths": {"experiment_root": "Results/forbidden-proof-root"},
+        "session_close_time": "15:00:00",
+        "session_timezone": "Asia/Shanghai",
+        "data_sources": sources,
+        "g3_observability": {
+            "minimum_required_generation_count": 3,
+            "per_generation_candidate_budget": 2,
+            "per_window_candidate_budget": 8,
+            "review_input": "frozen_feedback_evidence_bundle",
+            "failure_budget_policy": "a failed generation consumes budget and breaks continuity",
+            "required_generation_record_fields": GENERATION_FIELDS,
+        },
+    }
+
+
+def load(output: Path, name: str) -> dict:
+    return json.loads((output / name).read_text(encoding="utf-8"))
+
+
+def test_minimal_missing_draft_writes_all_blocked_artifacts_without_results(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, {"experiment_id": "missing"})
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert {path.name for path in output.iterdir()} == ARTIFACTS
+    assert load(output, "window_inventory.json")["verdict"] == "BLOCKED_INSUFFICIENT_DATA"
+    assert not (tmp_path / "Results").exists()
+
+
+def test_complete_four_source_data_passes_at_least_three_windows(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, complete_draft(tmp_path))
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    inventory = load(output, "window_inventory.json")
+    assert inventory["eligible_blind_window_count"] >= 3
+    assert inventory["verdict"] == "PASS"
+    assert [item["window_id"] for item in inventory["windows"]] == ["W1", "W2", "W3", "W4"]
+    coverage = load(output, "data_coverage_audit.json")
+    assert coverage["calendar_basis"]["source_id"] == "518880"
+    assert set(coverage["sources"]) == {"518880", "AU", "VIX", "DFII10"}
+    assert all("sha256" in report for report in coverage["sources"].values())
+    assert all("publication_lag" in report for report in coverage["sources"].values())
+    assert load(output, "interface_readiness.json")["status"] == "NOT_ASSESSED"
+
+
+def test_only_two_covered_windows_returns_blocked(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, complete_draft(tmp_path, start="2020-01-01", end="2025-12-31"))
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    inventory = load(output, "window_inventory.json")
+    assert inventory["eligible_blind_window_count"] == 2
+    assert inventory["verdict"] == "BLOCKED_INSUFFICIENT_TEST_WINDOWS"
+    assert inventory["evaluation_status"] == "NOT_EVALUATED"
+    assert inventory["proof_conclusion"] == "UNPROVEN"
+
+
+def test_substituted_feature_identity_is_rejected(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    config["data_sources"]["VIX"]["source_id"] = "OTHER"
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert load(output, "data_coverage_audit.json")["status"] == "BLOCKED"
+
+
+def test_invalid_g3_blocks_otherwise_complete_assessment(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    config["g3_observability"]["minimum_required_generation_count"] = 2
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert load(output, "g3_observability.json")["status"] == "BLOCKED"
+
+
+def test_fund_nav_and_proxy_tradable_inputs_are_rejected(tmp_path: Path):
+    for declaration in ("fund_nav", "proxy"):
+        case = tmp_path / declaration
+        case.mkdir()
+        config = complete_draft(case)
+        if declaration == "fund_nav":
+            config["data_sources"]["518880"]["source_kind"] = declaration
+        else:
+            config["data_sources"]["518880"]["source_id"] = "prelisting_proxy"
+        draft = case / "draft.yaml"
+        output = case / "audit"
+        write_yaml(draft, config)
+
+        result = run_cli(draft, output, case)
+
+        assert result.returncode == 2
+        assert load(output, "data_coverage_audit.json")["status"] == "BLOCKED"
+
+
+def test_unexpected_output_file_is_preserved_and_command_fails(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    output.mkdir()
+    sentinel = output / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    write_yaml(draft, {"experiment_id": "missing"})
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert {path.name for path in output.iterdir()} == {"keep.txt"}
+
+
+def test_rerun_atomically_replaces_known_artifacts_with_identical_bytes(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, complete_draft(tmp_path))
+
+    first = run_cli(draft, output, tmp_path)
+    first_bytes = {name: (output / name).read_bytes() for name in ARTIFACTS}
+    second = run_cli(draft, output, tmp_path)
+
+    assert first.returncode == second.returncode == 0
+    assert first_bytes == {name: (output / name).read_bytes() for name in ARTIFACTS}
+    assert {path.name for path in output.iterdir()} == ARTIFACTS
+
+
+def test_invalid_yaml_has_no_traceback_and_writes_artifacts_when_output_known(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    draft.write_text("data_sources: [unterminated", encoding="utf-8")
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert {path.name for path in output.iterdir()} == ARTIFACTS

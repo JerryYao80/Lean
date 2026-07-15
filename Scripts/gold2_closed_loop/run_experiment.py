@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Read-only Phase 0 feasibility assessment for the Gold2 proof experiment."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import yaml
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from Scripts.gold2_closed_loop.data_sources import SourceKind, inspect_source
+from Scripts.gold2_closed_loop.feasibility import (
+    REQUIRED_SOURCES,
+    SourcePolicy,
+    decide_window_gate,
+    evaluate_fixed_windows,
+)
+from Scripts.gold2_closed_loop.phase0_types import FeasibilityVerdict, proof_windows
+
+
+ARTIFACT_NAMES = (
+    "data_coverage_audit.json",
+    "window_inventory.json",
+    "g3_observability.json",
+    "interface_readiness.json",
+)
+GENERATION_RECORD_FIELDS = (
+    "generation_id",
+    "generation_index",
+    "parent_generation_id",
+    "generation_cutoff",
+    "input_evidence_sha256",
+    "candidate_set_sha256",
+    "attribution_gap",
+    "shaping_weight",
+    "pending_candidate_count",
+    "convergence_status",
+    "trigger_observation_valid",
+    "terminal_reason",
+)
+KNOWN_INTERFACE_BLOCKERS = (
+    "production optimizer hard-codes OptionVolArb CQL trace and policy paths",
+    "production optimizer hard-codes ONNX observation dimension 8",
+    "Gold2 production manifest observation dimensions and completeness are inconsistent",
+    "production generation state is not append-only collision-rejecting persistence",
+    "in-memory inspiration trigger data is not guaranteed to reach hypothesis construction",
+)
+
+
+def _blocked_artifacts(message: str) -> dict[str, dict[str, Any]]:
+    windows = [
+        {
+            "eligible": False,
+            "evaluated_range": [window.train[0].isoformat(), window.blind[1].isoformat()],
+            "reasons": ["INSUFFICIENT_DATA"],
+            "window_id": window.window_id,
+        }
+        for window in proof_windows()
+    ]
+    return {
+        "data_coverage_audit.json": {
+            "errors": [message],
+            "sources": {},
+            "status": "BLOCKED",
+        },
+        "window_inventory.json": {
+            "eligible_blind_window_count": 0,
+            "errors": [message],
+            "verdict": FeasibilityVerdict.BLOCKED_INSUFFICIENT_DATA.value,
+            "evaluation_status": "NOT_EVALUATED",
+            "proof_conclusion": "UNPROVEN",
+            "windows": windows,
+        },
+        "g3_observability.json": {
+            "errors": [message],
+            "required_generation_record_fields": list(GENERATION_RECORD_FIELDS),
+            "status": "BLOCKED",
+        },
+        "interface_readiness.json": _interface_artifact(),
+    }
+
+
+def _interface_artifact() -> dict[str, Any]:
+    return {
+        "blockers": [
+            {"description": description, "status": "NOT_ASSESSED"}
+            for description in KNOWN_INTERFACE_BLOCKERS
+        ],
+        "phase0_gate_effect": "INFORMATIONAL_ONLY",
+        "status": "NOT_ASSESSED",
+    }
+
+
+def _validate_output(output: Path) -> None:
+    if output.exists() and not output.is_dir():
+        raise ValueError("output must be a directory")
+    if output.exists():
+        unexpected = sorted(path.name for path in output.iterdir() if path.name not in ARTIFACT_NAMES)
+        if unexpected:
+            raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
+    else:
+        output.mkdir(parents=True)
+
+
+def _atomic_json(path: Path, value: Any) -> None:
+    payload = (json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _write_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
+    for name in ARTIFACT_NAMES:
+        _atomic_json(output / name, artifacts[name])
+
+
+def _require_mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a mapping")
+    return value
+
+
+def _read_dates(source: dict[str, Any], expected_sha256: str | None = None) -> pd.DatetimeIndex:
+    path = Path(str(source["path"])).expanduser()
+    content = path.read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(content).hexdigest() != expected_sha256:
+        raise ValueError(f"source file changed after inspection: {path}")
+    suffix = path.suffix.lower()
+    from io import BytesIO
+    frame = pd.read_parquet(BytesIO(content)) if suffix == ".parquet" else pd.read_csv(BytesIO(content))
+    column = str(source["date_column"])
+    date_format = str(source["date_format"])
+    parsed = pd.to_datetime(frame[column].astype(str), format=date_format, errors="raise")
+    timezone = ZoneInfo(str(source["timezone"]))
+    observation_time = datetime.strptime(str(source["observation_time"]), "%H:%M:%S").time()
+    return pd.DatetimeIndex(
+        [datetime.combine(value.date(), observation_time, timezone) for value in parsed]
+    ).drop_duplicates().sort_values()
+
+
+def _duration(value: Any, label: str) -> pd.Timedelta:
+    try:
+        duration = pd.Timedelta(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} must be a pandas-compatible duration") from error
+    if pd.isna(duration) or duration < pd.Timedelta(0):
+        raise ValueError(f"{label} must be non-negative")
+    return duration
+
+
+def _assess_data(config: dict[str, Any]) -> tuple[dict[str, Any], pd.DatetimeIndex, dict[str, pd.DatetimeIndex], dict[str, SourcePolicy]]:
+    declared = _require_mapping(config.get("data_sources"), "data_sources")
+    if set(declared) != set(REQUIRED_SOURCES):
+        raise ValueError("data_sources must define exactly 518880, AU, VIX, DFII10")
+
+    reports: dict[str, Any] = {}
+    releases: dict[str, pd.DatetimeIndex] = {}
+    policies: dict[str, SourcePolicy] = {}
+    for source_id in REQUIRED_SOURCES:
+        source = _require_mapping(declared[source_id], f"data_sources.{source_id}")
+        required = (
+            "source_id", "path", "date_column", "date_format", "timezone",
+            "observation_time", "publication_lag", "maximum_staleness_days",
+            "maximum_consecutive_gap_sessions",
+            "adjustment_rule", "source_version",
+        )
+        missing = [field for field in required if field not in source]
+        if missing:
+            raise ValueError(f"data_sources.{source_id} missing: {', '.join(missing)}")
+        declared_id = str(source["source_id"])
+        if declared_id != source_id:
+            raise ValueError(f"{source_id} source must use canonical source_id {source_id}")
+        kind_text = str(source.get("source_kind", "tradable" if source_id == "518880" else "feature"))
+        kind = SourceKind(kind_text)
+        if source_id == "518880" and kind is not SourceKind.TRADABLE:
+            raise ValueError("518880 must be a tradable source; fund_nav and proxies are forbidden")
+        report = inspect_source(
+            source_id,
+            Path(str(source["path"])).expanduser(),
+            str(source["date_column"]),
+            source_kind=kind,
+            instrument=str(source.get("instrument", source_id)),
+            date_format=str(source["date_format"]),
+        )
+        report_value = {
+            "annual_counts": dict(report.annual_counts),
+            "distinct_date_count": report.distinct_date_count,
+            "duplicate_date_count": report.duplicate_date_count,
+            "first_date": report.first_date,
+            "last_date": report.last_date,
+            "logical_name": report.logical_name,
+            "path": report.path,
+            "row_count": report.row_count,
+            "sha256": report.sha256,
+        }
+        report_value["source_id"] = declared_id
+        report_value["source_kind"] = kind.value
+        for policy_field in (
+            "timezone", "observation_time", "publication_lag",
+            "maximum_staleness_days", "maximum_consecutive_gap_sessions",
+            "adjustment_rule", "source_version", "date_column", "date_format",
+        ):
+            report_value[policy_field] = source[policy_field]
+        reports[source_id] = report_value
+        releases[source_id] = _read_dates(source, report.sha256)
+        policies[source_id] = SourcePolicy(
+            maximum_staleness=source["maximum_staleness_days"],
+            maximum_consecutive_unavailable_sessions=source["maximum_consecutive_gap_sessions"],
+            publication_lag=_duration(source["publication_lag"], f"{source_id}.publication_lag"),
+            timezone=str(source["timezone"]),
+        )
+
+    calendar_source = declared["518880"]
+    session_timezone = ZoneInfo(str(config.get("session_timezone", "Asia/Shanghai")))
+    close_time = datetime.strptime(str(config.get("session_close_time", "15:00:00")), "%H:%M:%S").time()
+    tradable_dates = _read_dates(calendar_source, reports["518880"]["sha256"])
+    sessions = pd.DatetimeIndex(
+        [datetime.combine(value.date(), close_time, session_timezone) for value in tradable_dates]
+    ).drop_duplicates().sort_values()
+    artifact = {
+        "calendar_basis": {
+            "description": "518880 observed tradable dates at configured China session close",
+            "session_close_time": close_time.isoformat(),
+            "timezone": str(session_timezone),
+            "source_id": "518880",
+        },
+        "sources": reports,
+        "status": "PASS",
+    }
+    return artifact, sessions, releases, policies
+
+
+def _assess_windows(
+    sessions: pd.DatetimeIndex,
+    releases: dict[str, pd.DatetimeIndex],
+    policies: dict[str, SourcePolicy],
+) -> dict[str, Any]:
+    decision = decide_window_gate(evaluate_fixed_windows(sessions, releases, policies))
+    windows = []
+    for window, definition in zip(decision.windows, proof_windows(), strict=True):
+        reasons = list(window.reasons)
+        relevant = sessions[
+            (sessions.date >= definition.train[0]) & (sessions.date <= definition.blind[1])
+        ]
+        if not relevant.empty:
+            if relevant[0].year != definition.train[0].year:
+                reasons.append(f"INCOMPLETE_FIXED_WINDOW_START:{relevant[0].date().isoformat()}")
+            if relevant[-1].year != definition.blind[1].year:
+                reasons.append(f"INCOMPLETE_FIXED_WINDOW_END:{relevant[-1].date().isoformat()}")
+        windows.append(
+            {
+                "eligible": window.eligible and not reasons,
+                "evaluated_range": [date.isoformat() for date in window.evaluated_range] if window.evaluated_range else None,
+                "reasons": reasons,
+                "window_id": window.window_id,
+            }
+        )
+    eligible_count = sum(window["eligible"] for window in windows)
+    verdict = (
+        FeasibilityVerdict.PASS.value
+        if eligible_count >= 3
+        else FeasibilityVerdict.BLOCKED_INSUFFICIENT_TEST_WINDOWS.value
+    )
+    return {
+        "eligible_blind_window_count": eligible_count,
+        "evaluation_status": "READY" if verdict == FeasibilityVerdict.PASS.value else "NOT_EVALUATED",
+        "proof_conclusion": "PENDING_PROOF" if verdict == FeasibilityVerdict.PASS.value else "UNPROVEN",
+        "verdict": verdict,
+        "windows": windows,
+    }
+
+
+def _assess_g3(config: dict[str, Any]) -> dict[str, Any]:
+    value = _require_mapping(config.get("g3_observability"), "g3_observability")
+    errors = []
+    if value.get("minimum_required_generation_count") != 3:
+        errors.append("minimum_required_generation_count must equal 3")
+    for field in ("per_generation_candidate_budget", "per_window_candidate_budget"):
+        number = value.get(field)
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            errors.append(f"{field} must be a positive integer")
+    if not isinstance(value.get("review_input"), str) or not value.get("review_input", "").strip():
+        errors.append("review_input must be present")
+    if not isinstance(value.get("failure_budget_policy"), str) or not value.get("failure_budget_policy", "").strip():
+        errors.append("failure_budget_policy must be present")
+    fields = value.get("required_generation_record_fields")
+    if fields != list(GENERATION_RECORD_FIELDS):
+        errors.append("required_generation_record_fields must exactly match the proof specification")
+    return {
+        "errors": errors,
+        "minimum_required_generation_count": value.get("minimum_required_generation_count"),
+        "per_generation_candidate_budget": value.get("per_generation_candidate_budget"),
+        "per_window_candidate_budget": value.get("per_window_candidate_budget"),
+        "required_generation_record_fields": list(GENERATION_RECORD_FIELDS),
+        "status": "PASS" if not errors else "BLOCKED",
+    }
+
+
+def assess(config: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], bool]:
+    data, sessions, releases, policies = _assess_data(config)
+    windows = _assess_windows(sessions, releases, policies)
+    g3 = _assess_g3(config)
+    artifacts = {
+        "data_coverage_audit.json": data,
+        "window_inventory.json": windows,
+        "g3_observability.json": g3,
+        "interface_readiness.json": _interface_artifact(),
+    }
+    passed = windows["verdict"] == FeasibilityVerdict.PASS.value and g3["status"] == "PASS"
+    return artifacts, passed
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("assess-feasibility")
+    command.add_argument("--input", required=True, type=Path)
+    command.add_argument("--output", required=True, type=Path)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        _validate_output(args.output)
+    except (OSError, ValueError) as error:
+        print(f"feasibility assessment failed: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        loaded = yaml.safe_load(args.input.read_text(encoding="utf-8"))
+        config = _require_mapping(loaded, "draft")
+        artifacts, passed = assess(config)
+    except Exception as error:
+        artifacts = _blocked_artifacts(str(error))
+        passed = False
+        print(f"feasibility assessment blocked: {error}", file=sys.stderr)
+
+    try:
+        _write_artifacts(args.output, artifacts)
+    except OSError as error:
+        print(f"feasibility assessment failed while writing artifacts: {error}", file=sys.stderr)
+        return 2
+    return 0 if passed else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
