@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, time
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from typing import Any
@@ -108,34 +111,146 @@ def _interface_artifact() -> dict[str, Any]:
     }
 
 
+def _unexpected_output_entries(output: Path) -> list[str]:
+    if not output.exists():
+        return []
+    return sorted(path.name for path in output.iterdir() if path.name not in ARTIFACT_NAMES)
+
+
 def _validate_output(output: Path) -> None:
     if output.exists() and not output.is_dir():
         raise ValueError("output must be a directory")
-    if output.exists():
-        unexpected = sorted(path.name for path in output.iterdir() if path.name not in ARTIFACT_NAMES)
+    unexpected = _unexpected_output_entries(output)
+    if unexpected:
+        raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
+
+
+@contextmanager
+def _publication_lock(output: Path):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = output.parent / f".{output.name}.lock"
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _canonical_json(value: Any) -> bytes:
+    return (json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
+
+
+def _artifact_set(artifacts: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    bare = {
+        name: {
+            key: value
+            for key, value in artifacts[name].items()
+            if key not in ("generation_id", "artifact_set_sha256")
+        }
+        for name in ARTIFACT_NAMES
+    }
+    digest = hashlib.sha256(
+        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    generation_id = digest
+    return {
+        name: {
+            **bare[name],
+            "artifact_set_sha256": digest,
+            "generation_id": generation_id,
+        }
+        for name in ARTIFACT_NAMES
+    }
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _verify_published_set(output: Path, expected_hash: str, generation_id: str) -> None:
+    loaded = {
+        name: json.loads((output / name).read_text(encoding="utf-8"))
+        for name in ARTIFACT_NAMES
+    }
+    bare = {
+        name: {
+            key: value
+            for key, value in loaded[name].items()
+            if key not in ("generation_id", "artifact_set_sha256")
+        }
+        for name in ARTIFACT_NAMES
+    }
+    actual_hash = hashlib.sha256(
+        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    if actual_hash != expected_hash or any(
+        artifact.get("generation_id") != generation_id
+        or artifact.get("artifact_set_sha256") != expected_hash
+        for artifact in loaded.values()
+    ):
+        raise OSError("published artifact generation verification failed")
+
+
+def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
+    with _publication_lock(output):
+        _validate_output(output)
+        unexpected = _unexpected_output_entries(output)
         if unexpected:
             raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
-    else:
-        output.mkdir(parents=True)
-
-
-def _atomic_json(path: Path, value: Any) -> None:
-    payload = (json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def _write_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
-    for name in ARTIFACT_NAMES:
-        _atomic_json(output / name, artifacts[name])
+        output.mkdir(exist_ok=True)
+        enriched = _artifact_set(artifacts)
+        generation_hash = enriched[ARTIFACT_NAMES[0]]["artifact_set_sha256"]
+        generation_id = enriched[ARTIFACT_NAMES[0]]["generation_id"]
+        stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=output.parent))
+        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=output.parent))
+        replaced: list[str] = []
+        try:
+            for name in ARTIFACT_NAMES:
+                with (stage / name).open("wb") as stream:
+                    stream.write(_canonical_json(enriched[name]))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            _fsync_directory(stage)
+            unexpected = _unexpected_output_entries(output)
+            if unexpected:
+                raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
+            for name in ARTIFACT_NAMES:
+                destination = output / name
+                if destination.exists():
+                    shutil.copy2(destination, backup / name)
+                    with (backup / name).open("rb") as stream:
+                        os.fsync(stream.fileno())
+            _fsync_directory(backup)
+            for name in ARTIFACT_NAMES:
+                destination = output / name
+                os.replace(stage / name, destination)
+                replaced.append(name)
+            unexpected = _unexpected_output_entries(output)
+            if unexpected:
+                raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
+            _fsync_directory(output)
+            _verify_published_set(output, generation_hash, generation_id)
+            _fsync_directory(output.parent)
+        except Exception:
+            for name in reversed(replaced):
+                saved = backup / name
+                destination = output / name
+                if saved.exists():
+                    os.replace(saved, destination)
+                elif destination.exists():
+                    destination.unlink()
+            _fsync_directory(output)
+            _fsync_directory(output.parent)
+            raise
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
+            _fsync_directory(output.parent)
 
 
 def _require_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -437,12 +552,6 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        _validate_output(args.output)
-    except (OSError, ValueError) as error:
-        print(f"feasibility assessment failed: {error}", file=sys.stderr)
-        return 2
-
-    try:
         loaded = yaml.safe_load(args.input.read_text(encoding="utf-8"))
         config = _require_mapping(loaded, "draft")
         artifacts, passed = assess(config)
@@ -452,8 +561,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"feasibility assessment blocked: {error}", file=sys.stderr)
 
     try:
-        _write_artifacts(args.output, artifacts)
-    except OSError as error:
+        _publish_artifacts(args.output, artifacts)
+    except (OSError, ValueError) as error:
         print(f"feasibility assessment failed while writing artifacts: {error}", file=sys.stderr)
         return 2
     return 0 if passed else 2

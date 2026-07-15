@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
 
 import pandas as pd
+import pytest
 import yaml
 
 
@@ -72,6 +75,7 @@ def source_policy(path: Path, source_id: str, *, fmt: str = "%Y-%m-%d") -> dict:
 
 
 def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-12-31") -> dict:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     calendar_days = pd.date_range("2018-01-01", "2025-12-31", freq="D")
     calendar = tmp_path / "china_trade_cal.csv"
     pd.DataFrame(
@@ -138,6 +142,121 @@ def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-1
 
 def load(output: Path, name: str) -> dict:
     return json.loads((output / name).read_text(encoding="utf-8"))
+
+
+def artifact_set(output: Path) -> dict[str, dict]:
+    return {name: load(output, name) for name in ARTIFACTS}
+
+
+def assert_coherent_artifact_set(output: Path) -> None:
+    artifacts = artifact_set(output)
+    generation_ids = {artifact["generation_id"] for artifact in artifacts.values()}
+    set_hashes = {artifact["artifact_set_sha256"] for artifact in artifacts.values()}
+    assert len(generation_ids) == len(set_hashes) == 1
+    bare = {
+        name: {
+            key: value
+            for key, value in artifacts[name].items()
+            if key not in ("generation_id", "artifact_set_sha256")
+        }
+        for name in sorted(ARTIFACTS)
+    }
+    expected = hashlib.sha256(
+        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    assert set_hashes == {expected}
+
+
+def load_cli_module():
+    spec = importlib.util.spec_from_file_location("phase0_cli", CLI)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_every_artifact_has_matching_generation_and_artifact_set_hash(tmp_path: Path):
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, complete_draft(tmp_path))
+
+    assert run_cli(draft, output, tmp_path).returncode == 0
+
+    assert_coherent_artifact_set(output)
+    assert {path.name for path in output.iterdir()} == ARTIFACTS
+    assert not list(tmp_path.glob(".audit.stage-*"))
+    assert not list(tmp_path.glob(".audit.backup-*"))
+
+
+def test_injected_replace_failure_restores_complete_old_generation(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    output.mkdir()
+    old = {name: {"old": name} for name in ARTIFACTS}
+    module._publish_artifacts(output, old)
+    old_bytes = {name: (output / name).read_bytes() for name in ARTIFACTS}
+    replacements = 0
+    real_replace = module.os.replace
+
+    def fail_second_publish(source, destination):
+        nonlocal replacements
+        if Path(source).parent.name.startswith(".audit.stage-"):
+            replacements += 1
+            if replacements == 2:
+                raise OSError("injected replacement failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", fail_second_publish)
+    with pytest.raises(OSError, match="injected"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+
+    assert old_bytes == {name: (output / name).read_bytes() for name in ARTIFACTS}
+    assert_coherent_artifact_set(output)
+    assert not list(tmp_path.glob(".audit.stage-*"))
+    assert not list(tmp_path.glob(".audit.backup-*"))
+
+
+def test_concurrent_publishers_leave_one_coherent_generation(tmp_path: Path):
+    draft_a = tmp_path / "a.yaml"
+    draft_b = tmp_path / "b.yaml"
+    output = tmp_path / "audit"
+    config_a = complete_draft(tmp_path / "a-data")
+    config_b = complete_draft(tmp_path / "b-data")
+    write_yaml(draft_a, config_a)
+    write_yaml(draft_b, config_b)
+    command = lambda draft: [
+        sys.executable, str(CLI), "assess-feasibility", "--input", str(draft),
+        "--output", str(output),
+    ]
+
+    first = subprocess.Popen(command(draft_a), cwd=tmp_path)
+    second = subprocess.Popen(command(draft_b), cwd=tmp_path)
+    returncodes = [first.wait(), second.wait()]
+
+    assert returncodes == [0, 0]
+    assert_coherent_artifact_set(output)
+    assert {path.name for path in output.iterdir()} == ARTIFACTS
+    assert not list(tmp_path.glob(".audit.stage-*"))
+    assert not list(tmp_path.glob(".audit.backup-*"))
+
+
+def test_unexpected_file_racing_publication_is_preserved_and_rejected(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    output.mkdir()
+    sentinel = output / "raced.txt"
+    real_validate = module._validate_output
+
+    def race_after_validation(path):
+        real_validate(path)
+        sentinel.write_text("preserve", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_validate_output", race_after_validation)
+    with pytest.raises(ValueError, match="unexpected"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert {path.name for path in output.iterdir()} == {"raced.txt"}
 
 
 def test_minimal_missing_draft_writes_all_blocked_artifacts_without_results(tmp_path: Path):
