@@ -1,0 +1,28 @@
+{
+  "artifact_set_sha256": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "blockers": [
+    {
+      "description": "production optimizer hard-codes OptionVolArb CQL trace and policy paths",
+      "status": "NOT_ASSESSED"
+    },
+    {
+      "description": "production optimizer hard-codes ONNX observation dimension 8",
+      "status": "NOT_ASSESSED"
+    },
+    {
+      "description": "Gold2 production manifest observation dimensions and completeness are inconsistent",
+      "status": "NOT_ASSESSED"
+    },
+    {
+      "description": "production generation state is not append-only collision-rejecting persistence",
+      "status": "NOT_ASSESSED"
+    },
+    {
+      "description": "in-memory inspiration trigger data is not guaranteed to reach hypothesis construction",
+      "status": "NOT_ASSESSED"
+    }
+  ],
+  "generation_id": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "phase0_gate_effect": "INFORMATIONAL_ONLY",
+  "status": "NOT_ASSESSED"
+}

@@ -1,0 +1,25 @@
+{
+  "artifact_set_sha256": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "errors": [],
+  "failure_budget_policy": "failed_generation_consumes_budget_and_breaks_adjacency",
+  "generation_id": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "minimum_required_generation_count": 3,
+  "per_generation_candidate_budget": 2,
+  "per_window_candidate_budget": 8,
+  "required_generation_record_fields": [
+    "generation_id",
+    "generation_index",
+    "parent_generation_id",
+    "generation_cutoff",
+    "input_evidence_sha256",
+    "candidate_set_sha256",
+    "attribution_gap",
+    "shaping_weight",
+    "pending_candidate_count",
+    "convergence_status",
+    "trigger_observation_valid",
+    "terminal_reason"
+  ],
+  "review_input": "frozen_formal_review_bundle",
+  "status": "PASS"
+}
