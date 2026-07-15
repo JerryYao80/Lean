@@ -12,9 +12,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import tempfile
 from typing import Any
+import uuid
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -173,128 +175,309 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _require_exact_generation(path: Path) -> None:
-    entries = {entry.name for entry in path.iterdir()}
+def _read_generation_fd(gen_fd: int, generation_id: str) -> dict[str, dict[str, Any]]:
+    entries = set(os.listdir(gen_fd))
     if entries != set(ARTIFACT_NAMES):
         raise ValueError("generation must contain exactly the four artifact files")
-    if any(not (path / name).is_file() or (path / name).is_symlink() for name in ARTIFACT_NAMES):
-        raise ValueError("generation artifacts must be regular non-symlink files")
-
-
-def _verify_published_set(output: Path, expected_hash: str, generation_id: str) -> None:
-    _require_exact_generation(output)
-    loaded = {
-        name: json.loads((output / name).read_text(encoding="utf-8"))
-        for name in ARTIFACT_NAMES
-    }
-    bare = {
-        name: {
-            key: value
-            for key, value in loaded[name].items()
-            if key not in ("generation_id", "artifact_set_sha256")
-        }
-        for name in ARTIFACT_NAMES
-    }
-    actual_hash = hashlib.sha256(
-        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    ).hexdigest()
-    if actual_hash != expected_hash or any(
-        artifact.get("generation_id") != generation_id
-        or artifact.get("artifact_set_sha256") != expected_hash
-        for artifact in loaded.values()
-    ):
-        raise OSError("published artifact generation verification failed")
-
-
-def load_artifact_set(output: Path) -> dict[str, dict[str, Any]]:
-    """Pin one immutable generation, then load and verify its four artifacts."""
-    if not output.is_symlink():
-        raise ValueError("output must be an atomic artifact-set symlink")
-    generation = output.resolve(strict=True)
-    _require_exact_generation(generation)
-    loaded = {
-        name: json.loads((generation / name).read_text(encoding="utf-8"))
-        for name in ARTIFACT_NAMES
-    }
-    expected_hashes = {item.get("artifact_set_sha256") for item in loaded.values()}
-    generation_ids = {item.get("generation_id") for item in loaded.values()}
-    if len(expected_hashes) != 1 or len(generation_ids) != 1:
-        raise ValueError("mixed artifact generations")
-    expected_hash = next(iter(expected_hashes))
-    generation_id = next(iter(generation_ids))
-    if generation.name != generation_id:
-        raise ValueError("artifact generation does not match pinned target")
-    bare = {
-        name: {
-            key: value
-            for key, value in loaded[name].items()
-            if key not in ("generation_id", "artifact_set_sha256")
-        }
-        for name in ARTIFACT_NAMES
-    }
-    actual_hash = hashlib.sha256(
-        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    ).hexdigest()
-    if actual_hash != expected_hash or expected_hash != generation_id:
-        raise ValueError("artifact set hash verification failed")
+    generation_stat = os.fstat(gen_fd)
+    if stat.S_IMODE(generation_stat.st_mode) != 0o555:
+        raise ValueError("generation directory must have mode 0555")
+    loaded: dict[str, dict[str, Any]] = {}
+    for name in ARTIFACT_NAMES:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=gen_fd)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o444:
+                raise ValueError("generation artifacts must be regular mode-0444 files")
+            chunks = []
+            while block := os.read(fd, 1024 * 1024):
+                chunks.append(block)
+            after = os.fstat(fd)
+            if (before.st_dev, before.st_ino, before.st_size) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+            ):
+                raise ValueError("artifact changed while reading")
+            loaded[name] = json.loads(b"".join(chunks).decode("utf-8"))
+        finally:
+            os.close(fd)
+    _validate_loaded_generation(loaded, generation_id)
     return loaded
 
 
-def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
-    """Publish an immutable generation and atomically switch the consumer symlink."""
-    with _publication_lock(output):
-        if output.lexists() if hasattr(output, "lexists") else os.path.lexists(output):
-            if not output.is_symlink():
-                raise ValueError("legacy mutable output directory is not supported")
-        generations = output.parent / f".{output.name}.generations"
-        generations.mkdir(parents=True, exist_ok=True)
-        enriched = _artifact_set(artifacts)
-        generation_id = enriched[ARTIFACT_NAMES[0]]["generation_id"]
-        generation = generations / generation_id
-        stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=generations))
-        pointer = output.parent / f".{output.name}.pointer-{os.getpid()}-{stage.name}"
+def _validate_loaded_generation(
+    loaded: dict[str, dict[str, Any]], generation_id: str
+) -> None:
+    expected_hashes = {item.get("artifact_set_sha256") for item in loaded.values()}
+    generation_ids = {item.get("generation_id") for item in loaded.values()}
+    if expected_hashes != {generation_id} or generation_ids != {generation_id}:
+        raise ValueError("mixed artifact generations")
+    bare = {
+        name: {
+            key: value
+            for key, value in loaded[name].items()
+            if key not in ("generation_id", "artifact_set_sha256")
+        }
+        for name in ARTIFACT_NAMES
+    }
+    actual_hash = hashlib.sha256(
+        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    if actual_hash != generation_id:
+        raise ValueError("artifact set hash verification failed")
+
+
+def load_artifact_set(output: Path) -> dict[str, dict[str, Any]]:
+    """Read one fd-pinned generation; owner-level chmod is outside this trust model."""
+    output = Path(output)
+    parent_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISLNK(os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False).st_mode):
+            raise ValueError("output must be an atomic artifact-set symlink")
+        root_name = f".{output.name}.generations"
+        root_entry = os.stat(root_name, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(root_entry.st_mode) or not stat.S_ISDIR(root_entry.st_mode):
+            raise ValueError("managed generations root must be a real directory")
+        root_fd = os.open(
+            root_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
         try:
-            for name in ARTIFACT_NAMES:
-                with (stage / name).open("wb") as stream:
-                    stream.write(_canonical_json(enriched[name]))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            _fsync_directory(stage)
-            _verify_published_set(stage, generation_id, generation_id)
-            if generation.exists():
-                _verify_published_set(generation, generation_id, generation_id)
-                shutil.rmtree(stage)
+            pinned_root = os.fstat(root_fd)
+            if (root_entry.st_dev, root_entry.st_ino) != (
+                pinned_root.st_dev,
+                pinned_root.st_ino,
+            ):
+                raise ValueError("managed generations root changed during pin")
+            target = os.readlink(output.name, dir_fd=parent_fd)
+            target_path = Path(target)
+            if target_path.is_absolute():
+                expected_parent = output.parent.resolve(strict=True) / root_name
+                if target_path.parent != expected_parent:
+                    raise ValueError("output target must be a direct managed generation child")
+                generation_id = target_path.name
             else:
-                os.rename(stage, generation)
-            _fsync_directory(generations)
-            relative_target = os.path.relpath(generation, output.parent)
-            os.symlink(relative_target, pointer)
+                parts = target_path.parts
+                if parts[:1] == ("..",) or parts != (root_name, target_path.name):
+                    raise ValueError("output target must be a direct managed generation child")
+                generation_id = target_path.name
+            generation_entry = os.stat(
+                generation_id, dir_fd=root_fd, follow_symlinks=False
+            )
+            if stat.S_ISLNK(generation_entry.st_mode) or not stat.S_ISDIR(
+                generation_entry.st_mode
+            ):
+                raise ValueError("generation entry must be a real directory")
+            gen_fd = os.open(
+                generation_id,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+            try:
+                opened = os.fstat(gen_fd)
+                if (generation_entry.st_dev, generation_entry.st_ino) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                ):
+                    raise ValueError("generation path changed during pin")
+                return _read_generation_fd(gen_fd, generation_id)
+            finally:
+                os.close(gen_fd)
+        finally:
+            os.close(root_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _verify_published_set(output: Path, expected_hash: str, generation_id: str) -> None:
+    fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        loaded = _read_generation_fd(fd, generation_id)
+    finally:
+        os.close(fd)
+    if generation_id != expected_hash:
+        raise OSError("published artifact generation verification failed")
+
+
+def _remove_stage(root_fd: int, stage_name: str) -> None:
+    gen_fd = os.open(
+        stage_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=root_fd,
+    )
+    try:
+        os.fchmod(gen_fd, 0o755)
+        for name in list(os.listdir(gen_fd)):
+            fd = os.open(name, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=gen_fd)
+            try:
+                os.fchmod(fd, 0o644)
+            finally:
+                os.close(fd)
+            os.unlink(name, dir_fd=gen_fd)
+        os.fsync(gen_fd)
+    finally:
+        os.close(gen_fd)
+    os.rmdir(stage_name, dir_fd=root_fd)
+
+
+def _write_forensic_marker(output: Path, label: str, errors: list[Exception]) -> None:
+    descriptor, marker_path = tempfile.mkstemp(
+        prefix=f".{output.name}.{label}-", dir=output.parent
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as marker:
+        marker.write("\n".join(repr(error) for error in errors) + "\n")
+        marker.flush()
+        os.fsync(marker.fileno())
+    _fsync_directory(output.parent)
+
+
+def _restore_pointer(output: Path, old_target: str | None) -> None:
+    if old_target is None:
+        if os.path.lexists(output):
+            output.unlink()
+    else:
+        restore = output.parent / f".{output.name}.restore-{os.getpid()}"
+        if os.path.lexists(restore):
+            restore.unlink()
+        os.symlink(old_target, restore)
+        os.replace(restore, output)
+    _fsync_directory(output.parent)
+
+
+def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
+    """Publish a read-only generation, then atomically commit its consumer pointer."""
+    with _publication_lock(output):
+        if os.path.lexists(output) and not output.is_symlink():
+            raise ValueError("legacy mutable output directory is not supported")
+        old_target = os.readlink(output) if output.is_symlink() else None
+        root_name = f".{output.name}.generations"
+        generations = output.parent / root_name
+        if os.path.lexists(generations):
+            root_stat = generations.lstat()
+            if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+                raise ValueError("managed generations root must be a real directory")
+        else:
+            generations.mkdir(parents=True)
             _fsync_directory(output.parent)
-            os.replace(pointer, output)
-            _fsync_directory(output.parent)
-            load_artifact_set(output)
-        except Exception as primary:
-            cleanup_errors: list[Exception] = []
-            if stage.exists():
+        parent_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            root_entry = os.stat(root_name, dir_fd=parent_fd, follow_symlinks=False)
+            root_fd = os.open(
+                root_name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+        finally:
+            os.close(parent_fd)
+        try:
+            pinned_root = os.fstat(root_fd)
+            if (root_entry.st_dev, root_entry.st_ino) != (
+                pinned_root.st_dev,
+                pinned_root.st_ino,
+            ):
+                raise ValueError("managed generations root changed during pin")
+            enriched = _artifact_set(artifacts)
+            generation_id = enriched[ARTIFACT_NAMES[0]]["generation_id"]
+            stage_name = f".stage-{uuid.uuid4().hex}"
+            os.mkdir(stage_name, mode=0o700, dir_fd=root_fd)
+            stage = Path(f"/proc/self/fd/{root_fd}") / stage_name
+            stage_created = True
+            generations = output.parent / root_name
+            generation = generations / generation_id
+            pointer = output.parent / f".{output.name}.pointer-{os.getpid()}-{stage.name}"
+            swapped = False
+            try:
+                for name in ARTIFACT_NAMES:
+                    artifact = stage / name
+                    with artifact.open("wb") as stream:
+                        stream.write(_canonical_json(enriched[name]))
+                        stream.flush()
+                        os.fchmod(stream.fileno(), 0o444)
+                        os.fsync(stream.fileno())
+                stage.chmod(0o555)
+                stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
+                    os.fsync(stage_fd)
+                finally:
+                    os.close(stage_fd)
+                _verify_published_set(stage, generation_id, generation_id)
+                generation_exists = True
+                try:
+                    generation_entry = os.stat(
+                        generation_id, dir_fd=root_fd, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    generation_exists = False
+                if generation_exists:
+                    if stat.S_ISLNK(generation_entry.st_mode) or not stat.S_ISDIR(
+                        generation_entry.st_mode
+                    ):
+                        raise ValueError("existing generation entry must be a real directory")
+                    gen_fd = os.open(
+                        generation_id,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=root_fd,
+                    )
+                    try:
+                        _read_generation_fd(gen_fd, generation_id)
+                    finally:
+                        os.close(gen_fd)
+                    stage.chmod(0o755)
                     shutil.rmtree(stage)
-                except Exception as error:
-                    cleanup_errors.append(error)
-            if os.path.lexists(pointer):
+                    stage_created = False
+                else:
+                    os.rename(stage_name, generation_id, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+                    stage_created = False
+                os.fsync(root_fd)
+                relative_target = os.path.relpath(generation, output.parent)
+                os.symlink(relative_target, pointer)
+                _fsync_directory(output.parent)
+                os.replace(pointer, output)
+                swapped = True
+                load_artifact_set(output)
+                _fsync_directory(output.parent)
+            except Exception as primary:
+                errors: list[Exception] = [primary]
+                if swapped:
+                    try:
+                        _restore_pointer(output, old_target)
+                    except Exception as restore_error:
+                        errors.append(restore_error)
+                        try:
+                            _write_forensic_marker(output, "restore-failed", errors)
+                        except Exception as marker_error:
+                            errors.append(marker_error)
+                if stage_created:
+                    try:
+                        _remove_stage(root_fd, stage_name)
+                    except Exception as cleanup_error:
+                        errors.append(cleanup_error)
+                if os.path.lexists(pointer):
+                    try:
+                        pointer.unlink()
+                    except Exception as cleanup_error:
+                        errors.append(cleanup_error)
                 try:
-                    pointer.unlink()
-                except Exception as error:
-                    cleanup_errors.append(error)
-            for directory in (generations, output.parent):
+                    _fsync_directory(output.parent)
+                except Exception as cleanup_error:
+                    errors.append(cleanup_error)
                 try:
-                    _fsync_directory(directory)
-                except Exception as error:
-                    cleanup_errors.append(error)
-            if cleanup_errors:
-                raise ExceptionGroup(
-                    "artifact publication and cleanup failed", [primary, *cleanup_errors]
-                )
-            raise
+                    os.fsync(root_fd)
+                except Exception as cleanup_error:
+                    errors.append(cleanup_error)
+                if len(errors) > 1:
+                    label = (
+                        "artifact pointer restore failed"
+                        if swapped and any("restore" in str(error) for error in errors[1:])
+                        else "artifact publication and cleanup failed"
+                    )
+                    raise ExceptionGroup(label, errors)
+                raise
+        finally:
+            os.close(root_fd)
+
 
 def _require_mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):

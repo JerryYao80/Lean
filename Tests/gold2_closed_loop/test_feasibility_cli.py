@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
@@ -177,6 +179,90 @@ def load_cli_module():
     return module
 
 
+@pytest.mark.parametrize("attack", ("external_absolute", "dotdot", "generation_symlink", "root_symlink", "artifact_symlink"))
+def test_loader_rejects_symlink_escape_and_nofollow_attacks(tmp_path: Path, attack: str):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"safe": name} for name in ARTIFACTS})
+    root = tmp_path / ".audit.generations"
+    generation = output.resolve()
+    external = tmp_path / "external"
+    if attack in ("external_absolute", "dotdot"):
+        external.mkdir()
+        for name in ARTIFACTS:
+            (external / name).write_bytes((generation / name).read_bytes())
+        output.unlink()
+        target = str(external) if attack == "external_absolute" else "../external"
+        output.symlink_to(target)
+    elif attack == "generation_symlink":
+        moved = tmp_path / "moved-generation"
+        generation.rename(moved)
+        generation.symlink_to(moved, target_is_directory=True)
+    elif attack == "root_symlink":
+        moved = tmp_path / "real-generations"
+        root.rename(moved)
+        root.symlink_to(moved, target_is_directory=True)
+    else:
+        artifact = generation / next(iter(ARTIFACTS))
+        moved = tmp_path / "artifact.json"
+        moved.write_bytes(artifact.read_bytes())
+        artifact.unlink()
+        artifact.symlink_to(moved)
+
+    with pytest.raises((ValueError, OSError)):
+        module.load_artifact_set(output)
+
+
+def test_published_generation_has_read_only_modes(tmp_path: Path):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"value": name} for name in ARTIFACTS})
+    generation = output.resolve()
+
+    assert stat.S_IMODE(generation.stat().st_mode) == 0o555
+    assert all(stat.S_IMODE((generation / name).stat().st_mode) == 0o444 for name in ARTIFACTS)
+    module.load_artifact_set(output)
+
+
+def test_loader_pins_generation_when_public_pointer_changes(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    old = {name: {"old": name} for name in ARTIFACTS}
+    new = {name: {"new": name} for name in ARTIFACTS}
+    module._publish_artifacts(output, old)
+    old_loaded = module.load_artifact_set(output)
+    real_open = module.os.open
+    switched = False
+
+    def switch_after_generation_open(path, flags, *args, **kwargs):
+        nonlocal switched
+        fd = real_open(path, flags, *args, **kwargs)
+        if not switched and isinstance(path, str) and len(path) == 64 and kwargs.get("dir_fd") is not None:
+            switched = True
+            module._publish_artifacts(output, new)
+        return fd
+
+    monkeypatch.setattr(module.os, "open", switch_after_generation_open)
+    loaded = module.load_artifact_set(output)
+    assert loaded == old_loaded
+
+
+def test_corrupted_existing_hash_generation_is_rejected(tmp_path: Path):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    artifacts = {name: {"safe": name} for name in ARTIFACTS}
+    enriched = module._artifact_set(artifacts)
+    generation_id = enriched[next(iter(module.ARTIFACT_NAMES))]["generation_id"]
+    generation = tmp_path / ".audit.generations" / generation_id
+    generation.mkdir(parents=True)
+    for name in ARTIFACTS:
+        (generation / name).write_text("{}", encoding="utf-8")
+
+    with pytest.raises((ValueError, OSError)):
+        module._publish_artifacts(output, artifacts)
+    assert not os.path.lexists(output)
+
+
 def test_every_artifact_has_matching_generation_and_artifact_set_hash(tmp_path: Path):
     draft = tmp_path / "draft.yaml"
     output = tmp_path / "audit"
@@ -188,6 +274,151 @@ def test_every_artifact_has_matching_generation_and_artifact_set_hash(tmp_path: 
     assert {path.name for path in output.iterdir()} == ARTIFACTS
     assert not list(tmp_path.glob(".audit.stage-*"))
     assert not list(tmp_path.glob(".audit.backup-*"))
+
+
+def test_post_swap_failure_restores_old_pointer_and_first_publish_removes_output(
+    tmp_path: Path, monkeypatch
+):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
+    old_target = os.readlink(output)
+    real_load = module.load_artifact_set
+    calls = 0
+
+    def fail_post_swap(path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected post-swap verification failure")
+        return real_load(path)
+
+    monkeypatch.setattr(module, "load_artifact_set", fail_post_swap)
+    with pytest.raises(OSError, match="post-swap"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+    assert os.readlink(output) == old_target
+    real_load(output)
+
+    fresh = tmp_path / "fresh"
+    calls = 0
+    with pytest.raises(OSError, match="post-swap"):
+        module._publish_artifacts(fresh, {name: {"new": name} for name in ARTIFACTS})
+    assert not os.path.lexists(fresh)
+
+
+def test_pointer_restore_failure_is_grouped_and_leaves_forensic_marker(
+    tmp_path: Path, monkeypatch
+):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
+    real_replace = module.os.replace
+    swap_count = 0
+
+    def fail_restore(source, destination):
+        nonlocal swap_count
+        if Path(destination) == output:
+            swap_count += 1
+            if swap_count == 2:
+                raise OSError("injected pointer restore failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", fail_restore)
+    monkeypatch.setattr(
+        module,
+        "load_artifact_set",
+        lambda path: (_ for _ in ()).throw(OSError("injected post-swap failure")),
+    )
+    with pytest.raises(ExceptionGroup, match="restore"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+    assert list(tmp_path.glob(".audit.restore-failed-*"))
+
+
+def test_post_swap_parent_fsync_failure_restores_old_pointer(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
+    old_target = os.readlink(output)
+    real_replace = module.os.replace
+    real_fsync = module._fsync_directory
+    swapped = False
+    failed = False
+
+    def track_swap(source, destination):
+        nonlocal swapped
+        result = real_replace(source, destination)
+        if Path(destination) == output:
+            swapped = True
+        return result
+
+    def fail_commit_fsync(path):
+        nonlocal failed
+        if swapped and Path(path) == output.parent and not failed:
+            failed = True
+            raise OSError("injected post-swap parent fsync failure")
+        return real_fsync(path)
+
+    monkeypatch.setattr(module.os, "replace", track_swap)
+    monkeypatch.setattr(module, "_fsync_directory", fail_commit_fsync)
+    with pytest.raises(OSError, match="post-swap parent"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+    assert os.readlink(output) == old_target
+    module.load_artifact_set(output)
+
+
+def test_loader_pins_open_generation_if_path_is_replaced(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    module._publish_artifacts(output, {name: {"safe": name} for name in ARTIFACTS})
+    expected = module.load_artifact_set(output)
+    generation = output.resolve()
+    real_open = module.os.open
+    replaced = False
+
+    def replace_after_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        fd = real_open(path, flags, *args, **kwargs)
+        if not replaced and isinstance(path, str) and path == generation.name and kwargs.get("dir_fd") is not None:
+            replaced = True
+            moved = generation.with_name(generation.name + ".old")
+            generation.rename(moved)
+            generation.mkdir(mode=0o555)
+        return fd
+
+    monkeypatch.setattr(module.os, "open", replace_after_open)
+    try:
+        loaded = module.load_artifact_set(output)
+        assert loaded == expected
+    except ValueError as error:
+        assert "changed" in str(error)
+
+
+def test_main_reports_grouped_publication_failure_without_traceback(tmp_path: Path, monkeypatch, capsys):
+    module = load_cli_module()
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, complete_draft(tmp_path))
+    monkeypatch.setattr(
+        module,
+        "_publish_artifacts",
+        lambda *args: (_ for _ in ()).throw(
+            ExceptionGroup("controlled publication failure", [OSError("cleanup")])
+        ),
+    )
+
+    assert module.main(["assess-feasibility", "--input", str(draft), "--output", str(output)]) == 2
+    captured = capsys.readouterr()
+    assert "controlled publication failure" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_main_does_not_swallow_keyboard_interrupt(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    draft = tmp_path / "draft.yaml"
+    write_yaml(draft, complete_draft(tmp_path))
+    monkeypatch.setattr(module, "_publish_artifacts", lambda *args: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        module.main(["assess-feasibility", "--input", str(draft), "--output", str(tmp_path / "audit")])
 
 
 def test_pointer_swap_failure_preserves_old_generation(tmp_path: Path, monkeypatch):
