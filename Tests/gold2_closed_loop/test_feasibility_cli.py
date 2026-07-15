@@ -222,6 +222,26 @@ def test_invalid_g3_blocks_otherwise_complete_assessment(tmp_path: Path):
     assert inventory["proof_conclusion"] == "UNPROVEN"
 
 
+def test_non_integer_minimum_generation_counts_block_overall_assessment(tmp_path: Path):
+    for index, invalid in enumerate((3.0, True, "3")):
+        case = tmp_path / f"case-{index}"
+        case.mkdir()
+        config = complete_draft(case)
+        config["g3_observability"]["minimum_required_generation_count"] = invalid
+        draft = case / "draft.yaml"
+        output = case / "audit"
+        write_yaml(draft, config)
+
+        result = run_cli(draft, output, case)
+
+        assert result.returncode == 2
+        assert load(output, "g3_observability.json")["status"] == "BLOCKED"
+        inventory = load(output, "window_inventory.json")
+        assert inventory["overall_status"] == "BLOCKED"
+        assert inventory["evaluation_status"] == "NOT_EVALUATED"
+        assert inventory["proof_conclusion"] == "UNPROVEN"
+
+
 def test_unknown_g3_policy_and_impossible_budget_are_rejected(tmp_path: Path):
     config = complete_draft(tmp_path)
     config["g3_observability"]["review_input"] = "other"

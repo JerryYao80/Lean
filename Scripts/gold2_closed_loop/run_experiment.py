@@ -369,8 +369,9 @@ def _assess_windows(
 def _assess_g3(config: dict[str, Any]) -> dict[str, Any]:
     value = _require_mapping(config.get("g3_observability"), "g3_observability")
     errors = []
-    if value.get("minimum_required_generation_count") != 3:
-        errors.append("minimum_required_generation_count must equal 3")
+    minimum = value.get("minimum_required_generation_count")
+    if type(minimum) is not int or minimum != 3:
+        errors.append("minimum_required_generation_count must be integer 3")
     for field in ("per_generation_candidate_budget", "per_window_candidate_budget"):
         number = value.get(field)
         if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
@@ -381,7 +382,6 @@ def _assess_g3(config: dict[str, Any]) -> dict[str, Any]:
         errors.append(
             f"failure_budget_policy must equal {CANONICAL_FAILURE_BUDGET_POLICY}"
         )
-    minimum = value.get("minimum_required_generation_count")
     per_generation = value.get("per_generation_candidate_budget")
     per_window = value.get("per_window_candidate_budget")
     if (
