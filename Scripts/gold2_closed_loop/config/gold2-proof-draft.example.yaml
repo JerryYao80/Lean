@@ -27,6 +27,7 @@ data_sources:
     path: /home/project/hope/tushare_data_v2/fund_daily/ts_code=518880.SH/data.parquet
     date_column: trade_date
     date_format: "%Y%m%d"
+    value_columns: [open, high, low, close]
     timezone: Asia/Shanghai
     observation_time: "15:00:00"
     publication_lag: "0 days"
@@ -42,6 +43,7 @@ data_sources:
     path: /path/to/user-editable/au.csv
     date_column: date
     date_format: "%Y-%m-%d"
+    value_column: close
     timezone: Asia/Shanghai
     observation_time: "15:00:00"
     publication_lag: "0 days"
@@ -56,6 +58,7 @@ data_sources:
     path: /path/to/user-editable/VIX.csv
     date_column: DATE
     date_format: "%Y-%m-%d"
+    value_column: VIX
     timezone: America/New_York
     observation_time: "16:00:00"
     publication_lag: "0 days"
@@ -70,6 +73,7 @@ data_sources:
     path: /path/to/user-editable/DFII10.csv
     date_column: DATE
     date_format: "%Y-%m-%d"
+    value_column: DFII10
     timezone: America/New_York
     observation_time: "16:00:00"
     publication_lag: "1 day"

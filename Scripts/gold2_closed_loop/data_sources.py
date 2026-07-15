@@ -8,8 +8,9 @@ from io import BytesIO
 from pathlib import Path
 import re
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 
 
@@ -36,6 +37,7 @@ class SourceReport:
     duplicate_date_count: int
     sha256: str
     annual_counts: Mapping[int, int]
+    invalid_value_count: int = 0
 
 
 def inspect_source(
@@ -46,6 +48,7 @@ def inspect_source(
     source_kind: SourceKind,
     instrument: str,
     date_format: str | None = None,
+    value_columns: Sequence[str] | None = None,
 ) -> SourceReport:
     if not isinstance(source_kind, SourceKind):
         raise ValueError("source kind must be a canonical SourceKind")
@@ -98,13 +101,30 @@ def inspect_source(
         raise ValueError("source is empty")
     if date_column not in frame.columns:
         raise ValueError(f"date column does not exist: {date_column}")
-    if source_kind is SourceKind.TRADABLE and not {
-        "open",
-        "high",
-        "low",
-        "close",
-    }.issubset(frame.columns):
+    required_ohlc = ("open", "high", "low", "close")
+    if source_kind is SourceKind.TRADABLE and not set(required_ohlc).issubset(frame.columns):
         raise ValueError("518880 tradable source requires OHLC columns")
+    if source_kind is SourceKind.FEATURE and not value_columns:
+        raise ValueError("feature source requires an explicit value column")
+    columns = tuple(value_columns or (required_ohlc if source_kind is SourceKind.TRADABLE else ()))
+    missing_value_columns = [column for column in columns if column not in frame.columns]
+    if missing_value_columns:
+        raise ValueError(f"value column does not exist: {', '.join(missing_value_columns)}")
+
+    numeric = frame.loc[:, columns].apply(pd.to_numeric, errors="coerce") if columns else pd.DataFrame(index=frame.index)
+    valid_values = numeric.notna().all(axis=1)
+    if columns:
+        valid_values &= np.isfinite(numeric.to_numpy()).all(axis=1)
+    if source_kind is SourceKind.TRADABLE:
+        valid_values &= (numeric > 0).all(axis=1)
+        valid_values &= numeric["low"] <= numeric["high"]
+        valid_values &= numeric["low"] <= numeric["open"]
+        valid_values &= numeric["open"] <= numeric["high"]
+        valid_values &= numeric["low"] <= numeric["close"]
+        valid_values &= numeric["close"] <= numeric["high"]
+        if not valid_values.all():
+            raise ValueError("518880 OHLC rows must be finite, positive, and internally ordered")
+    invalid_value_count = int((~valid_values).sum()) if columns else 0
 
     dates = [_parse_date(value, date_format) for value in frame[date_column]]
     distinct_dates = set(dates)
@@ -122,6 +142,7 @@ def inspect_source(
         duplicate_date_count=len(dates) - len(distinct_dates),
         sha256=digest,
         annual_counts=MappingProxyType(dict(sorted(annual_counts.items()))),
+        invalid_value_count=invalid_value_count,
     )
 
 

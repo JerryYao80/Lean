@@ -17,6 +17,7 @@ import tempfile
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -172,7 +173,16 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _require_exact_generation(path: Path) -> None:
+    entries = {entry.name for entry in path.iterdir()}
+    if entries != set(ARTIFACT_NAMES):
+        raise ValueError("generation must contain exactly the four artifact files")
+    if any(not (path / name).is_file() or (path / name).is_symlink() for name in ARTIFACT_NAMES):
+        raise ValueError("generation artifacts must be regular non-symlink files")
+
+
 def _verify_published_set(output: Path, expected_hash: str, generation_id: str) -> None:
+    _require_exact_generation(output)
     loaded = {
         name: json.loads((output / name).read_text(encoding="utf-8"))
         for name in ARTIFACT_NAMES
@@ -196,70 +206,53 @@ def _verify_published_set(output: Path, expected_hash: str, generation_id: str) 
         raise OSError("published artifact generation verification failed")
 
 
-def _write_cleanup_failure_marker(
-    parent: Path, output_name: str, errors: list[Exception]
-) -> None:
-    descriptor, marker_name = tempfile.mkstemp(
-        prefix=f".{output_name}.cleanup-failed-", dir=parent
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as marker:
-            marker.write("\n".join(repr(error) for error in errors) + "\n")
-            marker.flush()
-            os.fsync(marker.fileno())
-        _fsync_directory(parent)
-    except Exception:
-        # The marker path itself remains as best-effort forensic evidence.
-        raise
-
-
-def _cleanup_transaction_dirs(
-    stage: Path,
-    backup: Path,
-    parent: Path,
-    *,
-    retain_backup: bool,
-) -> None:
-    """Remove transaction debris durably; failed rollback retains its backup evidence."""
-    errors: list[Exception] = []
-    for path, retain in ((stage, False), (backup, retain_backup)):
-        if not retain:
-            try:
-                shutil.rmtree(path)
-            except Exception as error:
-                errors.append(error)
-        try:
-            _fsync_directory(parent)
-        except Exception as error:
-            errors.append(error)
-    try:
-        _fsync_directory(parent)
-    except Exception as error:
-        errors.append(error)
-    if errors:
-        output_name = stage.name[1:].split(".stage-", 1)[0]
-        try:
-            _write_cleanup_failure_marker(parent, output_name, errors)
-        except Exception as marker_error:
-            errors.append(marker_error)
-        raise ExceptionGroup("publication cleanup failed", errors)
+def load_artifact_set(output: Path) -> dict[str, dict[str, Any]]:
+    """Pin one immutable generation, then load and verify its four artifacts."""
+    if not output.is_symlink():
+        raise ValueError("output must be an atomic artifact-set symlink")
+    generation = output.resolve(strict=True)
+    _require_exact_generation(generation)
+    loaded = {
+        name: json.loads((generation / name).read_text(encoding="utf-8"))
+        for name in ARTIFACT_NAMES
+    }
+    expected_hashes = {item.get("artifact_set_sha256") for item in loaded.values()}
+    generation_ids = {item.get("generation_id") for item in loaded.values()}
+    if len(expected_hashes) != 1 or len(generation_ids) != 1:
+        raise ValueError("mixed artifact generations")
+    expected_hash = next(iter(expected_hashes))
+    generation_id = next(iter(generation_ids))
+    if generation.name != generation_id:
+        raise ValueError("artifact generation does not match pinned target")
+    bare = {
+        name: {
+            key: value
+            for key, value in loaded[name].items()
+            if key not in ("generation_id", "artifact_set_sha256")
+        }
+        for name in ARTIFACT_NAMES
+    }
+    actual_hash = hashlib.sha256(
+        json.dumps(bare, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    if actual_hash != expected_hash or expected_hash != generation_id:
+        raise ValueError("artifact set hash verification failed")
+    return loaded
 
 
 def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
+    """Publish an immutable generation and atomically switch the consumer symlink."""
     with _publication_lock(output):
-        _validate_output(output)
-        unexpected = _unexpected_output_entries(output)
-        if unexpected:
-            raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
-        output.mkdir(exist_ok=True)
+        if output.lexists() if hasattr(output, "lexists") else os.path.lexists(output):
+            if not output.is_symlink():
+                raise ValueError("legacy mutable output directory is not supported")
+        generations = output.parent / f".{output.name}.generations"
+        generations.mkdir(parents=True, exist_ok=True)
         enriched = _artifact_set(artifacts)
-        generation_hash = enriched[ARTIFACT_NAMES[0]]["artifact_set_sha256"]
         generation_id = enriched[ARTIFACT_NAMES[0]]["generation_id"]
-        stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=output.parent))
-        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=output.parent))
-        replaced: list[str] = []
-        publication_error: Exception | None = None
-        rollback_errors: list[Exception] = []
+        generation = generations / generation_id
+        stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=generations))
+        pointer = output.parent / f".{output.name}.pointer-{os.getpid()}-{stage.name}"
         try:
             for name in ARTIFACT_NAMES:
                 with (stage / name).open("wb") as stream:
@@ -267,69 +260,41 @@ def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> No
                     stream.flush()
                     os.fsync(stream.fileno())
             _fsync_directory(stage)
-            unexpected = _unexpected_output_entries(output)
-            if unexpected:
-                raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
-            for name in ARTIFACT_NAMES:
-                destination = output / name
-                if destination.exists():
-                    shutil.copy2(destination, backup / name)
-                    with (backup / name).open("rb") as stream:
-                        os.fsync(stream.fileno())
-            _fsync_directory(backup)
-            for name in ARTIFACT_NAMES:
-                destination = output / name
-                os.replace(stage / name, destination)
-                replaced.append(name)
-            unexpected = _unexpected_output_entries(output)
-            if unexpected:
-                raise ValueError(f"output contains unexpected files: {', '.join(unexpected)}")
-            _fsync_directory(output)
-            _verify_published_set(output, generation_hash, generation_id)
+            _verify_published_set(stage, generation_id, generation_id)
+            if generation.exists():
+                _verify_published_set(generation, generation_id, generation_id)
+                shutil.rmtree(stage)
+            else:
+                os.rename(stage, generation)
+            _fsync_directory(generations)
+            relative_target = os.path.relpath(generation, output.parent)
+            os.symlink(relative_target, pointer)
             _fsync_directory(output.parent)
-        except Exception as error:
-            publication_error = error
-            for name in reversed(replaced):
-                saved = backup / name
-                destination = output / name
+            os.replace(pointer, output)
+            _fsync_directory(output.parent)
+            load_artifact_set(output)
+        except Exception as primary:
+            cleanup_errors: list[Exception] = []
+            if stage.exists():
                 try:
-                    if saved.exists():
-                        os.replace(saved, destination)
-                    elif destination.exists():
-                        destination.unlink()
-                except Exception as rollback_error:
-                    rollback_errors.append(rollback_error)
-            for directory in (output, output.parent):
+                    shutil.rmtree(stage)
+                except Exception as error:
+                    cleanup_errors.append(error)
+            if os.path.lexists(pointer):
+                try:
+                    pointer.unlink()
+                except Exception as error:
+                    cleanup_errors.append(error)
+            for directory in (generations, output.parent):
                 try:
                     _fsync_directory(directory)
-                except Exception as rollback_error:
-                    rollback_errors.append(rollback_error)
-
-        cleanup_error: Exception | None = None
-        try:
-            _cleanup_transaction_dirs(
-                stage,
-                backup,
-                output.parent,
-                retain_backup=bool(rollback_errors),
-            )
-        except Exception as error:
-            cleanup_error = error
-
-        failure: Exception | None = publication_error
-        if rollback_errors:
-            failure = ExceptionGroup(
-                "publication rollback failed",
-                [publication_error, *rollback_errors] if publication_error else rollback_errors,
-            )
-        if cleanup_error:
-            failure = ExceptionGroup(
-                "publication and cleanup failed" if failure else "publication cleanup failed",
-                [failure, cleanup_error] if failure else [cleanup_error],
-            )
-        if failure:
-            raise failure
-
+                except Exception as error:
+                    cleanup_errors.append(error)
+            if cleanup_errors:
+                raise ExceptionGroup(
+                    "artifact publication and cleanup failed", [primary, *cleanup_errors]
+                )
+            raise
 
 def _require_mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -337,7 +302,12 @@ def _require_mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _read_dates(source: dict[str, Any], expected_sha256: str | None = None) -> pd.DatetimeIndex:
+def _read_dates(
+    source: dict[str, Any],
+    expected_sha256: str | None = None,
+    *,
+    valid_values_only: bool = False,
+) -> pd.DatetimeIndex:
     path = Path(str(source["path"])).expanduser()
     content = path.read_bytes()
     if expected_sha256 is not None and hashlib.sha256(content).hexdigest() != expected_sha256:
@@ -348,6 +318,11 @@ def _read_dates(source: dict[str, Any], expected_sha256: str | None = None) -> p
     column = str(source["date_column"])
     date_format = str(source["date_format"])
     parsed = pd.to_datetime(frame[column].astype(str), format=date_format, errors="raise")
+    if valid_values_only:
+        value_columns = source.get("value_columns") or [source.get("value_column")]
+        numeric = frame.loc[:, value_columns].apply(pd.to_numeric, errors="coerce")
+        valid = numeric.notna().all(axis=1) & np.isfinite(numeric.to_numpy()).all(axis=1)
+        parsed = parsed[valid]
     timezone = ZoneInfo(str(source["timezone"]))
     observation_time = datetime.strptime(str(source["observation_time"]), "%H:%M:%S").time()
     return pd.DatetimeIndex(
@@ -448,6 +423,15 @@ def _assess_data(config: dict[str, Any]) -> tuple[
         kind = SourceKind(kind_text)
         if source_id == "518880" and kind is not SourceKind.TRADABLE:
             raise ValueError("518880 must be a tradable source; fund_nav and proxies are forbidden")
+        if source_id == "518880":
+            value_columns = source.get("value_columns")
+            if value_columns != ["open", "high", "low", "close"]:
+                raise ValueError("518880 value_columns must exactly define open, high, low, close")
+        else:
+            value_column = source.get("value_column")
+            if not isinstance(value_column, str) or not value_column:
+                raise ValueError(f"{source_id} requires one explicit value_column")
+            value_columns = [value_column]
         report = inspect_source(
             source_id,
             Path(str(source["path"])).expanduser(),
@@ -455,6 +439,7 @@ def _assess_data(config: dict[str, Any]) -> tuple[
             source_kind=kind,
             instrument=instrument,
             date_format=str(source["date_format"]),
+            value_columns=value_columns,
         )
         report_value = {
             "annual_counts": dict(report.annual_counts),
@@ -465,6 +450,7 @@ def _assess_data(config: dict[str, Any]) -> tuple[
             "logical_name": report.logical_name,
             "path": report.path,
             "row_count": report.row_count,
+            "invalid_value_count": report.invalid_value_count,
             "sha256": report.sha256,
         }
         report_value["source_id"] = declared_id
@@ -476,7 +462,9 @@ def _assess_data(config: dict[str, Any]) -> tuple[
         ):
             report_value[policy_field] = source[policy_field]
         reports[source_id] = report_value
-        releases[source_id] = _read_dates(source, report.sha256)
+        releases[source_id] = _read_dates(
+            source, report.sha256, valid_values_only=True
+        )
         policies[source_id] = SourcePolicy(
             maximum_staleness=source["maximum_staleness_days"],
             maximum_consecutive_unavailable_sessions=source["maximum_consecutive_gap_sessions"],
@@ -640,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _publish_artifacts(args.output, artifacts)
-    except (OSError, ValueError) as error:
+    except Exception as error:
         print(f"feasibility assessment failed while writing artifacts: {error}", file=sys.stderr)
         return 2
     return 0 if passed else 2

@@ -37,6 +37,7 @@ def test_inspect_parquet_returns_frozen_complete_report(tmp_path):
         duplicate_date_count=1,
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         annual_counts={2023: 1, 2024: 2, 2025: 1},
+        invalid_value_count=0,
     )
     with pytest.raises(FrozenInstanceError):
         report.row_count = 0
@@ -78,7 +79,65 @@ def test_inspect_source_rejects_invalid_inputs(tmp_path, filename, writer, match
         inspect_source("benchmark", path, "date", source_kind=SourceKind.BENCHMARK, instrument="CSI300")
 
 
-def test_fund_nav_cannot_substitute_for_a_tradable_source(tmp_path):
+def test_feature_requires_explicit_value_column_and_counts_invalid_rows(tmp_path):
+    path = tmp_path / "vix.csv"
+    pd.DataFrame(
+        {
+            "date": ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"],
+            "value": [12.0, None, "bad", float("inf")],
+        }
+    ).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="value column"):
+        inspect_source(
+            "VIX", path, "date", source_kind=SourceKind.FEATURE, instrument="VIX"
+        )
+
+    report = inspect_source(
+        "VIX",
+        path,
+        "date",
+        source_kind=SourceKind.FEATURE,
+        instrument="VIX",
+        value_columns=("value",),
+    )
+    assert report.invalid_value_count == 3
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"open": [0.0], "high": [1.0], "low": [0.5], "close": [0.8]},
+        {"open": [2.0], "high": [1.0], "low": [0.5], "close": [0.8]},
+        {"open": [0.8], "high": [1.0], "low": [0.9], "close": [0.8]},
+        {"open": [0.8], "high": [float("inf")], "low": [0.5], "close": [0.8]},
+    ],
+)
+def test_518880_rejects_invalid_ohlc_rows(tmp_path, values):
+    path = tmp_path / "518880.csv"
+    pd.DataFrame({"date": ["2024-01-02"], **values}).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="OHLC"):
+        inspect_source(
+            "518880",
+            path,
+            "date",
+            source_kind=SourceKind.TRADABLE,
+            instrument="518880",
+            value_columns=("open", "high", "low", "close"),
+        )
+
+
+def test_feature_date_only_input_is_rejected(tmp_path):
+    path = tmp_path / "feature.csv"
+    pd.DataFrame({"date": ["2024-01-02"]}).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="value column"):
+        inspect_source(
+            "AU", path, "date", source_kind=SourceKind.FEATURE, instrument="AU"
+        )
+
+
     path = tmp_path / "fund_nav.csv"
     pd.DataFrame({"date": ["2024-01-02"]}).to_csv(path, index=False)
 

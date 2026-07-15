@@ -64,6 +64,7 @@ def source_policy(path: Path, source_id: str, *, fmt: str = "%Y-%m-%d") -> dict:
         "path": str(path),
         "date_column": "date",
         "date_format": fmt,
+        "value_column": "value",
         "timezone": "Asia/Shanghai",
         "observation_time": "15:00:00",
         "publication_lag": "0 days",
@@ -100,6 +101,7 @@ def complete_draft(tmp_path: Path, start: str = "2018-01-02", end: str = "2025-1
         "518880": {
             **source_policy(tradable, "518880", fmt="%Y%m%d"),
             "date_column": "trade_date",
+            "value_columns": ["open", "high", "low", "close"],
             "source_kind": "tradable",
             "instrument": "518880",
             "maximum_staleness_days": 0,
@@ -188,239 +190,64 @@ def test_every_artifact_has_matching_generation_and_artifact_set_hash(tmp_path: 
     assert not list(tmp_path.glob(".audit.backup-*"))
 
 
-@pytest.mark.parametrize("failure_index", (1, 2, 3, 4))
-def test_each_forward_replace_failure_restores_old_generation(
-    tmp_path: Path, monkeypatch, failure_index: int
-):
+def test_pointer_swap_failure_preserves_old_generation(tmp_path: Path, monkeypatch):
     module = load_cli_module()
     output = tmp_path / "audit"
-    output.mkdir()
-    old = {name: {"old": name} for name in ARTIFACTS}
-    module._publish_artifacts(output, old)
-    old_bytes = {name: (output / name).read_bytes() for name in ARTIFACTS}
-    replacements = 0
-    real_replace = module.os.replace
-
-    def fail_selected_publish(source, destination):
-        nonlocal replacements
-        if Path(source).parent.name.startswith(".audit.stage-"):
-            replacements += 1
-            if replacements == failure_index:
-                raise OSError(f"injected forward replacement {failure_index}")
-        return real_replace(source, destination)
-
-    monkeypatch.setattr(module.os, "replace", fail_selected_publish)
-    with pytest.raises(OSError, match="injected forward"):
-        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    assert old_bytes == {name: (output / name).read_bytes() for name in ARTIFACTS}
-    assert_coherent_artifact_set(output)
-    assert not list(tmp_path.glob(".audit.stage-*"))
-    assert not list(tmp_path.glob(".audit.backup-*"))
-
-
-@pytest.mark.parametrize("failure_point", ("verification", "output_fsync", "parent_fsync"))
-def test_post_replace_failure_restores_old_generation(
-    tmp_path: Path, monkeypatch, failure_point: str
-):
-    module = load_cli_module()
-    output = tmp_path / "audit"
-    output.mkdir()
     module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
-    old_bytes = {name: (output / name).read_bytes() for name in ARTIFACTS}
+    old_target = output.resolve()
+    real_replace = module.os.replace
 
-    if failure_point == "verification":
-        monkeypatch.setattr(
-            module,
-            "_verify_published_set",
-            lambda *args: (_ for _ in ()).throw(OSError("injected verification")),
-        )
-    else:
-        real_fsync = module._fsync_directory
-        failed = False
+    def fail_pointer(source, destination):
+        if Path(destination) == output:
+            raise OSError("injected pointer swap failure")
+        return real_replace(source, destination)
 
-        def fail_selected_fsync(path):
-            nonlocal failed
-            if not failed and (
-                (failure_point == "output_fsync" and Path(path) == output)
-                or (failure_point == "parent_fsync" and Path(path) == output.parent)
-            ):
-                failed = True
-                raise OSError(f"injected {failure_point}")
-            return real_fsync(path)
-
-        monkeypatch.setattr(module, "_fsync_directory", fail_selected_fsync)
-
-    with pytest.raises(BaseException, match="injected"):
+    monkeypatch.setattr(module.os, "replace", fail_pointer)
+    with pytest.raises(OSError, match="pointer"):
         module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    assert old_bytes == {name: (output / name).read_bytes() for name in ARTIFACTS}
-    assert_coherent_artifact_set(output)
-    assert not list(tmp_path.glob(".audit.stage-*"))
-    assert not list(tmp_path.glob(".audit.backup-*"))
+    assert output.resolve() == old_target
+    module.load_artifact_set(output)
+    assert not list((tmp_path / ".audit.generations").glob(".stage-*"))
 
 
-def test_rollback_failure_is_explicit_and_retains_forensic_backup(tmp_path: Path, monkeypatch):
+def test_failure_before_generation_rename_preserves_old_pointer(tmp_path: Path, monkeypatch):
     module = load_cli_module()
     output = tmp_path / "audit"
-    output.mkdir()
     module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
-    real_replace = module.os.replace
-    forward_count = 0
-
-    def fail_forward_and_rollback(source, destination):
-        nonlocal forward_count
-        parent = Path(source).parent.name
-        if parent.startswith(".audit.stage-"):
-            forward_count += 1
-            if forward_count == 2:
-                raise OSError("injected forward failure")
-        if parent.startswith(".audit.backup-"):
-            raise OSError("injected rollback failure")
-        return real_replace(source, destination)
-
-    monkeypatch.setattr(module.os, "replace", fail_forward_and_rollback)
-    with pytest.raises(ExceptionGroup) as caught:
+    old_target = output.resolve()
+    monkeypatch.setattr(module, "_verify_published_set", lambda *a: (_ for _ in ()).throw(OSError("before rename")))
+    with pytest.raises(OSError, match="before rename"):
         module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    messages = repr(caught.value)
-    assert "publication rollback failed" in str(caught.value)
-    assert list(tmp_path.glob(".audit.backup-*")), messages
-    assert not list(tmp_path.glob(".audit.stage-*"))
+    assert output.resolve() == old_target
+    assert not list((tmp_path / ".audit.generations").glob(".stage-*"))
 
 
-def test_cleanup_failure_is_publication_failure_and_retains_forensic_debris(
-    tmp_path: Path, monkeypatch
-):
+def test_failure_after_generation_rename_before_pointer_preserves_old(tmp_path: Path, monkeypatch):
     module = load_cli_module()
     output = tmp_path / "audit"
-    real_rmtree = module.shutil.rmtree
-
-    def fail_stage_cleanup(path):
-        if Path(path).name.startswith(".audit.stage-"):
-            raise OSError("injected cleanup failure")
-        return real_rmtree(path)
-
-    monkeypatch.setattr(module.shutil, "rmtree", fail_stage_cleanup)
-    with pytest.raises(BaseException, match="cleanup"):
+    module._publish_artifacts(output, {name: {"old": name} for name in ARTIFACTS})
+    old_target = output.resolve()
+    real_symlink = module.os.symlink
+    monkeypatch.setattr(module.os, "symlink", lambda *a: (_ for _ in ()).throw(OSError("after rename")))
+    with pytest.raises(OSError, match="after rename"):
         module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    assert list(tmp_path.glob(".audit.stage-*"))
-    assert not list(tmp_path.glob(".audit.backup-*"))
-    assert_coherent_artifact_set(output)
+    assert output.resolve() == old_target
+    module.load_artifact_set(output)
 
 
-def test_cleanup_parent_fsync_failure_retains_forensic_marker_and_attempts_both_removals(
-    tmp_path: Path, monkeypatch
-):
+def test_concurrent_publishers_leave_coherent_pointer(tmp_path: Path):
     module = load_cli_module()
     output = tmp_path / "audit"
-    real_fsync = module._fsync_directory
-    real_rmtree = module.shutil.rmtree
-    cleanup_started = False
-    fsync_failed = False
-    removals: list[str] = []
-
-    def track_removal(path):
-        nonlocal cleanup_started
-        cleanup_started = True
-        removals.append(Path(path).name)
-        return real_rmtree(path)
-
-    def fail_cleanup_parent_fsync(path):
-        nonlocal fsync_failed
-        if cleanup_started and Path(path) == output.parent and not fsync_failed:
-            fsync_failed = True
-            raise OSError("injected cleanup parent fsync failure")
-        return real_fsync(path)
-
-    monkeypatch.setattr(module.shutil, "rmtree", track_removal)
-    monkeypatch.setattr(module, "_fsync_directory", fail_cleanup_parent_fsync)
-    with pytest.raises(BaseException, match="cleanup"):
-        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    assert any(name.startswith(".audit.stage-") for name in removals)
-    assert any(name.startswith(".audit.backup-") for name in removals)
-    markers = list(tmp_path.glob(".audit.cleanup-failed-*"))
-    assert markers
-    assert "injected cleanup parent fsync failure" in markers[0].read_text(encoding="utf-8")
-    assert_coherent_artifact_set(output)
-def test_original_publication_and_cleanup_failures_are_both_reported(
-    tmp_path: Path, monkeypatch
-):
-    module = load_cli_module()
-    output = tmp_path / "audit"
-    real_replace = module.os.replace
-    real_rmtree = module.shutil.rmtree
-    forward_count = 0
-
-    def fail_publish(source, destination):
-        nonlocal forward_count
-        if Path(source).parent.name.startswith(".audit.stage-"):
-            forward_count += 1
-            if forward_count == 1:
-                raise OSError("original publication failure")
-        return real_replace(source, destination)
-
-    def fail_stage_cleanup(path):
-        if Path(path).name.startswith(".audit.stage-"):
-            raise OSError("secondary cleanup failure")
-        return real_rmtree(path)
-
-    monkeypatch.setattr(module.os, "replace", fail_publish)
-    monkeypatch.setattr(module.shutil, "rmtree", fail_stage_cleanup)
-    with pytest.raises(ExceptionGroup) as caught:
-        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    rendered = repr(caught.value)
-    assert "publication and cleanup failed" in str(caught.value)
-    assert "original publication failure" in rendered
-    assert "secondary cleanup failure" in rendered
-    assert list(tmp_path.glob(".audit.stage-*"))
-    assert not list(tmp_path.glob(".audit.backup-*"))
-
-
-def test_concurrent_publishers_leave_one_coherent_generation(tmp_path: Path):
-    draft_a = tmp_path / "a.yaml"
-    draft_b = tmp_path / "b.yaml"
-    output = tmp_path / "audit"
-    config_a = complete_draft(tmp_path / "a-data")
-    config_b = complete_draft(tmp_path / "b-data")
-    write_yaml(draft_a, config_a)
-    write_yaml(draft_b, config_b)
-    command = lambda draft: [
-        sys.executable, str(CLI), "assess-feasibility", "--input", str(draft),
-        "--output", str(output),
-    ]
-
-    first = subprocess.Popen(command(draft_a), cwd=tmp_path)
-    second = subprocess.Popen(command(draft_b), cwd=tmp_path)
-    returncodes = [first.wait(), second.wait()]
-
-    assert returncodes == [0, 0]
-    assert_coherent_artifact_set(output)
-    assert {path.name for path in output.iterdir()} == ARTIFACTS
-    assert not list(tmp_path.glob(".audit.stage-*"))
-    assert not list(tmp_path.glob(".audit.backup-*"))
-
-
-def test_unexpected_file_racing_publication_is_preserved_and_rejected(tmp_path: Path, monkeypatch):
-    module = load_cli_module()
-    output = tmp_path / "audit"
-    output.mkdir()
-    sentinel = output / "raced.txt"
-    real_validate = module._validate_output
-
-    def race_after_validation(path):
-        real_validate(path)
-        sentinel.write_text("preserve", encoding="utf-8")
-
-    monkeypatch.setattr(module, "_validate_output", race_after_validation)
-    with pytest.raises(ValueError, match="unexpected"):
-        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
-
-    assert sentinel.read_text(encoding="utf-8") == "preserve"
-    assert {path.name for path in output.iterdir()} == {"raced.txt"}
+    import threading
+    errors=[]
+    def publish(tag):
+        try: module._publish_artifacts(output, {name: {tag: name} for name in ARTIFACTS})
+        except Exception as e: errors.append(e)
+    threads=[threading.Thread(target=publish,args=(tag,)) for tag in ("a","b")]
+    [t.start() for t in threads]; [t.join() for t in threads]
+    assert not errors
+    module.load_artifact_set(output)
+    assert output.is_symlink()
 
 
 def test_minimal_missing_draft_writes_all_blocked_artifacts_without_results(tmp_path: Path):
@@ -439,6 +266,29 @@ def test_minimal_missing_draft_writes_all_blocked_artifacts_without_results(tmp_
     assert not (tmp_path / "Results").exists()
 
 
+def test_invalid_feature_values_are_counted_and_excluded_from_availability(tmp_path: Path):
+    config = complete_draft(tmp_path)
+    vix = Path(config["data_sources"]["VIX"]["path"])
+    frame = pd.read_csv(vix)
+    frame.loc[frame["date"] == "2022-01-03", "value"] = None
+    frame.to_csv(vix, index=False)
+    config["data_sources"]["VIX"]["maximum_staleness_days"] = 0
+    config["data_sources"]["VIX"]["maximum_consecutive_gap_sessions"] = 0
+    draft = tmp_path / "draft.yaml"
+    output = tmp_path / "audit"
+    write_yaml(draft, config)
+
+    result = run_cli(draft, output, tmp_path)
+
+    assert result.returncode == 2
+    coverage = load(output, "data_coverage_audit.json")
+    assert coverage["sources"]["VIX"]["invalid_value_count"] == 1
+    inventory = load(output, "window_inventory.json")
+    assert any(
+        "UNAVAILABLE_SESSION_GAP:VIX" in reason
+        for window in inventory["windows"]
+        for reason in window["reasons"]
+    )
 def test_complete_four_source_data_passes_at_least_three_windows(tmp_path: Path):
     draft = tmp_path / "draft.yaml"
     output = tmp_path / "audit"
