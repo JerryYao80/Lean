@@ -295,7 +295,7 @@ def _remove_stage(root_fd: int, stage_name: str) -> None:
     try:
         os.fchmod(gen_fd, 0o755)
         for name in list(os.listdir(gen_fd)):
-            fd = os.open(name, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=gen_fd)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=gen_fd)
             try:
                 os.fchmod(fd, 0o644)
             finally:

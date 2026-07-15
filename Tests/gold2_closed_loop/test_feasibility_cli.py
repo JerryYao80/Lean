@@ -441,6 +441,42 @@ def test_pointer_swap_failure_preserves_old_generation(tmp_path: Path, monkeypat
     assert not list((tmp_path / ".audit.generations").glob(".stage-*"))
 
 
+def test_stage_cleanup_opens_finalized_artifacts_read_only(tmp_path: Path, monkeypatch):
+    module = load_cli_module()
+    root = tmp_path / "root"
+    root.mkdir()
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    stage_name = ".stage-test"
+    os.mkdir(stage_name, mode=0o755, dir_fd=root_fd)
+    stage_fd = os.open(
+        stage_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=root_fd,
+    )
+    artifact_name = next(iter(ARTIFACTS))
+    artifact_fd = os.open(
+        artifact_name,
+        os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
+        0o444,
+        dir_fd=stage_fd,
+    )
+    os.close(artifact_fd)
+    os.close(stage_fd)
+    real_open = module.os.open
+
+    def reject_write_open(path, flags, *args, **kwargs):
+        if kwargs.get("dir_fd") is not None and Path(path).name == artifact_name:
+            assert not flags & os.O_WRONLY
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", reject_write_open)
+    try:
+        module._remove_stage(root_fd, stage_name)
+    finally:
+        os.close(root_fd)
+    assert not (root / stage_name).exists()
+
+
 def test_failure_before_generation_rename_preserves_old_pointer(tmp_path: Path, monkeypatch):
     module = load_cli_module()
     output = tmp_path / "audit"
