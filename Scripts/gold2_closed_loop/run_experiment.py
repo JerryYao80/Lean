@@ -196,6 +196,33 @@ def _verify_published_set(output: Path, expected_hash: str, generation_id: str) 
         raise OSError("published artifact generation verification failed")
 
 
+def _cleanup_transaction_dirs(
+    stage: Path,
+    backup: Path,
+    parent: Path,
+    *,
+    retain_backup: bool,
+) -> None:
+    """Remove transaction debris durably; failed rollback retains its backup evidence."""
+    errors: list[Exception] = []
+    for path, retain in ((stage, False), (backup, retain_backup)):
+        if not retain:
+            try:
+                shutil.rmtree(path)
+            except Exception as error:
+                errors.append(error)
+        try:
+            _fsync_directory(parent)
+        except Exception as error:
+            errors.append(error)
+    try:
+        _fsync_directory(parent)
+    except Exception as error:
+        errors.append(error)
+    if errors:
+        raise ExceptionGroup("publication cleanup failed", errors)
+
+
 def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> None:
     with _publication_lock(output):
         _validate_output(output)
@@ -209,6 +236,8 @@ def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> No
         stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=output.parent))
         backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=output.parent))
         replaced: list[str] = []
+        publication_error: Exception | None = None
+        rollback_errors: list[Exception] = []
         try:
             for name in ARTIFACT_NAMES:
                 with (stage / name).open("wb") as stream:
@@ -236,21 +265,48 @@ def _publish_artifacts(output: Path, artifacts: dict[str, dict[str, Any]]) -> No
             _fsync_directory(output)
             _verify_published_set(output, generation_hash, generation_id)
             _fsync_directory(output.parent)
-        except Exception:
+        except Exception as error:
+            publication_error = error
             for name in reversed(replaced):
                 saved = backup / name
                 destination = output / name
-                if saved.exists():
-                    os.replace(saved, destination)
-                elif destination.exists():
-                    destination.unlink()
-            _fsync_directory(output)
-            _fsync_directory(output.parent)
-            raise
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
-            shutil.rmtree(backup, ignore_errors=True)
-            _fsync_directory(output.parent)
+                try:
+                    if saved.exists():
+                        os.replace(saved, destination)
+                    elif destination.exists():
+                        destination.unlink()
+                except Exception as rollback_error:
+                    rollback_errors.append(rollback_error)
+            for directory in (output, output.parent):
+                try:
+                    _fsync_directory(directory)
+                except Exception as rollback_error:
+                    rollback_errors.append(rollback_error)
+
+        cleanup_error: Exception | None = None
+        try:
+            _cleanup_transaction_dirs(
+                stage,
+                backup,
+                output.parent,
+                retain_backup=bool(rollback_errors),
+            )
+        except Exception as error:
+            cleanup_error = error
+
+        failure: Exception | None = publication_error
+        if rollback_errors:
+            failure = ExceptionGroup(
+                "publication rollback failed",
+                [publication_error, *rollback_errors] if publication_error else rollback_errors,
+            )
+        if cleanup_error:
+            failure = ExceptionGroup(
+                "publication and cleanup failed" if failure else "publication cleanup failed",
+                [failure, cleanup_error] if failure else [cleanup_error],
+            )
+        if failure:
+            raise failure
 
 
 def _require_mapping(value: Any, label: str) -> dict[str, Any]:
