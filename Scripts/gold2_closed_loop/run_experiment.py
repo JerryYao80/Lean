@@ -196,6 +196,23 @@ def _verify_published_set(output: Path, expected_hash: str, generation_id: str) 
         raise OSError("published artifact generation verification failed")
 
 
+def _write_cleanup_failure_marker(
+    parent: Path, output_name: str, errors: list[Exception]
+) -> None:
+    descriptor, marker_name = tempfile.mkstemp(
+        prefix=f".{output_name}.cleanup-failed-", dir=parent
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as marker:
+            marker.write("\n".join(repr(error) for error in errors) + "\n")
+            marker.flush()
+            os.fsync(marker.fileno())
+        _fsync_directory(parent)
+    except Exception:
+        # The marker path itself remains as best-effort forensic evidence.
+        raise
+
+
 def _cleanup_transaction_dirs(
     stage: Path,
     backup: Path,
@@ -220,6 +237,11 @@ def _cleanup_transaction_dirs(
     except Exception as error:
         errors.append(error)
     if errors:
+        output_name = stage.name[1:].split(".stage-", 1)[0]
+        try:
+            _write_cleanup_failure_marker(parent, output_name, errors)
+        except Exception as marker_error:
+            errors.append(marker_error)
         raise ExceptionGroup("publication cleanup failed", errors)
 
 

@@ -310,6 +310,41 @@ def test_cleanup_failure_is_publication_failure_and_retains_forensic_debris(
     assert_coherent_artifact_set(output)
 
 
+def test_cleanup_parent_fsync_failure_retains_forensic_marker_and_attempts_both_removals(
+    tmp_path: Path, monkeypatch
+):
+    module = load_cli_module()
+    output = tmp_path / "audit"
+    real_fsync = module._fsync_directory
+    real_rmtree = module.shutil.rmtree
+    cleanup_started = False
+    fsync_failed = False
+    removals: list[str] = []
+
+    def track_removal(path):
+        nonlocal cleanup_started
+        cleanup_started = True
+        removals.append(Path(path).name)
+        return real_rmtree(path)
+
+    def fail_cleanup_parent_fsync(path):
+        nonlocal fsync_failed
+        if cleanup_started and Path(path) == output.parent and not fsync_failed:
+            fsync_failed = True
+            raise OSError("injected cleanup parent fsync failure")
+        return real_fsync(path)
+
+    monkeypatch.setattr(module.shutil, "rmtree", track_removal)
+    monkeypatch.setattr(module, "_fsync_directory", fail_cleanup_parent_fsync)
+    with pytest.raises(BaseException, match="cleanup"):
+        module._publish_artifacts(output, {name: {"new": name} for name in ARTIFACTS})
+
+    assert any(name.startswith(".audit.stage-") for name in removals)
+    assert any(name.startswith(".audit.backup-") for name in removals)
+    markers = list(tmp_path.glob(".audit.cleanup-failed-*"))
+    assert markers
+    assert "injected cleanup parent fsync failure" in markers[0].read_text(encoding="utf-8")
+    assert_coherent_artifact_set(output)
 def test_original_publication_and_cleanup_failures_are_both_reported(
     tmp_path: Path, monkeypatch
 ):
