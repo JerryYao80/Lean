@@ -359,26 +359,29 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
 
         private void Emit(QCAlgorithm algorithm, string eventType, object payload, DateTime? eventTimeUtc = null)
         {
-            long seq;
+            // Sequence allocation AND the sink write happen inside the SAME critical
+            // section so write order always matches sequence order. Holding _traceLock
+            // across Write guarantees no thread can write seq=N+1 before seq=N lands,
+            // which would otherwise make the strict sink reject the in-order sequence
+            // (it expects lastSequence+1) and spuriously raise FAILED_EVIDENCE_CAPTURE
+            // under concurrent emission. The sink's own internal _lock is a distinct
+            // object, so there is no re-entrancy deadlock. Any I/O failure propagates.
             lock (_traceLock)
             {
-                seq = ++_sequence;
+                var seq = ++_sequence;
+                var ev = new FormalTraceEvent(
+                    schemaVersion: "1",
+                    sequence: seq,
+                    eventType: eventType,
+                    experimentId: _experimentId,
+                    windowId: _windowId,
+                    stageId: _stageId,
+                    runId: _runId,
+                    candidateId: _candidateId,
+                    eventTimeUtc: eventTimeUtc ?? GetUtcTime(algorithm),
+                    payload: payload);
+                _sink.Write(ev);
             }
-            var ev = new FormalTraceEvent(
-                schemaVersion: "1",
-                sequence: seq,
-                eventType: eventType,
-                experimentId: _experimentId,
-                windowId: _windowId,
-                stageId: _stageId,
-                runId: _runId,
-                candidateId: _candidateId,
-                eventTimeUtc: eventTimeUtc ?? GetUtcTime(algorithm),
-                payload: payload);
-            // The sink serializes writes internally; the sequence was allocated under
-            // _traceLock so gaps cannot occur even if two threads emit concurrently.
-            // Any I/O or reconciliation failure propagates (FAILED_EVIDENCE_CAPTURE).
-            _sink.Write(ev);
         }
 
         private static DateTime GetUtcTime(QCAlgorithm algorithm)
