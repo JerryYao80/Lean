@@ -110,13 +110,19 @@ def build_run_config(
     algorithm-id           : ``run_id`` so the packet is ``<run_dir>/<run_id>.json``
                              (LEAN honors this config key — see JobQueue.cs:153
                              and BacktestingResultHandler.cs:314)
-    fallback-download-enabled : False
-    fallback-gbm-enabled      : False
-    influxdb-enabled         : False
+    influxdb-enabled         : False (TOP-LEVEL config key; read by
+                             InfluxDbResultExporter via Config.Get)
+    fallback-download-enabled / fallback-gbm-enabled : "false" injected into
+                             ``parameters`` (NOT top-level). Read from
+                             parameters.Job.Parameters by
+                             FallbackTushareHistoryProvider.cs:66-67, default
+                             True — placing them at top-level leaves the
+                             fallbacks silently ACTIVE (silent false proof).
+                             Any stale top-level copies are removed.
     parameters             : merged base parameters + caller parameters +
                              ``formal-trace-path`` (REQUIRED) + identity params
                              (experiment/window/stage/run/candidate id) +
-                             start-date/end-date
+                             start-date/end-date + forced fallback flags
     """
     config = copy.deepcopy(base)
     config["environment"] = "backtesting"
@@ -143,9 +149,22 @@ def build_run_config(
         config["algorithm-id"] = run_id
 
     # Disable every side-effect fallback the proof must not depend on.
-    config["fallback-download-enabled"] = False
-    config["fallback-gbm-enabled"] = False
+    # influxdb-enabled is a TOP-LEVEL config key read by InfluxDbResultExporter
+    # (Engine/Results/InfluxDbResultExporter.cs:108 via Config.Get), so it is
+    # forced at the top level here.
     config["influxdb-enabled"] = False
+
+    # CRITICAL: fallback-download-enabled / fallback-gbm-enabled are NOT
+    # top-level config keys. FallbackTushareHistoryProvider.Initialize
+    # (Engine/HistoricalData/FallbackTushareHistoryProvider.cs:66-67) reads
+    # them from parameters.Job.Parameters (the algorithm `parameters` dict),
+    # defaulting to TRUE when absent. They MUST be injected into the
+    # `parameters` dict (as strings, since Job.Parameters is
+    # Dictionary<string,string>) or the fallbacks stay silently ACTIVE and a
+    # missing symbol triggers a live download / synthetic GBM data — a silent
+    # false proof. The stale top-level copies are removed below.
+    config.pop("fallback-download-enabled", None)
+    config.pop("fallback-gbm-enabled", None)
 
     # Merge parameters: base -> caller -> required/identity injections.
     merged: dict[str, Any] = {}
@@ -153,6 +172,11 @@ def build_run_config(
     if isinstance(base_params, dict):
         merged.update(base_params)
     merged.update(parameters)
+
+    # Force the fallback flags into the parameters dict (string form, as
+    # serialized into Dictionary<string,string> by JobQueue.cs:134-137).
+    merged["fallback-download-enabled"] = "false"
+    merged["fallback-gbm-enabled"] = "false"
 
     if start_date is not None:
         merged["start-date"] = start_date

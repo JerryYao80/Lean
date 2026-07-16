@@ -7,6 +7,7 @@ subprocess.run).
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 from dataclasses import FrozenInstanceError
@@ -64,9 +65,20 @@ def test_config_disables_fallbacks_and_sets_absolute_run_dir(tmp_path):
         BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {}, run_id="run-001"
     )
     assert config["results-destination-folder"] == str((tmp_path / "run").resolve())
-    assert config["fallback-download-enabled"] is False
-    assert config["fallback-gbm-enabled"] is False
+    # influxdb-enabled is a top-level config key (InfluxDbResultExporter reads
+    # it via Config.Get), so it is forced False at the top level.
     assert config["influxdb-enabled"] is False
+    # CRITICAL: fallback-download-enabled / fallback-gbm-enabled are read from
+    # parameters.Job.Parameters (FallbackTushareHistoryProvider.cs:66-67), NOT
+    # top-level config. They MUST live in the `parameters` dict as strings
+    # (Job.Parameters is Dictionary<string,string>), or the fallbacks stay
+    # silently ACTIVE (default true) and a missing symbol triggers a live
+    # download / synthetic GBM data — a silent false proof. There must be NO
+    # top-level copy (it would be inert dead weight invisible to the engine).
+    assert "fallback-download-enabled" not in config
+    assert "fallback-gbm-enabled" not in config
+    assert config["parameters"]["fallback-download-enabled"] == "false"
+    assert config["parameters"]["fallback-gbm-enabled"] == "false"
 
 
 def test_exact_packet_required(tmp_path):
@@ -180,9 +192,22 @@ def test_forced_fields_override_base(tmp_path):
     assert config["environment"] == "backtesting"
     assert config["algorithm-language"] == "CSharp"
     assert config["algorithm-type-name"] == "Gold2ClosedLoopProofStrategy"
-    assert config["fallback-download-enabled"] is False
-    assert config["fallback-gbm-enabled"] is False
     assert config["influxdb-enabled"] is False
+    # Stale top-level fallback keys (even if base set them true) are removed;
+    # the engine never reads top-level fallback keys, so leaving them would be
+    # inert dead weight. The live enforcement lives in `parameters` as "false".
+    assert "fallback-download-enabled" not in config
+    assert "fallback-gbm-enabled" not in config
+    assert config["parameters"]["fallback-download-enabled"] == "false"
+    assert config["parameters"]["fallback-gbm-enabled"] == "false"
+    # A base that tried to enable fallbacks via the parameters dict is also
+    # overridden by the runner's forced "false".
+    base2 = copy.deepcopy(BASE)
+    base2.setdefault("parameters", {})["fallback-download-enabled"] = "true"
+    config2 = build_run_config(
+        base2, tmp_path / "run2", "Gold2ClosedLoopProofStrategy", {}, run_id="r2"
+    )
+    assert config2["parameters"]["fallback-download-enabled"] == "false"
 
 
 def test_results_destination_folder_absolute_and_resolved(tmp_path):
