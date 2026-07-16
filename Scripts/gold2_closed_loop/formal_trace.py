@@ -90,7 +90,7 @@ class FormalEvent:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "FormalEvent":
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         for field_name in (
             "schema_version",
             "sequence",
