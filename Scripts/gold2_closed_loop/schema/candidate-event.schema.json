@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gold2.example/Scripts/gold2_closed_loop/schema/candidate-event.schema.json",
+  "title": "Gold2 closed-loop proof candidate event record",
+  "description": "One append-only candidate event. Mirrors design section 10's candidate-event JSONL contract. The event_sha256 is computed by EventJournal over the canonical-JSON form of the record with the event_sha256 field itself excluded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "sequence",
+    "candidate_id",
+    "event_type",
+    "execution_status",
+    "partition",
+    "parameters",
+    "metrics",
+    "attempted_at_utc",
+    "previous_event_sha256",
+    "event_sha256"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "REGISTERED",
+        "SUCCEEDED",
+        "FAILED_STRATEGY",
+        "FAILED_INFRASTRUCTURE",
+        "FAILED_EVIDENCE_CAPTURE",
+        "TIMED_OUT",
+        "NO_TRADES",
+        "PRUNED",
+        "DUPLICATE",
+        "DOMINATED",
+        "REJECTED",
+        "INVALID"
+      ]
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "SUCCEEDED",
+        "FAILED_STRATEGY",
+        "FAILED_INFRASTRUCTURE",
+        "FAILED_EVIDENCE_CAPTURE",
+        "TIMED_OUT",
+        "NO_TRADES"
+      ]
+    },
+    "partition": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "metrics": {
+      "type": ["object", "null"]
+    },
+    "attempted_at_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "previous_event_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "event_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
