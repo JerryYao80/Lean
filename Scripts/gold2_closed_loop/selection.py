@@ -19,6 +19,7 @@ No production code is modified.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from Scripts.gold2_closed_loop.adapters.base import Attempt
@@ -33,6 +34,76 @@ _METRIC_DIRECTION: dict[str, int] = {
     "net_profit": +1,
     "mdd": -1,
 }
+
+# Metric keys the gates / ranking / dominance logic actually read. A
+# runner-returned result with a non-finite value (NaN / +Inf / -Inf) in
+# ANY of these is unusable evidence — the result is INVALID, not a gate
+# failure (see ``_has_non_finite_metrics`` and ``classify_outcome``).
+# ``subwindow_sharpes`` is a list; its entries are scanned recursively.
+_FINITE_CHECK_METRICS: tuple[str, ...] = (
+    "sharpe",
+    "net_profit",
+    "mdd",
+    "trades",
+    "dsr",
+    "subwindow_sharpes",
+)
+
+
+def _has_non_finite_metrics(attempt: Attempt) -> bool:
+    """Return True if any gate/ranking metric is NaN or ±Infinity.
+
+    Scans the metric keys the gates and ranking actually read
+    (``sharpe`` / ``net_profit`` / ``mdd`` / ``trades`` / ``dsr`` /
+    ``subwindow_sharpes``). For ``subwindow_sharpes`` (a list), each
+    entry is scanned; a non-finite value buried in the list is still
+    INVALID — a single NaN subwindow sharpe makes the spread
+    ``max - min`` NaN, poisoning the stability gate.
+
+    Returns ``True`` if ANY required metric value is non-finite. A
+    MISSING key (``None``) is NOT non-finite — absence is the gate's
+    problem (PRUNED for missing trades / mdd, defaulted for dsr), not
+    INVALID. Only a PRESENT numeric value that fails ``math.isfinite``
+    is INVALID.
+    """
+    metrics = attempt.metrics or {}
+    for key in _FINITE_CHECK_METRICS:
+        raw = metrics.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, list):
+            # One level of recursion: subwindow_sharpes is a flat list of
+            # floats. A nested list here would be a schema violation
+            # elsewhere; we still scan one level deep for robustness.
+            for item in raw:
+                if _is_non_finite_scalar(item):
+                    return True
+            continue
+        if _is_non_finite_scalar(raw):
+            return True
+    return False
+
+
+def _is_non_finite_scalar(value: Any) -> bool:
+    """True iff ``value`` is a non-integer, non-bool number that is NaN
+    or ±Infinity.
+
+    ``math.isfinite`` rejects NaN / ±Infinity for floats but raises
+    ``TypeError`` on non-numbers (str / None / dict). Bools are ints in
+    python (``isinstance(True, int)`` is True) and are finite, so we
+    accept them. Strings, dicts, and other non-numerics are NOT
+    non-finite (they are a different kind of bad data; the gate /
+    schema handles them).
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return False
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    # A string / None / dict / etc. is not a non-finite NUMBER. It may
+    # be wrong, but it is not NaN/Inf; leave that to the gates / schema.
+    return False
 
 
 def _metric_value(attempt: Attempt, metric: str) -> float:
@@ -200,19 +271,41 @@ def classify_outcome(
 
     Helper for the optimizer: given a SUCCEEDED attempt and the list of
     ALREADY-accepted passing attempts, decide whether this one is
-    SUCCEEDED / DOMINATED / DUPLICATE / PRUNED / REJECTED.
+    INVALID / DUPLICATE / SUCCEEDED / DOMINATED / PRUNED / REJECTED.
 
-    Order: dedup (DUPLICATE) FIRST, then gates (PRUNED/REJECTED), then
-    dominance (DOMINATED), else SUCCEEDED. Dedup precedes gates so a
-    candidate whose parameters are byte-identical to an already-accepted
-    one is recorded DUPLICATE regardless of whether its (re-run) metrics
-    happen to pass the gates — the candidate space was already explored.
+    Order: INVALID FIRST (non-finite metrics), then DUPLICATE (canonical
+    hash of params), then gates (PRUNED/REJECTED), then dominance
+    (DOMINATED), else SUCCEEDED. INVALID precedes DUPLICATE so a result
+    whose metrics are non-finite is recorded INVALID regardless of
+    whether its parameters duplicate an earlier accepted candidate —
+    the result is unusable evidence either way, and recording it INVALID
+    (not DUPLICATE) makes the unusable-result outcome visible in the
+    journal. An INVALID result is never re-run as a candidate: it
+    consumed budget and the parameters are still hashed into the dedup
+    set by the optimizer's loop.
+
+    INVALID reason: a runner-returned result with NaN or ±Infinity in
+    any gate/ranking metric (sharpe / net_profit / mdd / trades / dsr /
+    subwindow_sharpes entries) is unusable — the gates and ranking
+    cannot compare a NaN sharpe. This is NOT a gate failure (PRUNED) —
+    the gates never ran. The execution_status stays SUCCEEDED (the
+    runner DID return a result); event_type is INVALID (the result is
+    unusable). Matches the plan's "invalid attempt consumes budget"
+    requirement (plan Step 3, line 542).
 
     Gates failure reason mapping:
       min_trades / max_mdd / min_dsr / parameter-bounds  -> PRUNED
       subwindow_stability                                -> REJECTED
     """
-    # Duplicate check against already-accepted FIRST.
+    # INVALID FIRST: non-finite metrics are unusable evidence, not a
+    # gate failure. The runner returned a result, but the result has
+    # NaN/±Infinity in a metric the gates or ranking would read; we
+    # cannot compare or rank it. This takes precedence over DUPLICATE
+    # so a non-finite result is recorded INVALID even if its params
+    # match an earlier accepted candidate.
+    if _has_non_finite_metrics(attempt):
+        return "INVALID"
+    # Duplicate check against already-accepted.
     new_hash = canonical_hash(attempt.parameters)
     for accepted in passing_attempts:
         if canonical_hash(accepted.parameters) == new_hash:

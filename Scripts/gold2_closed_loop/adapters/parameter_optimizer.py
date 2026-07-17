@@ -247,12 +247,34 @@ class ParameterOptimizerAdapter(Adapter):
                     exec_status = "SUCCEEDED"
                 elif event_type == "REJECTED":
                     exec_status = "SUCCEEDED"
+                elif event_type == "INVALID":
+                    # The runner returned a result, but the metrics are
+                    # non-finite (NaN/±Infinity). The execution itself
+                    # succeeded (the runner ran); the result is unusable.
+                    # Follows the SAME convention as PRUNED/DOMINATED:
+                    # execution_status reflects whether the runner ran
+                    # (SUCCEEDED); event_type carries the classification
+                    # (INVALID). See plan Step 3 "invalid attempt
+                    # consumes budget".
+                    exec_status = "SUCCEEDED"
                 else:
                     exec_status = "SUCCEEDED"
             else:
                 # Runner failure: event_type already set by _invoke;
                 # execution_status matches the failure event_type.
                 exec_status = event_type
+            # INVALID attempts have non-finite metrics. The candidate-event
+            # schema (§13 finite-value check) rejects NaN/±Infinity in
+            # ``metrics``, so we cannot persist the raw non-finite dict.
+            # Persist metrics=None for INVALID: the result is unusable, so
+            # storing the offending values would (a) fail schema validation
+            # and (b) mislead downstream reviewers into ranking a NaN
+            # sharpe. The classification (event_type=INVALID) is the
+            # signal; the raw non-finite metrics are discarded.
+            if event_type == "INVALID":
+                recorded_metrics: dict[str, Any] | None = None
+            else:
+                recorded_metrics = metrics
             attempt = Attempt(
                 candidate_id=candidate_id,
                 parameters=parameters,
@@ -268,7 +290,7 @@ class ParameterOptimizerAdapter(Adapter):
                 execution_status=exec_status,
                 partition=partition,
                 parameters=parameters,
-                metrics=metrics,
+                metrics=recorded_metrics,
             )
             attempts.append(attempt)
             if event_type == "SUCCEEDED":

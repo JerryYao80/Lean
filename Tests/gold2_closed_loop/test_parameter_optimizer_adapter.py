@@ -485,3 +485,115 @@ def test_select_none_when_all_fail_gates():
     )
     gates = {"min_trades": 10, "max_mdd": 0.5, "min_dsr": 0.0}
     assert select([a], gates=gates) is None
+
+
+# --- INVALID: non-finite metrics (Task 10 spec gap) -----------------
+#
+# Plan Step 3 (line 542) lists "invalid attempt consumes budget" as one
+# of the 10 outcome types. A runner-returned result with NaN/±Infinity
+# in any gate/ranking metric (sharpe / net_profit / mdd / trades / dsr /
+# subwindow_sharpes) is unusable evidence, NOT a gate failure.
+# classify_outcome checks _has_non_finite_metrics FIRST (before
+# DUPLICATE / gates / dominance) and records INVALID, consuming budget,
+# never selected.
+
+
+def test_non_finite_metrics_classified_invalid(fake_runner, tmp_path):
+    """A NaN sharpe -> INVALID (not PRUNED / SUCCEEDED). Consumes budget,
+    is not selected, metrics are not stored (the schema rejects non-finite
+    numeric values so the journal records metrics=None for INVALID)."""
+    fake_runner.results = [
+        {"sharpe": float("nan"), "net_profit": 0.1, "mdd": 0.08, "trades": 5},
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert result.attempted_trial_count == 1
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+    # Convention: execution_status reflects whether the runner ran
+    # (SUCCEEDED — the runner returned metrics); event_type carries the
+    # classification (INVALID — the metrics are unusable).
+    assert [a.status for a in result.attempts] == ["SUCCEEDED"]
+    assert result.selected_candidate is None
+    assert result.aliased_to_g0 is False
+    # The journal record must be schema-valid; non-finite metrics cannot
+    # be persisted (the §13 finite-value check rejects them), so the
+    # recorded metrics for an INVALID attempt are None.
+    records = EventJournal(tmp_path / "events.jsonl").read_all()
+    term = [r for r in records if r["event_type"] != "REGISTERED"]
+    assert len(term) == 1
+    assert term[0]["event_type"] == "INVALID"
+    assert term[0]["execution_status"] == "SUCCEEDED"
+    assert term[0]["metrics"] is None
+
+
+def test_infinity_metrics_classified_invalid(fake_runner, tmp_path):
+    """A +Inf sharpe -> INVALID (a gate-buster infinite sharpe is unusable
+    evidence, not a SUCCEEDED outlier)."""
+    fake_runner.results = [
+        {"sharpe": float("inf"), "net_profit": 0.1, "mdd": 0.08, "trades": 5},
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert result.attempted_trial_count == 1
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+    assert result.selected_candidate is None
+
+
+def test_non_finite_in_subwindow_sharpes_classified_invalid(fake_runner, tmp_path):
+    """A NaN buried in ``subwindow_sharpes`` -> INVALID. The non-finite
+    scan must recurse into list values, not just top-level scalars."""
+    fake_runner.results = [
+        {
+            "sharpe": 1.0,
+            "net_profit": 0.1,
+            "mdd": 0.08,
+            "trades": 5,
+            "subwindow_sharpes": [1.0, float("nan"), 0.9],
+        },
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+    assert result.selected_candidate is None
+
+
+def test_invalid_takes_precedence_over_duplicate(fake_runner, tmp_path):
+    """A candidate with non-finite metrics AND identical params to an
+    earlier accepted candidate -> INVALID (not DUPLICATE). Verifies the
+    classify_outcome order: INVALID BEFORE DUPLICATE."""
+    # A choice space with two identical values forces a duplicate
+    # parameter set regardless of shuffle order. seed 17 -> order [0,1]
+    # for a 2-element grid, so both attempts use the same parameters.
+    fake_runner.results = [
+        {"sharpe": 1.0, "net_profit": 0.1, "mdd": 0.05, "trades": 50},  # SUCCEEDED
+        {"sharpe": float("nan"), "net_profit": 0.1, "mdd": 0.05, "trades": 50},  # INVALID
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 2, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "choice", "values": [True, True]}}, "W1/train")
+    assert result.attempted_trial_count == 2
+    # The second attempt has the SAME params as the accepted first, BUT
+    # its metrics are non-finite, so it is INVALID — not DUPLICATE.
+    assert [a.event_type for a in result.attempts] == ["SUCCEEDED", "INVALID"]
+    assert result.selected_candidate is not None
+    assert result.selected_candidate.parameters["flag"] is True
+
+
+def test_valid_finite_metrics_still_classify_normally(fake_runner, tmp_path):
+    """Regression guard: finite metrics still classify SUCCEEDED / PRUNED
+    / DOMINATED / DUPLICATE / REJECTED — the INVALID branch did not
+    swallow the normal path."""
+    fake_runner.results = [
+        {"sharpe": 1.5, "net_profit": 0.2, "mdd": 0.05, "trades": 50},  # SUCCEEDED
+        {"sharpe": 2.0, "net_profit": 0.3, "mdd": 0.04, "trades": 1},  # PRUNED (trades)
+    ]
+    gates = {"min_trades": 10, "max_mdd": 0.5, "min_dsr": 0.0}
+    result = ParameterOptimizerAdapter(
+        fake_runner, 2, 17, tmp_path / "events.jsonl", gates=gates
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["SUCCEEDED", "PRUNED"]
+    assert result.selected_candidate is not None
+    assert result.selected_candidate.parameters["flag"] is False
