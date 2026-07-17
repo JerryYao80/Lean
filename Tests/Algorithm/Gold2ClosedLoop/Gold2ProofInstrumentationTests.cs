@@ -133,13 +133,12 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             decorator.Execute(null, targets);
 
             // The sink buffers writes (AutoFlush=false); FlushAndReconcile flushes them to disk
-            // so File.ReadAllLines can read the JSONL back. Reconciliation passes (DECISION +
-            // ORDER_INTENT for the configured new order id=42 is a valid prefix).
+            // so File.ReadAllLines can read the JSONL back. Reconciliation passes (DECISION
+            // only is a valid prefix; ORDER_INTENT now fires from OnOrderEvent).
             sink.FlushAndReconcile();
             var lines = File.ReadAllLines(path);
-            // DECISION is emitted before delegating; ORDER_INTENT is emitted after delegating
-            // (the FakeDiscoveringDecorator was configured with one new order id=42). So we
-            // expect 2 lines. We assert DECISION is the FIRST line.
+            // DECISION is emitted before delegating; ORDER_INTENT is now emitted from
+            // OnOrderEvent at first sighting, so after Execute alone we expect 1 line.
             Assert.GreaterOrEqual(lines.Length, 1, "expected at least DECISION event");
             var ev = JObject.Parse(lines[0]);
             Assert.AreEqual("1", ev["schema_version"]?.ToString());
@@ -158,12 +157,15 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
         }
 
         /// <summary>
-        /// After delegating, the decorator MUST emit an ORDER_INTENT event for each
-        /// newly created order, capturing the native <c>orderId</c> so the reconciler
-        /// can correlate FILL to ORDER_INTENT.
+        /// After delegating (which emits only DECISION), the decorator MUST emit an
+        /// ORDER_INTENT event for each newly-created order the FIRST time it sights the
+        /// order id - on the <c>Submitted</c> order event that always precedes the
+        /// <c>Filled</c> event. This test drives <see cref="TracingExecutionModel.Execute"/>
+        /// then a synthetic <c>Submitted</c> event to emit the intent, capturing the native
+        /// <c>orderId</c> so the reconciler can correlate FILL to ORDER_INTENT.
         /// </summary>
         [Test]
-        public void DecoratorEmitsOrderIntentAfterDelegating()
+        public void DecoratorEmitsOrderIntentAtFirstSighting()
         {
             var path = NewTracePath();
             using var sink = new FormalJsonlTraceSink(path);
@@ -172,13 +174,24 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             var decorator = new FakeDiscoveringDecorator(fake, sink,
                 new[] { new OrderIntentRecord(42, symbol, 200m) });
 
+            // Execute emits DECISION only (ORDER_INTENT now fires from OnOrderEvent).
             decorator.Execute(null, new IPortfolioTarget[] { new PortfolioTarget(symbol, 200m) });
+
+            // The engine fires a Submitted event before the Filled event; the decorator
+            // emits ORDER_INTENT on this first sighting of orderId=42.
+            decorator.OnOrderEvent(null, new OrderEvent(
+                orderId: 42, symbol: symbol,
+                utcTime: new DateTime(2026, 7, 14, 9, 30, 0, DateTimeKind.Utc),
+                status: OrderStatus.Submitted, direction: OrderDirection.Buy,
+                fillPrice: 0m, fillQuantity: 0m,
+                orderFee: new OrderFee(new CashAmount(0m, Currencies.CNY))));
 
             // Flush buffered writes to disk so File.ReadAllLines can read them back.
             sink.FlushAndReconcile();
             var lines = File.ReadAllLines(path);
             // sequence 1 = DECISION, sequence 2 = ORDER_INTENT
-            Assert.AreEqual(2, lines.Length);
+            Assert.AreEqual(2, lines.Length,
+                "expected DECISION + ORDER_INTENT, got:\n" + string.Join("\n", lines));
             var orderIntent = JObject.Parse(lines[1]);
             Assert.AreEqual(2, (long)orderIntent["sequence"]);
             Assert.AreEqual("ORDER_INTENT", orderIntent["event_type"].ToString());
@@ -186,6 +199,8 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             Assert.IsNotNull(payload);
             Assert.AreEqual(42, (long)payload["orderId"],
                 "ORDER_INTENT must carry the native orderId for reconciler correlation");
+            Assert.AreEqual(200m, (decimal)payload["quantity"],
+                "ORDER_INTENT must carry the LEAN-native intended quantity");
         }
 
         /// <summary>
@@ -205,8 +220,19 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
                 new[] { new OrderIntentRecord(7, symbol, 100m) },
                 new HoldingsSnapshotPayload(7, "518880", 100m, 5.432m, 5.5m, 900000m, 1000000m));
 
-            // Execute to emit DECISION + ORDER_INTENT (orderId=7).
+            // Execute emits DECISION only; ORDER_INTENT now fires from OnOrderEvent
+            // at first sighting of orderId=7 (on the Filled event below).
             decorator.Execute(null, new IPortfolioTarget[] { new PortfolioTarget(symbol, 100m) });
+
+            // The engine delivers a Submitted event before the Filled event; the
+            // decorator emits ORDER_INTENT on this first sighting of orderId=7, so the
+            // full chain (DECISION, ORDER_INTENT, FILL, HOLDINGS_SNAPSHOT) is produced.
+            decorator.OnOrderEvent(null, new OrderEvent(
+                orderId: 7, symbol: symbol,
+                utcTime: new DateTime(2026, 7, 14, 9, 29, 0, DateTimeKind.Utc),
+                status: OrderStatus.Submitted, direction: OrderDirection.Buy,
+                fillPrice: 0m, fillQuantity: 0m,
+                orderFee: new OrderFee(new CashAmount(0m, Currencies.CNY))));
 
             // Synthesize a fill event the way the engine would deliver it.
             var fillEvent = new OrderEvent(
@@ -228,6 +254,14 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             Assert.AreEqual(4, lines.Length,
                 "Expected DECISION, ORDER_INTENT, FILL, HOLDINGS_SNAPSHOT; got: " +
                 string.Join("\n", lines));
+            var orderIntent = JObject.Parse(lines[1]);
+            Assert.AreEqual("ORDER_INTENT", orderIntent["event_type"].ToString());
+            var intentPayload = orderIntent["payload"] as JObject;
+            Assert.IsNotNull(intentPayload);
+            Assert.AreEqual(7, (long)intentPayload["orderId"],
+                "ORDER_INTENT must carry the same orderId as the FILL/SNAPSHOT");
+            Assert.AreEqual(100m, (decimal)intentPayload["quantity"],
+                "ORDER_INTENT must carry the LEAN-native intended quantity");
             var fill = JObject.Parse(lines[2]);
             Assert.AreEqual("FILL", fill["event_type"].ToString());
             var fillPayload = fill["payload"] as JObject;
@@ -263,7 +297,11 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             var decorator = new FakeDiscoveringDecorator(fake, sink,
                 new[] { new OrderIntentRecord(99, symbol, 100m) },
                 new HoldingsSnapshotPayload(99, "518880", 100m, 1m, 1m, 1m, 1m));
+            // Execute emits DECISION only; ORDER_INTENT now fires from OnOrderEvent
+            // at first sighting of orderId=99 (on the Filled event below).
             decorator.Execute(null, new IPortfolioTarget[] { new PortfolioTarget(symbol, 100m) });
+            // First sighting of orderId=99 (its fill event) emits ORDER_INTENT, then
+            // FILL, then the correlated HOLDINGS_SNAPSHOT: a valid full chain.
             decorator.OnOrderEvent(null, new OrderEvent(
                 orderId: 99, symbol: symbol,
                 utcTime: DateTime.UtcNow, status: OrderStatus.Filled,
@@ -286,7 +324,8 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
             using var sink = new FormalJsonlTraceSink(path);
             var fake = new FakeExecutionModel();
             var symbol = Symbol.Create("518880", SecurityType.Equity, Market.SSE);
-            // FakeDiscoveringDecorator with empty NewOrders -> no ORDER_INTENT emitted.
+            // FakeDiscoveringDecorator with empty intents -> BuildOrderIntentRecord
+            // returns null for orderId 555 -> no ORDER_INTENT emitted.
             var decorator = new FakeDiscoveringDecorator(fake, sink,
                 Array.Empty<OrderIntentRecord>(),
                 new HoldingsSnapshotPayload(555, "518880", 100m, 1m, 1m, 1m, 1m));
@@ -377,39 +416,52 @@ namespace QuantConnect.Tests.Algorithm.Gold2ClosedLoop
         /// <summary>
         /// A subclass of <see cref="TracingExecutionModel"/> that overrides the
         /// LEAN-state-reading seams to return deterministic, test-supplied order
-        /// ids and holdings snapshots. This lets behavioral tests run without a
-        /// live algorithm/engine. The <see cref="_suppressSnapshot"/> flag lets
-        /// the failure-propagation test omit the post-fill snapshot so the
-        /// reconciler (correctly) fails.
+        /// intents and holdings snapshots. This lets behavioral tests run without a
+        /// live algorithm/engine.
+        /// <para>
+        /// <see cref="BuildOrderIntentRecord"/> maps the first-sighted
+        /// <c>orderId</c> to a test-supplied <see cref="OrderIntentRecord"/>. The
+        /// <see cref="_suppressIntent"/> flag lets the failure-propagation intent
+        /// test omit ORDER_INTENT (via <see cref="ShouldEmitOrderIntent"/>) so the
+        /// reconciler (correctly) fails the subsequent FILL; the
+        /// <see cref="_suppressSnapshot"/> flag lets the failure-propagation snapshot
+        /// test omit the post-fill HOLDINGS_SNAPSHOT so the reconciler (correctly) fails.
+        /// </para>
         /// </summary>
         private sealed class FakeDiscoveringDecorator : TracingExecutionModel
         {
-            private readonly IReadOnlyList<OrderIntentRecord> _newOrders;
+            private readonly Dictionary<int, OrderIntentRecord> _intentsByOrderId;
             private readonly HoldingsSnapshotPayload _snapshotPayload;
+            private readonly bool _suppressIntent;
             private readonly bool _suppressSnapshot;
 
             public FakeDiscoveringDecorator(IExecutionModel inner, IFormalTraceSink sink,
                 IReadOnlyList<OrderIntentRecord> newOrders,
                 HoldingsSnapshotPayload snapshotPayload = null,
-                bool suppressSnapshot = false)
+                bool suppressSnapshot = false,
+                bool suppressIntent = false)
                 : base(inner, sink, algorithm: null)
             {
-                _newOrders = newOrders ?? Array.Empty<OrderIntentRecord>();
+                _intentsByOrderId = (newOrders ?? Array.Empty<OrderIntentRecord>())
+                    .ToDictionary(r => r.OrderId);
                 _snapshotPayload = snapshotPayload;
                 _suppressSnapshot = suppressSnapshot;
+                _suppressIntent = suppressIntent;
             }
 
-            protected override ISet<int> GetKnownOrderIds(QCAlgorithm algorithm)
+            protected override OrderIntentRecord BuildOrderIntentRecord(
+                QCAlgorithm algorithm, OrderEvent orderEvent)
             {
-                // No pre-existing orders; the diff yields exactly the supplied newOrders.
-                return new HashSet<int>();
+                // Map the first-sighted native orderId to the test-supplied record.
+                // Returns null when the order was not configured (so a later FILL for
+                // that order has no ORDER_INTENT and the reconciler fails, exactly
+                // what ReconcilerFailsOnFillWithoutOrderIntent asserts).
+                _intentsByOrderId.TryGetValue(orderEvent.OrderId, out var record);
+                return record;
             }
 
-            protected override IReadOnlyList<OrderIntentRecord> DiscoverNewOrders(
-                QCAlgorithm algorithm, ISet<int> knownOrderIds)
-            {
-                return _newOrders;
-            }
+            protected override bool ShouldEmitOrderIntent(OrderEvent orderEvent)
+                => !_suppressIntent;
 
             protected override HoldingsSnapshotPayload BuildHoldingsSnapshotPayload(
                 QCAlgorithm algorithm, Symbol symbol, int orderId)

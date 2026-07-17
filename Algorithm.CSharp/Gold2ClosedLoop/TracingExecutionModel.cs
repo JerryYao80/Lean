@@ -25,10 +25,9 @@ using QuantConnect.Securities;
 namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
 {
     /// <summary>
-    /// A single newly-discovered native order captured by the tracing decorator
-    /// after delegating to the inner execution model. Carries only the LEAN-native
-    /// fields required for the ORDER_INTENT trace event. Pure DTO; it never
-    /// reproduces order sizing, lot rounding or margin checks.
+    /// A single native order captured by the tracing decorator, carrying only the
+    /// LEAN-native fields required for the ORDER_INTENT trace event. Pure DTO; it
+    /// never reproduces order sizing, lot rounding or margin checks.
     /// </summary>
     public sealed class OrderIntentRecord
     {
@@ -101,16 +100,38 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
     /// <para><b>Routing decision (engine-routes-to-ExecutionModel).</b> The LEAN engine
     /// captures <c>qcAlgorithm.Execution</c> in <c>BrokerageTransactionHandler.Initialize</c>
     /// (Engine/TransactionHandlers/BrokerageTransactionHandler.cs:214) and then invokes
-    /// <c>_executionModel.OnOrderEvent(_qcAlgorithmIntance, orderEvent)</c> on every fill
-    /// (Engine/TransactionHandlers/BrokerageTransactionHandler.cs:1369) BEFORE calling
-    /// <c>_algorithm.OnOrderEvent</c> (line 1374). <c>Transactions.Initialize</c> is called
-    /// after <c>algorithm.Initialize()</c> (Engine/Engine.cs:332 vs
-    /// Engine/Setup/BacktestingSetupHandler.cs:194), so the proof strategy's
-    /// <see cref="Gold2ClosedLoopProofStrategy.Initialize"/> - which installs this
-    /// decorator as <c>Execution</c> - has already run. Therefore the decorator's
-    /// <see cref="OnOrderEvent"/> is the engine's direct hook for fills: it emits FILL
-    /// and an immediate post-fill HOLDINGS_SNAPSHOT there. The strategy does NOT need
-    /// to override <see cref="QCAlgorithm.OnOrderEvent"/>.</para>
+    /// <c>_executionModel.OnOrderEvent(_qcAlgorithmIntance, orderEvent)</c> on every order
+    /// event (Engine/TransactionHandlers/BrokerageTransactionHandler.cs:1369) BEFORE
+    /// calling <c>_algorithm.OnOrderEvent</c> (line 1374). The engine fires order events
+    /// in this order for each native order: <c>Submitted</c> (Brokerages/Backtesting/
+    /// BacktestingBrokerage.cs:137-141, fired synchronously inside
+    /// <c>_inner.Execute</c> via <c>algorithm.MarketOrder</c> -> <c>AddOrder</c> ->
+    /// <c>HandleSubmitOrderRequest</c> -> <c>_brokerage.PlaceOrder</c> ->
+    /// <c>OnOrderEvent</c> -> <c>HandleOrderEvent</c> -> <c>_executionModel.OnOrderEvent</c>),
+    /// then <c>Filled</c> (the fill path BacktestingBrokerage.Scan -> <c>OnOrderEvents</c>
+    /// -> base.OnOrderEvents -> <c>HandleOrderEvents</c> ->
+    /// <c>_executionModel.OnOrderEvent</c>). So the decorator's <see cref="OnOrderEvent"/>
+    /// receives the <c>Submitted</c> event for an order BEFORE its <c>Filled</c> event,
+    /// even when the fill is synchronous and dispatched from inside <c>_inner.Execute</c>.
+    /// <c>Transactions.Initialize</c> is called after <c>algorithm.Initialize()</c>
+    /// (Engine/Engine.cs:332 vs Engine/Setup/BacktestingSetupHandler.cs:194), so the
+    /// proof strategy's <see cref="Gold2ClosedLoopProofStrategy.Initialize"/> - which
+    /// installs this decorator as <c>Execution</c> - has already run. Therefore the
+    /// decorator's <see cref="OnOrderEvent"/> is the engine's direct hook for both the
+    /// Submitted and Filled events of every order.</para>
+    /// <para><b>ORDER_INTENT emission (Task 6 ordering fix).</b> ORDER_INTENT is emitted
+    /// from <see cref="OnOrderEvent"/> the FIRST time a given <c>orderId</c> is sighted
+    /// (typically the <c>Submitted</c> event, which always precedes the <c>Filled</c>
+    /// event). This guarantees the reconciler's intent-before-fill ordering invariant
+    /// holds even for synchronous fills that the inner model dispatches from inside
+    /// <c>Execute</c> (where a naive post-<c>Execute</c> ORDER_INTENT would land AFTER
+    /// the FILL). The set of already-intended order ids is tracked in
+    /// <see cref="_intendedOrderIds"/> under <see cref="_traceLock"/>. The intended
+    /// quantity is read LEAN-native from the <see cref="OrderTicket"/> registered by the
+    /// transaction handler (BrokerageTransactionHandler.cs:327 registers the ticket in
+    /// <c>_completeOrderTickets</c> BEFORE <c>_brokerage.PlaceOrder</c> fires Submitted
+    /// in HandleSubmitOrderRequest), so it is always available when the Submitted event
+    /// arrives.</para>
     /// <para><b>Non-reproduction contract.</b> The decorator delegates Execute exactly
     /// once to the inner model and OnOrderEvent exactly once to the inner model. It
     /// never reproduces order sizing, lot rounding, margin checks, fill pricing, fee
@@ -122,10 +143,11 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
     /// sink happens inside the same critical section so write order always matches
     /// sequence order (the sink rejects gaps/duplicates).</para>
     /// <para><b>Testability seams.</b>
-    /// <see cref="GetKnownOrderIds"/>, <see cref="DiscoverNewOrders"/> and
+    /// <see cref="BuildOrderIntentRecord"/>, <see cref="ShouldEmitOrderIntent"/> and
     /// <see cref="BuildHoldingsSnapshotPayload"/> are protected virtual so a test double
-    /// can supply deterministic order ids and holdings without instantiating a full
-    /// LEAN engine. The production paths read real LEAN-native state.</para>
+    /// can supply deterministic order ids, intended quantities and holdings without
+    /// instantiating a full LEAN engine. The production paths read real LEAN-native
+    /// state.</para>
     /// </remarks>
     public class TracingExecutionModel : ExecutionModel
     {
@@ -139,6 +161,12 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
         private readonly string _candidateId;
         private long _sequence;
         private readonly object _traceLock = new();
+
+        // Order ids for which an ORDER_INTENT has already been emitted, so the intent
+        // is written exactly once per order (at first sighting, before its FILL).
+        // Guarded by _traceLock so the first-sighting check and the subsequent emit
+        // are atomic w.r.t. concurrent order events.
+        private readonly HashSet<int> _intendedOrderIds = new();
 
         /// <summary>
         /// Constructs the decorator wrapping <paramref name="inner"/>. When
@@ -181,10 +209,13 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
         }
 
         /// <summary>
-        /// Emits DECISION (the portfolio targets just received), delegates EXACTLY ONCE
-        /// to the inner execution model, then discovers the native orders the inner
-        /// model created and emits an ORDER_INTENT per new order carrying the native
-        /// <c>orderId</c>. Does not reproduce sizing/rounding/margin.
+        /// Emits DECISION (the portfolio targets just received) then delegates EXACTLY
+        /// ONCE to the inner execution model. Does NOT emit ORDER_INTENT here: the inner
+        /// model's synchronous fills dispatch <c>Submitted</c> then <c>Filled</c> order
+        /// events through the engine back into <see cref="OnOrderEvent"/> (see the class
+        /// remarks for the exact call chain), so ORDER_INTENT is emitted at first
+        /// sighting in <see cref="OnOrderEvent"/> to guarantee intent-before-fill. Does
+        /// not reproduce sizing/rounding/margin.
         /// </summary>
         public override void Execute(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
@@ -200,30 +231,21 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
                 .ToList();
             Emit(algo, "DECISION", new { targets = decisionTargets });
 
-            // Record known order ids before delegation so we can diff afterwards.
-            var knownOrderIds = GetKnownOrderIds(algo);
-
             // Delegate EXACTLY ONCE to the mature execution model. No reproduction of
-            // sizing, lot rounding, or margin checks.
+            // sizing, lot rounding, or margin checks. Any synchronous fills the inner
+            // model triggers dispatch Submitted/Filled order events back through the
+            // engine into OnOrderEvent, where ORDER_INTENT (at first sighting) and
+            // FILL/HOLDINGS_SNAPSHOT are emitted in the correct order.
             _inner.Execute(algo, targets);
-
-            // ORDER_INTENT AFTER delegating: one per newly-created native order.
-            foreach (var record in DiscoverNewOrders(algo, knownOrderIds))
-            {
-                Emit(algo, "ORDER_INTENT", new
-                {
-                    orderId = record.OrderId,
-                    symbol = record.Symbol.Value,
-                    quantity = record.Quantity
-                });
-            }
         }
 
         /// <summary>
-        /// Delegates to the inner model, then - on a fill event - emits a native FILL
-        /// and an immediate post-fill HOLDINGS_SNAPSHOT correlated by
-        /// <c>orderId</c>. Both values are read directly from the LEAN-native
-        /// <see cref="OrderEvent"/> and <see cref="Security.Holdings"/>.
+        /// Delegates to the inner model, then - on each order event - emits ORDER_INTENT
+        /// the FIRST time an <c>orderId</c> is sighted (typically <c>Submitted</c>, which
+        /// always precedes <c>Filled</c>), and on a fill event emits a native FILL and an
+        /// immediate post-fill HOLDINGS_SNAPSHOT correlated by <c>orderId</c>. All values
+        /// are read directly from the LEAN-native <see cref="OrderEvent"/> and
+        /// <see cref="Security.Holdings"/>.
         /// </summary>
         public override void OnOrderEvent(QCAlgorithm algorithm, OrderEvent orderEvent)
         {
@@ -232,14 +254,24 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
 
             if (orderEvent == null) return;
 
+            var algo = algorithm ?? _algorithm;
+
+            // ORDER_INTENT at first sighting: the engine delivers a Submitted event for
+            // every order before its Filled event (BacktestingBrokerage.cs:137-141 fires
+            // Submitted synchronously inside PlaceOrder, which runs inside
+            // _inner.Execute). Emitting the intent here - before any FILL for this order
+            // can be emitted below - guarantees the reconciler's intent-before-fill
+            // ordering invariant, even for synchronous fills dispatched from inside
+            // Execute. The intent is emitted exactly once per orderId: the first-sighting
+            // check and the emit are atomic under _traceLock.
+            MaybeEmitOrderIntent(algo, orderEvent);
+
             // Emit FILL on PartiallyFilled and Filled (each gets its own snapshot).
             // Non-fill statuses (Submitted, Canceled, Invalid, ...) are not traced as
             // fills; they pass through to the inner model only.
             var isFill = orderEvent.Status == OrderStatus.Filled
                 || orderEvent.Status == OrderStatus.PartiallyFilled;
             if (!isFill || orderEvent.FillQuantity == 0m) return;
-
-            var algo = algorithm ?? _algorithm;
 
             // FILL: pure LEAN-native OrderEvent fields.
             Emit(algo, "FILL", new
@@ -286,47 +318,36 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
         // ----------------------------------------------------------------
 
         /// <summary>
-        /// Returns the set of known native order ids before delegating to the inner
-        /// model. Production: enumerates <see cref="SecurityTransactionManager.GetOrderTickets"/>.
+        /// Builds the LEAN-native <see cref="OrderIntentRecord"/> for an order whose
+        /// first order event is being processed. Production: reads the registered
+        /// <see cref="OrderTicket"/> (BrokerageTransactionHandler registers it before the
+        /// Submitted event fires) and returns its native OrderId/Symbol/Quantity. Returns
+        /// null when no ticket is available (the order is not emitted as an intent).
+        /// Test doubles may return a deterministic record (or null to simulate a missing
+        /// intent so the reconciler fails on the subsequent fill).
         /// </summary>
-        protected virtual ISet<int> GetKnownOrderIds(QCAlgorithm algorithm)
+        protected virtual OrderIntentRecord BuildOrderIntentRecord(
+            QCAlgorithm algorithm, OrderEvent orderEvent)
         {
-            var set = new HashSet<int>();
-            if (algorithm == null) return set;
-            foreach (var t in algorithm.Transactions.GetOrderTickets())
+            if (algorithm == null || orderEvent == null)
             {
-                set.Add(t.OrderId);
+                return null;
             }
-            return set;
+            var ticket = algorithm.Transactions.GetOrderTicket(orderEvent.OrderId);
+            if (ticket == null)
+            {
+                return null;
+            }
+            return new OrderIntentRecord(ticket.OrderId, ticket.Symbol, ticket.Quantity);
         }
 
         /// <summary>
-        /// Discovers orders newly created by the inner model, as native
-        /// <see cref="OrderIntentRecord"/>s. Production: diffs
-        /// <see cref="SecurityTransactionManager.GetOrderTickets"/> against the
-        /// previously-known ids. Does not reproduce sizing.
+        /// Testability seam: returns true by default so ORDER_INTENT is emitted for every
+        /// first-sighted order. A test double may override to return false to simulate
+        /// a missing intent so the reconciler (correctly) fails the subsequent fill.
         /// </summary>
-        protected virtual IReadOnlyList<OrderIntentRecord> DiscoverNewOrders(
-            QCAlgorithm algorithm, ISet<int> knownOrderIds)
-        {
-            var records = new List<OrderIntentRecord>();
-            if (algorithm == null) return records;
-            foreach (var t in algorithm.Transactions.GetOrderTickets())
-            {
-                if (knownOrderIds.Add(t.OrderId))
-                {
-                    records.Add(new OrderIntentRecord(t.OrderId, t.Symbol, t.Quantity));
-                }
-            }
-            return records;
-        }
+        protected virtual bool ShouldEmitOrderIntent(OrderEvent orderEvent) => true;
 
-        /// <summary>
-        /// Reads the CURRENT LEAN-native holdings snapshot for <paramref name="symbol"/>
-        /// immediately after a fill. Production: reads
-        /// <see cref="Security.Holdings"/> and <see cref="SecurityPortfolioManager"/>
-        /// directly; never reconstructs. Test doubles may synthesize values.
-        /// </summary>
         /// <summary>
         /// Testability seam: returns true by default so the post-fill HOLDINGS_SNAPSHOT
         /// is always emitted in production. A test double may override to return false
@@ -356,6 +377,69 @@ namespace QuantConnect.Algorithm.CSharp.Gold2ClosedLoop
         // ----------------------------------------------------------------
         // Trace emission helpers.
         // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Emits ORDER_INTENT for an order id the first time it is sighted, recording
+        /// the id in <see cref="_intendedOrderIds"/> so the intent is emitted exactly
+        /// once. The first-sighting check and the emit (sequence allocation + sink write)
+        /// happen under <see cref="_traceLock"/> so concurrent order events cannot each
+        /// emit a duplicate intent for the same order. No-ops (after recording the id)
+        /// if the order was already intended or if <see cref="BuildOrderIntentRecord"/>
+        /// returns null / <see cref="ShouldEmitOrderIntent"/> returns false (a missing
+        /// intent leaves the order unrecorded, so a later FILL fails the reconciler).
+        /// </summary>
+        private void MaybeEmitOrderIntent(QCAlgorithm algorithm, OrderEvent orderEvent)
+        {
+            // The authoritative first-sighting check AND the emit are under _traceLock so
+            // two concurrent OnOrderEvent calls for the same orderId cannot both emit.
+            // GetOrderTicket/BuildOrderIntentRecord read LEAN-native state and are
+            // therefore also under the lock (order-event processing is already serialized
+            // by the transaction handler's _lockHandleOrderEvent, so this is belt-and-
+            // braces rather than a contention concern).
+            OrderIntentRecord record = null;
+            bool shouldEmit;
+            lock (_traceLock)
+            {
+                if (!_intendedOrderIds.Add(orderEvent.OrderId))
+                {
+                    // Already intended: the intent was emitted on an earlier sighting
+                    // (e.g. Submitted). Nothing to do for this Filled/duplicate event.
+                    return;
+                }
+                shouldEmit = ShouldEmitOrderIntent(orderEvent);
+                if (shouldEmit)
+                {
+                    record = BuildOrderIntentRecord(algorithm, orderEvent);
+                }
+                if (record == null)
+                {
+                    // The id was recorded above (so a duplicate won't retry), but no
+                    // intent will be emitted. A subsequent FILL for this order will have
+                    // no ORDER_INTENT and the reconciler fails deterministically: the
+                    // desired behavior for a missing/forbidden intent.
+                    return;
+                }
+
+                var seq = ++_sequence;
+                var ev = new FormalTraceEvent(
+                    schemaVersion: "1",
+                    sequence: seq,
+                    eventType: "ORDER_INTENT",
+                    experimentId: _experimentId,
+                    windowId: _windowId,
+                    stageId: _stageId,
+                    runId: _runId,
+                    candidateId: _candidateId,
+                    eventTimeUtc: orderEvent.UtcTime,
+                    payload: new
+                    {
+                        orderId = record.OrderId,
+                        symbol = record.Symbol.Value,
+                        quantity = record.Quantity
+                    });
+                _sink.Write(ev);
+            }
+        }
 
         private void Emit(QCAlgorithm algorithm, string eventType, object payload, DateTime? eventTimeUtc = null)
         {
