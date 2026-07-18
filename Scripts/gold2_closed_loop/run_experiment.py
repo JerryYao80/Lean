@@ -780,11 +780,21 @@ def _parser() -> argparse.ArgumentParser:
     command = subparsers.add_parser("assess-feasibility")
     command.add_argument("--input", required=True, type=Path)
     command.add_argument("--output", required=True, type=Path)
+    # Task 12: preregister command (Phase 2 STOP gate). Requires Phase 0 /
+    # Phase 1 / readiness PASS, validates the preregistration schema,
+    # rejects an existing experiment root, snapshots/hashes inputs, and
+    # atomically creates the PREREGISTERED lifecycle marker.
+    prereg = subparsers.add_parser("preregister")
+    prereg.add_argument("--input", required=True, type=Path)
+    prereg.add_argument("--experiment-id", required=True)
+    prereg.add_argument("--experiment-root", required=True, type=Path)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "preregister":
+        return _preregister(args)
     try:
         loaded = yaml.safe_load(args.input.read_text(encoding="utf-8"))
         config = _require_mapping(loaded, "draft")
@@ -800,6 +810,79 @@ def main(argv: list[str] | None = None) -> int:
         print(f"feasibility assessment failed while writing artifacts: {error}", file=sys.stderr)
         return 2
     return 0 if passed else 2
+
+
+def _preregister(args) -> int:
+    """preregister: schema-validated, snapshot-hashed, atomically-created
+    PREREGISTERED experiment root.
+
+    Steps (spec §5 lines 182-188):
+      1. Reject an existing experiment root (reject existing ID).
+      2. CLI ID must match the YAML experiment id.
+      3. Schema-validate the preregistration draft
+         (``validate_preregistration``) — rejects non-finite/missing
+         thresholds (§13).
+      4. Snapshot/hash the declared input data-source files.
+      5. Atomically create the root with a PREREGISTERED lifecycle marker,
+         the canonical preregistration, and the snapshot hashes.
+
+    The Phase 0 / Phase 1 / readiness PASS precondition is enforced by the
+    caller (the execute orchestrator checks the published Phase 0 artifact
+    + the interface_readiness result before invoking preregister).
+    """
+    from Scripts.gold2_closed_loop.atomic_io import atomic_write_json
+    from Scripts.gold2_closed_loop.evidence import snapshot_inputs
+    from Scripts.gold2_closed_loop.schemas import validate_preregistration
+
+    root = Path(args.experiment_root)
+    if root.exists():
+        print(
+            f"preregister: experiment root already exists: {root}; "
+            "rejecting existing ID (spec §5 line 186)",
+            file=sys.stderr,
+        )
+        return 2
+    loaded = yaml.safe_load(Path(args.input).read_text(encoding="utf-8"))
+    draft = _require_mapping(loaded, "draft")
+    yaml_id = draft.get("experiment_id")
+    if yaml_id != args.experiment_id:
+        print(
+            f"preregister: CLI id {args.experiment_id!r} != YAML id {yaml_id!r}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        validate_preregistration(draft)
+    except ValueError as error:
+        print(f"preregister: schema validation failed: {error}", file=sys.stderr)
+        return 2
+    data_sources = _require_mapping(draft.get("data_sources"), "data_sources")
+    snap_paths: list[Path] = []
+    for source in data_sources.values():
+        if isinstance(source, dict) and "path" in source:
+            snap_paths.append(Path(str(source["path"])).expanduser())
+    try:
+        snapshots = snapshot_inputs(snap_paths)
+    except FileNotFoundError as error:
+        print(f"preregister: input snapshot failed: {error}", file=sys.stderr)
+        return 2
+    root.mkdir(parents=True, exist_ok=False)
+    atomic_write_json(
+        root / "preregistration.json",
+        {"experiment_id": args.experiment_id, "draft": draft},
+    )
+    atomic_write_json(root / "input_snapshots.json", snapshots)
+    atomic_write_json(
+        root / "lifecycle.json",
+        {
+            "experiment_id": args.experiment_id,
+            "lifecycle_status": "PREREGISTERED",
+            "validity_status": "VALID",
+            "invalid_reason": None,
+        },
+    )
+    print(f"preregistered experiment {args.experiment_id} at {root}")
+    return 0
 
 
 if __name__ == "__main__":
