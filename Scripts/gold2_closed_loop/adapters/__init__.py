@@ -7,7 +7,7 @@ This package contains the G1 parameter optimizer adapter
 ``Scripts/auto_optimize/evolution_scheduler`` /
 ``Scripts/inspiration`` machinery. The optimizer is fully independent.
 
-Task 11 will add ``formal_review`` and ``feedback_construction`` adapters
+Task 11 adds the ``formal_review`` and ``feedback_construction`` adapters
 under this same package.
 """
 
@@ -21,6 +21,16 @@ from Scripts.gold2_closed_loop.adapters.base import (
     Runner,
     TrialResult,
 )
+from Scripts.gold2_closed_loop.adapters.feedback_construction import (
+    FeedbackAction,
+    FeedbackConstructionAdapter,
+    FeedbackResult,
+)
+from Scripts.gold2_closed_loop.adapters.formal_review import (
+    FormalReviewAdapter,
+    ReviewBundle,
+    ReviewResult,
+)
 from Scripts.gold2_closed_loop.adapters.parameter_optimizer import (
     InfrastructureError,
     ParameterOptimizerAdapter,
@@ -29,10 +39,16 @@ from Scripts.gold2_closed_loop.adapters.parameter_optimizer import (
 __all__ = [
     "Adapter",
     "Attempt",
+    "FeedbackAction",
+    "FeedbackConstructionAdapter",
+    "FeedbackResult",
+    "FormalReviewAdapter",
     "InfrastructureError",
     "OptimizationRequest",
     "OptimizationResult",
     "ParameterOptimizerAdapter",
+    "ReviewBundle",
+    "ReviewResult",
     "Runner",
     "TrialResult",
 ]
