@@ -597,3 +597,142 @@ def test_valid_finite_metrics_still_classify_normally(fake_runner, tmp_path):
     assert [a.event_type for a in result.attempts] == ["SUCCEEDED", "PRUNED"]
     assert result.selected_candidate is not None
     assert result.selected_candidate.parameters["flag"] is False
+
+
+# --- Task 10 code-quality review fixes --------------------------------
+#
+# Four adversarially-verified defects (7-lens workflow, confirmed real):
+#   1. _passes_gate crashed on non-numeric metric values (string/list/dict)
+#      AFTER register() but BEFORE record_outcome() -> dangling PENDING.
+#      Fix: classify such results INVALID (metrics=None) before the gate.
+#   2. _resolve_gates fed the cross-generation max_drawdown_degradation
+#      DELTA into the absolute max_mdd gate (design §13 conflation).
+#      Fix: read the absolute cap from candidate_gates.max_mdd, not the
+#      degradation delta.
+#   3. A non-finite value in a NON-gate metric key (e.g. sortino) slipped
+#      past _has_non_finite_metrics as SUCCEEDED, then crashed the schema's
+#      finite-check in record_outcome -> dangling PENDING. Fix: scan the
+#      whole metrics tree for non-finite (INVALID, metrics=None).
+#   4. A runner returning None crashed at result.status (AttributeError)
+#      -> dangling PENDING. Fix: classify None as FAILED_INFRASTRUCTURE.
+
+
+def test_non_numeric_metric_classified_invalid_not_crash(fake_runner, tmp_path):
+    """Defect 1: a string mdd is INVALID (not a _passes_gate crash), and
+    no dangling PENDING is left - the journal has REGISTERED then INVALID."""
+    fake_runner.results = [
+        {"sharpe": 0.1, "net_profit": 0.01, "mdd": "xx", "trades": 10},
+    ]
+    journal_path = tmp_path / "events.jsonl"
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, journal_path
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+    assert result.selected_candidate is None
+    records = EventJournal(journal_path).read_all()
+    assert [r["event_type"] for r in records] == ["REGISTERED", "INVALID"]
+    # No dangling PENDING: a terminal INVALID event closes the candidate.
+    assert records[-1]["execution_status"] == "SUCCEEDED"
+    assert records[-1]["metrics"] is None
+
+
+def test_non_numeric_trades_and_dsr_classified_invalid(fake_runner, tmp_path):
+    """Defect 1: trades=[] and dsr='bad' are INVALID (float() would raise)."""
+    fake_runner.results = [
+        {"sharpe": 0.1, "net_profit": 0.01, "mdd": 0.08, "trades": [], "dsr": "bad"},
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+
+
+def test_non_numeric_subwindow_entry_classified_invalid(fake_runner, tmp_path):
+    """Defect 1: a string entry in subwindow_sharpes is INVALID."""
+    fake_runner.results = [
+        {
+            "sharpe": 1.0, "net_profit": 0.1, "mdd": 0.08, "trades": 5,
+            "subwindow_sharpes": ["x", 1.0],
+        },
+    ]
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl"
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+
+
+def test_non_finite_in_non_gate_metric_classified_invalid(fake_runner, tmp_path):
+    """Defect 3: a NaN in sortino (NOT a gate/ranking key) is INVALID,
+    not SUCCEEDED. Without the fix, record_outcome's schema finite-check
+    would reject it and leave a dangling PENDING."""
+    fake_runner.results = [
+        {
+            "sharpe": 1.0, "net_profit": 0.1, "mdd": 0.08, "trades": 50,
+            "sortino": float("nan"),
+        },
+    ]
+    journal_path = tmp_path / "events.jsonl"
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, journal_path
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert [a.event_type for a in result.attempts] == ["INVALID"]
+    records = EventJournal(journal_path).read_all()
+    assert [r["event_type"] for r in records] == ["REGISTERED", "INVALID"]
+    assert records[-1]["metrics"] is None
+
+
+def test_preregistration_degradation_delta_not_absolute_mdd_cap(fake_runner, tmp_path):
+    """Defect 2: success_thresholds.max_drawdown_degradation is a
+    CROSS-GENERATION DELTA (design §13), NOT an absolute MDD cap. A G1
+    candidate with mdd=0.15 must NOT be pruned when the preregistration's
+    max_drawdown_degradation=0.10 (the old conflation pruned it, falsely
+    forcing G1->G0 alias on a viable 15%-drawdown strategy)."""
+    fake_runner.results = [
+        {"sharpe": 1.5, "net_profit": 0.2, "mdd": 0.15, "trades": 50},
+    ]
+    prereg = {"success_thresholds": {"max_drawdown_degradation": 0.10}}
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl", preregistration=prereg
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    # mdd=0.15 is below the default absolute cap (0.5); the degradation
+    # delta 0.10 is NOT applied as an absolute cap at G1.
+    assert [a.event_type for a in result.attempts] == ["SUCCEEDED"]
+    assert result.selected_candidate is not None
+
+
+def test_preregistration_candidate_gates_max_mdd_honored(fake_runner, tmp_path):
+    """Defect 2 follow-up: an explicit candidate_gates.max_mdd IS honored
+    as the absolute cap (the correct source for the absolute gate)."""
+    fake_runner.results = [
+        {"sharpe": 1.5, "net_profit": 0.2, "mdd": 0.15, "trades": 50},  # > 0.10 cap
+    ]
+    prereg = {
+        "success_thresholds": {"max_drawdown_degradation": 0.50},
+        "candidate_gates": {"max_mdd": 0.10},
+    }
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, tmp_path / "events.jsonl", preregistration=prereg
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    # max_mdd=0.10 (absolute, from candidate_gates) prunes mdd=0.15.
+    assert [a.event_type for a in result.attempts] == ["PRUNED"]
+    assert result.selected_candidate is None
+
+
+def test_runner_returning_none_is_failed_infrastructure_no_dangling(fake_runner, tmp_path):
+    """Defect 4: a runner returning None (contract violation) is
+    FAILED_INFRASTRUCTURE, not an AttributeError crash. No dangling
+    PENDING - the journal has REGISTERED then FAILED_INFRASTRUCTURE."""
+    fake_runner.results = [None]
+    journal_path = tmp_path / "events.jsonl"
+    result = ParameterOptimizerAdapter(
+        fake_runner, 1, 17, journal_path
+    ).run({"flag": {"type": "bool"}}, "W1/train")
+    assert result.attempted_trial_count == 1
+    assert [a.status for a in result.attempts] == ["FAILED_INFRASTRUCTURE"]
+    assert [a.event_type for a in result.attempts] == ["FAILED_INFRASTRUCTURE"]
+    assert result.selected_candidate is None
+    records = EventJournal(journal_path).read_all()
+    assert [r["event_type"] for r in records] == [
+        "REGISTERED",
+        "FAILED_INFRASTRUCTURE",
+    ]

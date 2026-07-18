@@ -106,6 +106,57 @@ def _is_non_finite_scalar(value: Any) -> bool:
     return False
 
 
+def _metrics_unusable(metrics: dict[str, Any]) -> bool:
+    """Return True if the metrics dict is unusable evidence — i.e. it
+    contains a value that is EITHER a non-finite float (NaN/±Inf) OR a
+    non-numeric scalar (str/None/dict) in ANY position, OR a non-numeric
+    entry inside a list value.
+
+    This is the BROADER unusable-evidence check (defects 1 + 3 from the
+    Task 10 code-quality review). ``_has_non_finite_metrics`` only scans
+    the 6 gate/ranking keys for NaN/Inf floats; a non-numeric value
+    (e.g. ``mdd="xx"``, ``trades=[]``, ``sortino=NaN`` in a non-gate key)
+    sails past it, reaches ``_passes_gate`` (which calls bare ``float()``
+    and raises) or ``record_outcome`` (whose schema finite-check rejects
+    it), and crashes AFTER ``register()`` but BEFORE ``record_outcome()``
+    — leaving a dangling PENDING record that corrupts the hash-chained
+    audit trail. It scans the WHOLE metrics tree (not just the 6 keys)
+    because a non-finite value in any key fails the candidate-event
+    schema's recursive finite-check at persist time regardless of whether
+    a gate reads it.
+
+    Treating such results as INVALID (metrics=None, never selected, still
+    consuming budget and still closed by a terminal event) keeps the
+    journal intact: the candidate is registered, then closed with a
+    terminal INVALID event, with no crash in between.
+    """
+    return _any_unusable(metrics)
+
+
+def _any_unusable(value: Any) -> bool:
+    """Recursive helper: True if ``value`` or any nested value is a
+    non-finite float or a non-numeric scalar in a scalar position."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return False
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if _any_unusable(item):
+                return True
+        return False
+    if isinstance(value, dict):
+        for item in value.values():
+            if _any_unusable(item):
+                return True
+        return False
+    # str / None / anything else in a scalar metric position is unusable:
+    # the gates call float() on it and would raise.
+    return True
+
+
 def _metric_value(attempt: Attempt, metric: str) -> float:
     """Extract a numeric metric from the attempt's metrics dict.
 
@@ -297,13 +348,18 @@ def classify_outcome(
       min_trades / max_mdd / min_dsr / parameter-bounds  -> PRUNED
       subwindow_stability                                -> REJECTED
     """
-    # INVALID FIRST: non-finite metrics are unusable evidence, not a
-    # gate failure. The runner returned a result, but the result has
-    # NaN/±Infinity in a metric the gates or ranking would read; we
-    # cannot compare or rank it. This takes precedence over DUPLICATE
-    # so a non-finite result is recorded INVALID even if its params
-    # match an earlier accepted candidate.
-    if _has_non_finite_metrics(attempt):
+    # INVALID FIRST: unusable metrics (non-finite float OR non-numeric
+    # scalar in any position) are unusable evidence, not a gate failure.
+    # The runner returned a result, but the metrics contain a value the
+    # gates (``float()``) or the schema (recursive finite-check) cannot
+    # accept; we cannot compare, rank, or persist them. This takes
+    # precedence over DUPLICATE so a non-numeric/non-finite result is
+    # recorded INVALID even if its params match an earlier accepted
+    # candidate. The broader ``_metrics_unusable`` scan covers BOTH the
+    # 6 gate/ranking keys (defect 1: ``mdd="xx"``) AND non-gate keys
+    # (defect 3: ``sortino=NaN``), so a non-finite value anywhere in the
+    # metrics tree is INVALID before any ``float()`` call can crash.
+    if _metrics_unusable(attempt.metrics or {}):
         return "INVALID"
     # Duplicate check against already-accepted.
     new_hash = canonical_hash(attempt.parameters)

@@ -345,6 +345,19 @@ class ParameterOptimizerAdapter(Adapter):
                     "FAILED_INFRASTRUCTURE",
                 )
             return ("FAILED_STRATEGY", None, msg, "FAILED_STRATEGY")
+        # Contract guard (defect 4, Task 10 code-quality review): a runner
+        # that returns None (e.g. a wrapper missing its return statement)
+        # is a contract violation, not a crash. Treat it as an
+        # infrastructure failure so the candidate is closed with a
+        # terminal FAILED_INFRASTRUCTURE event rather than crashing at
+        # ``result.status`` and leaving a dangling PENDING record.
+        if result is None:
+            return (
+                "FAILED_INFRASTRUCTURE",
+                None,
+                "runner returned None (contract violation: expected TrialResult)",
+                "FAILED_INFRASTRUCTURE",
+            )
         # Runner returned a TrialResult. Honor its status, then refine
         # for NO_TRADES (trades == 0) below.
         status = result.status
@@ -384,22 +397,23 @@ class ParameterOptimizerAdapter(Adapter):
         if gates is not None:
             resolved = dict(gates)
         elif preregistration is not None:
-            # Read success_thresholds from the preregistration. The
-            # preregistration schema enforces max_drawdown_degradation
-            # (the MDD degradation limit), but not min_trades / min_dsr
-            # explicitly; the caller may stash them under a
-            # ``candidate_gates`` key. Fall back to defaults.
-            thresholds = preregistration.get("success_thresholds", {}) or {}
+            # Read the ABSOLUTE within-generation MDD cap from
+            # ``candidate_gates.max_mdd``. Do NOT source it from
+            # ``success_thresholds.max_drawdown_degradation`` — that is a
+            # CROSS-GENERATION DELTA (design §13: candidate_mdd -
+            # parent_mdd <= limit), not an absolute cap. Conflating the
+            # two would prune a viable 15%-drawdown G1 candidate under a
+            # 0.10 degradation delta, falsely forcing a G1->G0 alias
+            # (defect 2, Task 10 code-quality review). G1 has no parent
+            # MDD to diff against; the degradation check belongs to
+            # G2/G3, not the G1 absolute gate.
+            candidate_gates = preregistration.get("candidate_gates", {}) or {}
             resolved = {
-                "max_mdd": thresholds.get(
-                    "max_drawdown_degradation", _DEFAULT_MAX_MDD
-                ),
-                "min_trades": preregistration.get("candidate_gates", {}).get(
+                "max_mdd": candidate_gates.get("max_mdd", _DEFAULT_MAX_MDD),
+                "min_trades": candidate_gates.get(
                     "min_trades", _DEFAULT_MIN_TRADES
                 ),
-                "min_dsr": preregistration.get("candidate_gates", {}).get(
-                    "min_dsr", _DEFAULT_MIN_DSR
-                ),
+                "min_dsr": candidate_gates.get("min_dsr", _DEFAULT_MIN_DSR),
             }
         else:
             resolved = {
