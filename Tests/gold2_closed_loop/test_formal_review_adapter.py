@@ -148,9 +148,13 @@ def test_w_realized_derived_from_holdings_snapshot(tmp_path):
     assert result.bundle is not None
     w = result.bundle.w_realized
     assert w is not None
-    # 100 * 5.0 / 750 = 0.6666...
-    assert w == pytest.approx(Decimal("100") * Decimal("5") / Decimal("750"),
-                              abs=Decimal("1e-9"))
+    # 100 * 5.0 / 750 = 0.6666..., quantized to 0.0001 -> 0.6667. The raw
+    # (unquantized) value is NOT equal to the quantized one, so assert the
+    # quantized form (the fix for defect 2 makes the hash context-stable).
+    assert w == (Decimal("100") * Decimal("5") / Decimal("750")).quantize(
+        Decimal("0.0001")
+    )
+    assert w == Decimal("0.6667")
 
 
 def test_review_never_re_ranks_candidates(tmp_path):
@@ -162,3 +166,59 @@ def test_review_never_re_ranks_candidates(tmp_path):
     assert result.bundle is not None
     # The bundle's candidate_id matches the trace's candidate_id (C1).
     assert result.bundle.candidate_id == "C1"
+
+
+# --- Task 11 code-quality review fixes --------------------------------
+#
+# Two adversarially-verified defects:
+#   1. load_trace() was called OUTSIDE the try/except, so a non-empty
+#      trace with a malformed JSON line crashed run() with an unhandled
+#      ValueError instead of returning INVALID/MISSING_FORMAL_TRACE.
+#      Fix: wrap load_trace + validate_formal_events together.
+#   2. w_realized Decimal division's string form depended on the
+#      process-global decimal context precision, breaking hash stability.
+#      Fix: quantize w_realized to a fixed precision (0.0001).
+
+
+def test_malformed_trace_invalidates_not_crash(tmp_path):
+    """Defect 1: a non-empty but corrupt trace (malformed JSON line)
+    is INVALID/MISSING_FORMAL_TRACE, not an unhandled ValueError crash."""
+    p = tmp_path / "trace.jsonl"
+    p.write_text("{not valid json\n", encoding="utf-8")
+    result = FormalReviewAdapter().run(p)
+    assert (result.validity_status, result.invalid_reason) == (
+        "INVALID", "MISSING_FORMAL_TRACE",
+    )
+    assert result.bundle is None
+
+
+def test_truncated_last_trace_line_invalidates(tmp_path):
+    """Defect 1: a truncated last line (a crashed-engine partial write)
+    is INCOMPLETE evidence -> INVALID, not a crash."""
+    p = tmp_path / "trace.jsonl"
+    valid = _identity(1, "DECISION", "2022-01-03T00:00:00Z",
+                      {"targets": [{"symbol": "518880", "quantity": 100}]})
+    p.write_text(
+        json.dumps(valid, ensure_ascii=False) + "\n" + '{"schema_version"',
+        encoding="utf-8",
+    )
+    result = FormalReviewAdapter().run(p)
+    assert result.validity_status == "INVALID"
+    assert result.invalid_reason == "MISSING_FORMAL_TRACE"
+
+
+def test_w_realized_hash_stable_across_decimal_context(tmp_path):
+    """Defect 2: the bundle hash must be independent of the process-global
+    decimal context precision. Two runs with the same inputs but a mutated
+    decimal context produce the SAME bundle SHA-256."""
+    import decimal
+    trace = _write_trace(tmp_path / "trace.jsonl", _minimal_valid_trace())
+    decimal.getcontext().prec = 28
+    ra = FormalReviewAdapter().run(trace, bundle_dir=tmp_path / "a")
+    decimal.getcontext().prec = 10
+    try:
+        rb = FormalReviewAdapter().run(trace, bundle_dir=tmp_path / "b")
+    finally:
+        decimal.getcontext().prec = 28
+    assert ra.bundle is not None and rb.bundle is not None
+    assert ra.bundle.bundle_sha256 == rb.bundle.bundle_sha256

@@ -138,13 +138,20 @@ class FormalReviewAdapter:
                 invalid_reason="MISSING_FORMAL_TRACE",
                 bundle=None,
             )
-        events = load_trace(trace_path)
-        # Re-validate the full reconciliation invariants (intent-before-fill,
-        # snapshot-after-fill, strict one-to-one). A trace that fails this
-        # is incomplete evidence -> INVALID, not residual fallback.
+        # load_trace parses each JSONL line and raises ValueError on a
+        # malformed/truncated line. A non-empty but corrupt trace is
+        # INCOMPLETE evidence -> INVALID, not an unhandled crash. Wrap it
+        # in the same try/except as validate_formal_events so every
+        # incomplete-trace path returns INVALID/MISSING_FORMAL_TRACE with
+        # NO residual fallback (defect 1, Task 11 code-quality review).
         try:
+            events = load_trace(trace_path)
+            # Re-validate the full reconciliation invariants
+            # (intent-before-fill, snapshot-after-fill, strict one-to-one).
+            # A trace that fails this is incomplete evidence -> INVALID,
+            # not residual fallback.
             validate_formal_events(events)
-        except (ValueError, FileNotFoundError):
+        except (ValueError, FileNotFoundError, OSError):
             return ReviewResult(
                 validity_status="INVALID",
                 invalid_reason="MISSING_FORMAL_TRACE",
@@ -218,7 +225,12 @@ class FormalReviewAdapter:
             return None
         if tpv <= 0:
             return None
-        return quantity * price / tpv
+        # Quantize to a FIXED precision so the string form (and thus the
+        # bundle SHA-256) is independent of the process-global decimal
+        # context (defect 2, Task 11 code-quality review). Without this,
+        # a co-resident module that sets decimal.getcontext().prec would
+        # change str(w_realized) and break the hash-stability invariant.
+        return (quantity * price / tpv).quantize(Decimal("0.0001"))
 
     @staticmethod
     def _layer_attribution(
