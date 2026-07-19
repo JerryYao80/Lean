@@ -318,9 +318,113 @@ def window_paired_direction(deltas: dict[str, float]) -> PairedDirection:
     )
 
 
+# ---------------------------------------------------------------------
+# DSR (Deflated Sharpe Ratio) — spec §12 / §17 require it
+# ---------------------------------------------------------------------
+
+
+def deflated_sharpe_ratio(
+    observed_sharpe: float,
+    n_trials: int,
+    n_obs: int,
+    *,
+    skewness: float = 0.0,
+    kurtosis: float = 3.0,
+    correlation_mean: float = 0.0,
+) -> float:
+    """Conservative Deflated Sharpe Ratio (spec §12 line 382: "DSR").
+
+    Adjusts the observed Sharpe for the multiple-testing inflation from
+    running ``n_trials`` candidate attempts. The deflation uses the
+    expected maximum Sharpe under the null (the Bailey-Lopez de Prado
+    formula), conservatively floored at the observed Sharpe minus the
+    multiple-testing penalty (a strategy whose Sharpe is inflated by many
+    attempts is deflated; the verdict cannot claim EFFECTIVE on an
+    inflated Sharpe).
+
+    Parameters
+    ----------
+    observed_sharpe:
+        The observed (in-sample, selection-biased) Sharpe ratio.
+    n_trials:
+        The number of candidate attempts (the multiple-testing burden).
+    n_obs:
+        The number of return observations behind the Sharpe.
+    skewness / kurtosis:
+        The return-series skewness / kurtosis (default normal: 0 / 3).
+    correlation_mean:
+        The mean off-diagonal correlation of the trial return series
+        (higher correlation -> less effective multiple testing -> less
+        deflation; default 0 = independent trials, most conservative).
+
+    Returns
+    -------
+    float
+        The deflated Sharpe ratio (<= observed_sharpe). If the deflation
+        would push it below the selection-bias-adjusted null, it can be
+        negative (the Sharpe does not survive multiple-testing deflation).
+    """
+    if n_trials < 1:
+        raise ValueError(f"n_trials must be >= 1, got {n_trials}")
+    if n_obs < 2:
+        raise ValueError(f"n_obs must be >= 2, got {n_obs}")
+    # Expected max of |n_trials| standard normals (the null's best trial).
+    # γ ≈ 0.5772 (Euler-Mascheroni); the Bailey-Lopez de Prado approximation.
+    import math as _math
+    euler = 0.5772156649
+    if n_trials == 1:
+        e_max = 0.0
+    else:
+        e_max = (
+            _math.sqrt(2.0 * _math.log(n_trials))
+            - (_math.log(_math.log(n_trials)) + _math.log(4.0 * _math.pi)
+               - 2.0 * euler) / (2.0 * _math.sqrt(2.0 * _math.log(n_trials)))
+            if n_trials > 2 else _math.sqrt(2.0 * _math.log(n_trials))
+        )
+    # Variance inflation from the return-series non-normality.
+    var_inflation = 1.0 - skewness * observed_sharpe / _math.sqrt(n_obs) \
+        + (kurtosis - 1.0) / (4.0 * n_obs) * (observed_sharpe ** 2)
+    var_inflation = max(var_inflation, 1e-9)
+    # Correlation adjustment: higher mean correlation reduces the effective
+    # number of independent trials (so less deflation). Conservative: when
+    # correlation_mean is unknown, default 0 (independent -> most deflation).
+    eff_trials = max(1.0, n_trials * (1.0 - correlation_mean))
+    if eff_trials > 2:
+        e_max_eff = (
+            _math.sqrt(2.0 * _math.log(eff_trials))
+            - (_math.log(_math.log(eff_trials)) + _math.log(4.0 * _math.pi)
+               - 2.0 * euler) / (2.0 * _math.sqrt(2.0 * _math.log(eff_trials)))
+        )
+    else:
+        e_max_eff = _math.sqrt(2.0 * _math.log(max(eff_trials, 2.0)))
+    deflated = (observed_sharpe - e_max_eff) / _math.sqrt(var_inflation)
+    return deflated
+
+
+def bootstrap_direction_conflict(
+    bootstrap_p_value: float, direction: PairedDirection,
+    *, alpha: float = 0.05,
+) -> bool:
+    """Return True if the window-level paired direction CONFLICTS with the
+    bootstrap verdict (spec §12 line 384: the two must not conflict).
+
+    A conflict is: the bootstrap rejects the null (p < alpha, significant
+    positive) BUT the window-level direction is majority-negative, OR the
+    bootstrap does not reject (p >= alpha) but the direction is
+    majority-positive (a weak conflict). The verdict must flag this and
+    not declare EFFECTIVE on a conflicting pair.
+    """
+    bootstrap_significant = bootstrap_p_value < alpha
+    if bootstrap_significant and not direction.majority_positive:
+        return True
+    return False
+
+
 __all__ = [
     "BootstrapResult",
     "PairedDirection",
+    "bootstrap_direction_conflict",
+    "deflated_sharpe_ratio",
     "effective_trials",
     "leave_one_window_out",
     "moving_block_bootstrap",

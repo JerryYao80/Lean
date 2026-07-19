@@ -197,6 +197,12 @@ class ImmutabilityResult:
     mutated_paths: tuple[str, ...] = ()
 
 
+# The stages that MUST be frozen for every eligible window before the blind
+# opens (spec §6 line 118: the full G0/G1/G2/G3 candidate set). A partial-
+# stage freeze must NOT let the blind open.
+_REQUIRED_STAGES = ("G0", "G1", "G2", "G3")
+
+
 # ---------------------------------------------------------------------
 # Blind evaluator
 # ---------------------------------------------------------------------
@@ -234,6 +240,13 @@ class BlindEvaluator:
         # Frozen code hashes captured at open time for the immutability
         # revalidation. Empty until open.
         self._frozen_code_hashes: dict[str, str] = {}
+        # Registered candidate artifact paths (source/config/data files the
+        # frozen candidates pin) for the post-open immutability revalidation.
+        # Empty until register_artifact_paths is called.
+        self._frozen_artifact_hashes: dict[str, str] = {}
+        # Per-candidate "<window>/<stage>/<kind>" -> file path, for the
+        # execute_frozen defense-in-depth source/config byte check.
+        self._candidate_artifact_paths: dict[str, str] = {}
 
     # -----------------------------------------------------------------
     # Freeze
@@ -265,6 +278,14 @@ class BlindEvaluator:
                     f"freeze: candidate window_id {cand.window_id!r} != "
                     f"window {window_id!r}"
                 )
+            if cand.stage_id in stage_map:
+                # Collision-rejecting: a duplicate stage_id must NOT silently
+                # overwrite the earlier candidate (the freeze is append-only;
+                # a stage is frozen once). Spec §10 collision-reject contract.
+                raise ValueError(
+                    f"freeze: duplicate stage_id {cand.stage_id!r} for "
+                    f"window {window_id!r}; a stage may be frozen once"
+                )
             stage_map[cand.stage_id] = cand
         self._frozen[window_id] = stage_map
 
@@ -295,11 +316,25 @@ class BlindEvaluator:
         """
         if self._blind_opened:
             raise RuntimeError("blind already opened: open_blind is a one-shot")
-        missing = [w for w in self._eligible_windows if w not in self._frozen]
-        if missing:
+        # Per-WINDOW presence is not enough: EVERY required stage (G0/G1/G2/G3)
+        # must be frozen for each eligible window (spec §6 line 118: the full
+        # candidate set). A partial-stage freeze must NOT let the blind open.
+        missing_windows = [w for w in self._eligible_windows if w not in self._frozen]
+        missing_stages: list[str] = []
+        for w in self._eligible_windows:
+            stages = self._frozen.get(w, {})
+            for stage in _REQUIRED_STAGES:
+                if stage not in stages:
+                    missing_stages.append(f"{w}/{stage}")
+        if missing_windows or missing_stages:
+            detail = []
+            if missing_windows:
+                detail.append(f"windows {missing_windows} have no frozen candidates")
+            if missing_stages:
+                detail.append(f"stages {missing_stages} are not frozen")
             raise RuntimeError(
-                f"global candidate freeze incomplete: windows {missing} "
-                f"have no frozen candidates (spec §6 line 118: 全局一次冻结)"
+                f"global candidate freeze incomplete: {detail} "
+                f"(spec §6 line 118: 全局一次冻结 of the full G0/G1/G2/G3 set)"
             )
         requested = set(window_ids)
         eligible = set(self._eligible_windows)
@@ -342,15 +377,30 @@ class BlindEvaluator:
     def validate_immutability(self) -> ImmutabilityResult:
         """Revalidate every frozen hash after ``BLIND_ACCESS_OPENED``.
 
-        Returns ``ImmutabilityResult(valid=False, invalid_reason=
-        POST_BLIND_MUTATION)`` if ANY frozen code hash changed; the result
-        names every mutated path. Returns valid=True if all hashes match.
+        Revalidates BOTH the frozen CODE hashes (``code_paths``) AND, when
+        the caller registered candidate artifact paths via
+        :meth:`register_artifact_paths`, the frozen SOURCE / CONFIG hashes
+        the ``blind_opened.json`` record pinned. Any mutation (a code
+        change, a deleted/changed source or config file) invalidates the
+        experiment with ``POST_BLIND_MUTATION`` (spec §5 line 223).
         """
         if not self._blind_opened:
             # Pre-open: immutability is not yet in force. Report valid.
             return ImmutabilityResult(valid=True)
         mutated: list[str] = []
+        # Code paths.
         for path_str, expected in self._frozen_code_hashes.items():
+            p = Path(path_str)
+            if not p.is_file():
+                mutated.append(f"{path_str} (deleted)")
+                continue
+            actual = _file_sha256(p)
+            if actual != expected:
+                mutated.append(path_str)
+        # Registered candidate artifact paths (source/config files the
+        # frozen candidates pin). A post-blind mutation to a candidate's
+        # source or config file is detected here, not just a code change.
+        for path_str, expected in self._frozen_artifact_hashes.items():
             p = Path(path_str)
             if not p.is_file():
                 mutated.append(f"{path_str} (deleted)")
@@ -365,6 +415,37 @@ class BlindEvaluator:
                 mutated_paths=tuple(mutated),
             )
         return ImmutabilityResult(valid=True)
+
+    def register_artifact_paths(
+        self, path_to_expected_sha: dict[Path | str, str]
+    ) -> None:
+        """Register candidate artifact paths (source/config/data files the
+        frozen candidates pin) for the post-open immutability revalidation.
+
+        ``validate_immutability`` re-hashes these alongside the code paths
+        so a post-blind mutation to a candidate's source or config file is
+        detected (spec §5 line 223). The expected sha is the hash captured
+        at FREEZE time (the FrozenCandidate.source_sha256 / config_sha256,
+        or a data snapshot hash). Call this BEFORE ``open_blind``.
+
+        Paths whose key is of the form ``"<window>/<stage>/source"`` or
+        ``"<window>/<stage>/config"`` are ALSO used by
+        :meth:`execute_frozen` to verify the frozen candidate's source /
+        config bytes have not drifted at execution time (defense in depth).
+        """
+        if self._blind_opened:
+            raise RuntimeError(
+                "post-blind mutation rejected: cannot register artifact "
+                "paths after BLIND_ACCESS_OPENED"
+            )
+        for p, sha in path_to_expected_sha.items():
+            key = str(p)
+            self._frozen_artifact_hashes[key] = sha
+            # If the key looks like "<window>/<stage>/<kind>", also record
+            # it for the per-candidate execution-time check.
+            parts = key.split("/")
+            if len(parts) == 3 and parts[2] in ("source", "config"):
+                self._candidate_artifact_paths[key] = key
 
     def assert_no_post_blind_mutation(self, detail: str) -> None:
         """Raise if a post-blind mutation is attempted (generation /
@@ -428,7 +509,44 @@ class BlindEvaluator:
                 f"{window_id}/{stage_id}; the evaluator executes the "
                 f"EXACT frozen candidate (spec §14 line 424)"
             )
+        # If the caller registered the candidate's source/config artifact
+        # paths, ALSO verify the frozen source_sha256 / config_sha256
+        # against the actual files now (defense in depth: candidate_set
+        # equality checks the descriptor hash; this checks the underlying
+        # source/config bytes have not drifted).
+        artifact_check = self._check_frozen_candidate_artifacts(frozen)
+        if artifact_check is not None:
+            raise RuntimeError(
+                f"post-blind artifact mutation blocks execution: "
+                f"{artifact_check}"
+            )
         return runner(frozen)
+
+    def _check_frozen_candidate_artifacts(
+        self, frozen: FrozenCandidate
+    ) -> str | None:
+        """If the caller registered candidate artifact paths keyed by
+        ``f"{window_id}/{stage_id}/source"`` and ``.../config"`` whose
+        expected sha is the FrozenCandidate.source_sha256 /
+        config_sha256, verify the actual files now. Returns a detail
+        string on mismatch, else None.
+
+        This is opt-in: callers that do not register candidate artifact
+        paths get None (no extra check). The candidate_set_sha256 equality
+        check above is always performed.
+        """
+        for kind, expected in (("source", frozen.source_sha256),
+                                ("config", frozen.config_sha256)):
+            key = f"{frozen.window_id}/{frozen.stage_id}/{kind}"
+            path_str = self._candidate_artifact_paths.get(key)
+            if not path_str:
+                continue
+            p = Path(path_str)
+            if not p.is_file():
+                return f"{key} file deleted ({path_str})"
+            if _file_sha256(p) != expected:
+                return f"{key} hash mismatch (expected {expected[:12]}...)"
+        return None
 
     # -----------------------------------------------------------------
     # Resume

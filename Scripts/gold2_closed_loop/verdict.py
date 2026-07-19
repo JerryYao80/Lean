@@ -45,12 +45,45 @@ _INVALID = ValidityStatus.INVALID.value
 
 
 @dataclass(frozen=True)
+class AcceptanceGates:
+    """The §13 acceptance conditions the verdict enforces.
+
+    The verdict is EFFECTIVE only if ALL of these pass (and validity is
+    VALID, the aggregate delta is positive, all activated stages pass, and
+    no G3 alias caps it). A gate that is None is not checked (the caller
+    did not supply it; conservative callers supply every gate).
+    """
+
+    valid_window_count: int | None = None
+    required_valid_windows: int | None = None  # 3/4 or 2/3 (§13 cond 1)
+    aggregate_cagr: float | None = None
+    aggregate_sharpe: float | None = None
+    aggregate_net_profit: float | None = None
+    baseline_cagr: float | None = None
+    baseline_sharpe: float | None = None
+    baseline_net_profit: float | None = None
+    information_ratio: float | None = None
+    benchmark_integrity_ok: bool | None = None
+    single_trade_contribution: float | None = None
+    max_single_trade_contribution: float | None = None
+    single_month_contribution: float | None = None
+    max_single_month_contribution: float | None = None
+    min_leave_one_window_out_delta: float | None = None
+    leave_one_window_out_deltas: dict[str, float] | None = None
+    paired_bootstrap_p_value: float | None = None
+    paired_bootstrap_min_probability: float | None = None
+    bootstrap_direction_conflict: bool | None = None
+    stage_deltas: dict[str, float] | None = None  # G1-G0, G2-G1, G3-G2
+
+
+@dataclass(frozen=True)
 class VerdictResult:
     """The aggregate historical verdict + disposition (spec §1 / §5)."""
 
     verdict: str
     disposition: str | None
     reason: str
+    failed_gates: tuple[str, ...] = ()
 
 
 def decide_verdict(
@@ -62,34 +95,28 @@ def decide_verdict(
     g3_alias_reason: str | None = None,
     drawdown_deterioration: float | None = None,
     max_drawdown_degradation: float | None = None,
+    gates: AcceptanceGates | None = None,
 ) -> VerdictResult:
-    """Decide the aggregate historical verdict.
+    """Decide the aggregate historical verdict, enforcing the §13 acceptance
+    conditions when ``gates`` is supplied.
 
-    Parameters
-    ----------
-    validity:
-        ``"VALID"`` or ``"INVALID"``.
-    aggregate_delta:
-        The aggregate loop net increment (ΔLoop = G3 - G0). Required for a
-        VALID verdict; ignored for INVALID.
-    invalid_reason:
-        Required when validity is INVALID (the closed InvalidReason value).
-    stages_passing:
-        The set of activated stages that passed (subset of {G1, G2, G3}).
-        G3 is "activated" only when the trigger fired and the candidate was
-        built+accepted (NOT_TRIGGERED means G3 was not needed, so it is not
-        counted as a passing stage). Defaults to the empty set.
-    g3_alias_reason:
-        The G3 alias reason (NOT_TRIGGERED / TRIGGER_UNOBSERVABLE /
-        CONSTRUCTION_FAILED / CANDIDATE_REJECTED), or None if G3 fired and
-        was accepted.
-    drawdown_deterioration / max_drawdown_degradation:
-        The aggregate drawdown deterioration and its preregistered cap.
-        If the deterioration exceeds the cap, the verdict cannot be
-        EFFECTIVE (spec §13 line 372).
+    Decision order:
+      1. INVALID -> NOT_EVALUATED + UNPROVEN (validity FIRST).
+      2. G3 alias caps (CONSTRUCTION_FAILED / TRIGGER_UNOBSERVABLE ->
+         NOT_EVALUATED; CANDIDATE_REJECTED -> at most PARTIALLY_EFFECTIVE).
+      3. §13 acceptance gates (window count, aggregate CAGR/Sharpe/net
+         profit vs baseline, IR>0 + benchmark integrity, single-trade /
+         single-month concentration, leave-one-window-out min, paired
+         bootstrap threshold, bootstrap/direction non-conflict, per-stage
+         deltas). A failed gate blocks EFFECTIVE (the verdict falls to
+         PARTIALLY_EFFECTIVE or, if the aggregate is non-positive, to
+         NOT_EFFECTIVE+REFUTED).
+      4. Drawdown-deterioration gate (> cap blocks EFFECTIVE).
+      5. Non-positive aggregate delta -> NOT_EFFECTIVE + REFUTED.
+      6. All activated stages pass + all gates pass -> EFFECTIVE; else
+         PARTIALLY_EFFECTIVE.
     """
-    # 1. Validity FIRST: an INVALID experiment is NOT_EVALUATED + UNPROVEN
-    # regardless of the aggregate delta.
+    # 1. Validity FIRST.
     if validity == _INVALID:
         if not invalid_reason:
             raise ValueError(
@@ -123,52 +150,124 @@ def decide_verdict(
             disposition=Disposition.UNPROVEN.value,
             reason="G3 trigger unobservable (redesign increment unproven)",
         )
-    # 3. Drawdown-deterioration gate: if it exceeds the cap, EFFECTIVE is
-    # blocked (the verdict falls through to the delta-based decision).
+    # 3. §13 acceptance gates.
+    failed_gates: list[str] = []
+    if gates is not None:
+        failed_gates = _check_acceptance_gates(gates)
+    # 4. Drawdown-deterioration gate.
     dd_gate_blocks_effective = False
     if (drawdown_deterioration is not None
             and max_drawdown_degradation is not None
             and drawdown_deterioration > max_drawdown_degradation):
         dd_gate_blocks_effective = True
-    # 4. Non-positive aggregate delta -> NOT_EFFECTIVE + REFUTED.
+        failed_gates.append("drawdown_deterioration")
+    # 5. Non-positive aggregate delta -> NOT_EFFECTIVE + REFUTED.
     if aggregate_delta <= 0:
         return VerdictResult(
             verdict=HistoricalVerdict.NOT_EFFECTIVE.value,
             disposition=Disposition.REFUTED.value,
             reason="aggregate loop delta non-positive",
+            failed_gates=tuple(failed_gates),
         )
-    # 5. All activated stages pass -> EFFECTIVE; a subset -> PARTIALLY.
-    # G3 is "activated" only if it fired and was accepted (no alias). When
-    # NOT_TRIGGERED, G3 was not needed -> the loop verdict is on G1/G2 only,
-    # so a {G1, G2} passing set is "all activated stages".
+    # 6. All activated stages pass + all gates pass -> EFFECTIVE.
     g3_activated = g3_alias_reason is None
     activated = {"G1", "G2"}
     if g3_activated:
         activated.add("G3")
     all_activated_pass = passing >= activated
-    # CANDIDATE_REJECTED caps at PARTIALLY_EFFECTIVE (the rejected G3 is a
-    # valid negative stage result; the loop cannot be fully EFFECTIVE).
     if g3_alias_reason == G3AliasReason.CANDIDATE_REJECTED.value:
         return VerdictResult(
             verdict=HistoricalVerdict.PARTIALLY_EFFECTIVE.value,
             disposition=None,
             reason="G3 candidate rejected (capped at PARTIALLY_EFFECTIVE)",
+            failed_gates=tuple(failed_gates),
         )
-    if dd_gate_blocks_effective or not all_activated_pass:
+    if failed_gates or dd_gate_blocks_effective or not all_activated_pass:
+        reason = (
+            "drawdown-deterioration gate blocked EFFECTIVE"
+            if dd_gate_blocks_effective
+            else (f"acceptance gates failed: {failed_gates}" if failed_gates
+                  else "not all activated stages passed")
+        )
         return VerdictResult(
             verdict=HistoricalVerdict.PARTIALLY_EFFECTIVE.value,
             disposition=None,
-            reason=(
-                "drawdown-deterioration gate blocked EFFECTIVE"
-                if dd_gate_blocks_effective
-                else "not all activated stages passed"
-            ),
+            reason=reason,
+            failed_gates=tuple(failed_gates),
         )
     return VerdictResult(
         verdict=HistoricalVerdict.EFFECTIVE.value,
         disposition=None,
-        reason="all activated stages passed with positive aggregate delta",
+        reason="all activated stages passed with positive aggregate delta "
+               "and all §13 acceptance gates passed",
+        failed_gates=(),
     )
+
+
+def _check_acceptance_gates(gates: AcceptanceGates) -> list[str]:
+    """Return the list of §13 acceptance gates that FAILED.
+
+    A gate is checked only when the caller supplied BOTH the value and its
+    threshold (so a None gate is skipped, not failed). This is conservative:
+    a caller that supplies no gates checks none (but the aggregate-delta +
+    stage + alias + drawdown gates still apply in decide_verdict).
+    """
+    failed: list[str] = []
+    # Cond 1: >= required valid windows.
+    if (gates.valid_window_count is not None
+            and gates.required_valid_windows is not None
+            and gates.valid_window_count < gates.required_valid_windows):
+        failed.append("valid_window_count")
+    # Cond 3: aggregate CAGR / Sharpe / net profit > baseline.
+    if (gates.aggregate_cagr is not None and gates.baseline_cagr is not None
+            and gates.aggregate_cagr <= gates.baseline_cagr):
+        failed.append("aggregate_cagr")
+    if (gates.aggregate_sharpe is not None and gates.baseline_sharpe is not None
+            and gates.aggregate_sharpe <= gates.baseline_sharpe):
+        failed.append("aggregate_sharpe")
+    if (gates.aggregate_net_profit is not None
+            and gates.baseline_net_profit is not None
+            and gates.aggregate_net_profit <= gates.baseline_net_profit):
+        failed.append("aggregate_net_profit")
+    # Cond 6: IR > 0 AND benchmark integrity.
+    if gates.benchmark_integrity_ok is False:
+        failed.append("benchmark_integrity")
+    if (gates.information_ratio is not None
+            and gates.information_ratio <= 0.0):
+        failed.append("information_ratio_positive")
+    # Cond 7: single-trade / single-month concentration caps.
+    if (gates.single_trade_contribution is not None
+            and gates.max_single_trade_contribution is not None
+            and gates.single_trade_contribution > gates.max_single_trade_contribution):
+        failed.append("single_trade_contribution")
+    if (gates.single_month_contribution is not None
+            and gates.max_single_month_contribution is not None
+            and gates.single_month_contribution > gates.max_single_month_contribution):
+        failed.append("single_month_contribution")
+    # Cond 8: every leave-one-window-out delta >= min.
+    if (gates.leave_one_window_out_deltas is not None
+            and gates.min_leave_one_window_out_delta is not None):
+        for w, d in gates.leave_one_window_out_deltas.items():
+            if d < gates.min_leave_one_window_out_delta:
+                failed.append(f"leave_one_window_out:{w}")
+                break
+    # Cond 9: paired bootstrap >= threshold AND no direction conflict.
+    if (gates.paired_bootstrap_p_value is not None
+            and gates.paired_bootstrap_min_probability is not None
+            and gates.paired_bootstrap_p_value < gates.paired_bootstrap_min_probability):
+        # NOTE: bootstrap p_value is a "probability the null holds"; the
+        # §13 threshold is on the bootstrap PROBABILITY that the delta is
+        # positive. The caller passes the positive-direction probability;
+        # if it is below the threshold the gate fails.
+        failed.append("paired_bootstrap_probability")
+    if gates.bootstrap_direction_conflict:
+        failed.append("bootstrap_direction_conflict")
+    # Cond 10: per-stage deltas (G1-G0 / G2-G1 / activated G3-G2) positive.
+    if gates.stage_deltas is not None:
+        for stage_pair, d in gates.stage_deltas.items():
+            if d <= 0:
+                failed.append(f"stage_delta:{stage_pair}")
+    return failed
 
 
 def _check_invalid_reason(reason: str) -> None:
@@ -180,4 +279,4 @@ def _check_invalid_reason(reason: str) -> None:
         )
 
 
-__all__ = ["VerdictResult", "decide_verdict"]
+__all__ = ["AcceptanceGates", "VerdictResult", "decide_verdict"]
