@@ -141,3 +141,28 @@ def test_min_generations_parameter_respected():
     # With min_generations=2 the trigger CAN fire on two records.
     result = evaluate_g3(records, 0.2, 3.0, min_generations=2)
     assert result.eligible is True
+
+
+# --- preregistered generation_continuity_rule (whole-tree review) -----
+
+
+def test_break_on_failure_rule_excludes_transition():
+    """BREAK_ON_FAILURE: a bundle-transition record (flag False) breaks the
+    run AND is excluded; it does NOT seed a new run."""
+    recs = [
+        generation(1, gap=0.2, weight=3.0, pending=0, evidence_hash="a" * 64),
+        generation(2, gap=0.2, weight=3.0, pending=0, evidence_hash="a" * 64),
+        generation(3, gap=0.2, weight=3.0, pending=0, evidence_hash="b" * 64),
+        generation(4, gap=0.2, weight=3.0, pending=0, evidence_hash="b" * 64),
+        generation(5, gap=0.2, weight=3.0, pending=0, evidence_hash="b" * 64),
+    ]
+    r_hash = evaluate_g3(recs, 0.2, 3.0, generation_continuity_rule="BREAK_ON_HASH_CHANGE")
+    assert r_hash.eligible is True
+    r_cont = evaluate_g3(recs, 0.2, 3.0, generation_continuity_rule="CONTINUE")
+    assert r_cont.eligible is True
+
+
+def test_unknown_continuity_rule_rejected():
+    recs = [generation(1, gap=0.2, weight=3.0, pending=0)]
+    with pytest.raises(ValueError, match="generation_continuity_rule"):
+        evaluate_g3(recs, 0.2, 3.0, generation_continuity_rule="BOGUS")

@@ -114,6 +114,33 @@ def test_post_open_no_mutation_stays_valid(evaluator):
     assert res.invalid_reason is None
 
 
+def test_post_open_artifact_mutation_invalidates(tmp_path):
+    """A post-blind mutation to a registered candidate ARTIFACT (data /
+    assembly / config / source file) is detected via the constructor's
+    artifact_paths. Regression for the whole-tree review BLOCKER that the
+    harness never registered artifact paths so data/assembly/config hashes
+    were not revalidated post-blind."""
+    code_path = tmp_path / "code.py"
+    code_path.write_text("# frozen code\n")
+    data_path = tmp_path / "frozen_data.csv"
+    data_path.write_text("date,close\n2022-01-01,1.0\n")
+    ev = BlindEvaluator(
+        root=tmp_path, code_paths=[code_path],
+        eligible_windows=("W1", "W2", "W3", "W4"),
+        artifact_paths=[data_path],
+    )
+    ev.freeze_all(_frozen_sets())
+    ev.open_blind(["W1", "W2", "W3", "W4"])
+    # No mutation yet -> valid.
+    assert ev.validate_immutability().valid is True
+    # Mutate the data file post-blind -> POST_BLIND_MUTATION.
+    data_path.write_text("date,close\n2022-01-01,2.0\n")
+    res = ev.validate_immutability()
+    assert res.valid is False
+    assert res.invalid_reason == "POST_BLIND_MUTATION"
+    assert str(data_path) in res.mutated_paths
+
+
 def test_post_open_rejects_candidate_reselection(evaluator, tmp_path):
     """After opening, the evaluator must reject any attempt to reselect,
     regenerate, or retry a candidate (spec §14 line 424)."""

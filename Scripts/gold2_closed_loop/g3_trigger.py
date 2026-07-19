@@ -72,16 +72,15 @@ def evaluate_g3(
     weight_ceiling: float,
     *,
     min_generations: int = _DEFAULT_MIN_GENERATIONS,
+    generation_continuity_rule: str = "BREAK_ON_HASH_CHANGE",
+    allow_post_trigger_generations: bool = False,
 ) -> G3TriggerResult:
     """Evaluate the G3 trigger over a sequence of generation records.
 
     Parameters
     ----------
     records:
-        The window's generation records (in file order). The trigger
-        considers the adjacent-valid run ending at the tail; records before
-        a break (a generation whose ``trigger_observation_valid`` is False)
-        are NOT part of the run.
+        The window's generation records (in file order).
     gap_threshold:
         The minimum ``attribution_gap`` for the trigger (inclusive).
     weight_ceiling:
@@ -89,38 +88,34 @@ def evaluate_g3(
         the record is NON_CONVERGED.
     min_generations:
         The minimum number of adjacent valid records required (default 3).
+    generation_continuity_rule:
+        The preregistered continuity rule (§7 line 268). ``BREAK_ON_HASH_CHANGE``
+        (default): the run is single-bundle (breaks when the evidence hash
+        changes). ``BREAK_ON_FAILURE``: the run also breaks at (and excludes)
+        a record whose ``trigger_observation_valid`` is False; the transition
+        record does NOT seed a new run (most conservative). ``CONTINUE``: the
+        run is the entire record list, spanning bundles (least conservative).
+    allow_post_trigger_generations:
+        Informational (§7 line 268): the caller enforces the post-trigger
+        cap by not appending generations after the trigger fires.
     """
     if min_generations < 1:
         raise ValueError(
             f"min_generations must be >= 1, got {min_generations}"
         )
-    # Build the adjacent run ending at the tail: the maximal suffix of
-    # records that all share the SAME frozen ``input_evidence_sha256``
-    # (spec §6 line 246: "连续三代" must be over a single frozen evidence
-    # bundle, not a combination of records from different bundles). The
-    # tail always seeds a run of length 1; the run extends backwards
-    # through every preceding record whose evidence hash equals the next
-    # (tailward) record's hash. A record whose evidence hash DIFFERS from
-    # the next record's breaks the run (it belongs to an older bundle).
-    #
-    # NOTE on ``trigger_observation_valid``: that flag is PARENT-CONSISTENCY
-    # (True iff this record's hash matches its PARENT's). It marks a
-    # bundle TRANSITION (the first record on a new bundle has the flag
-    # False). The trigger run is BUNDLE-based, not parent-consistency-based:
-    # a transition record is the SEED of a new same-bundle run and IS
-    # counted toward it. So the run is built from raw evidence-hash
-    # equality, NOT from the flag. This is what the spec's "same frozen
-    # evidence bundle" requires: three generations all on bundle A are a
-    # valid run even if the first of them followed a bundle-B record. The
-    # flag is persisted for audit (it records where transitions happened)
-    # but is not the trigger-run criterion.
-    run = _suffix_run(records)
+    if generation_continuity_rule not in {
+        "BREAK_ON_HASH_CHANGE", "BREAK_ON_FAILURE", "CONTINUE",
+    }:
+        raise ValueError(
+            f"generation_continuity_rule {generation_continuity_rule!r} "
+            "not in {BREAK_ON_HASH_CHANGE, BREAK_ON_FAILURE, CONTINUE}"
+        )
+    run = _suffix_run(records, rule=generation_continuity_rule)
     if len(run) < min_generations:
         return G3TriggerResult(
             eligible=False,
             alias_reason=G3AliasReason.TRIGGER_UNOBSERVABLE.value,
         )
-    # Gap / weight / pending conditions on EVERY record in the run.
     for record in run:
         if record.attribution_gap < gap_threshold:
             return G3TriggerResult(
@@ -132,7 +127,6 @@ def evaluate_g3(
                 eligible=False,
                 alias_reason=G3AliasReason.NOT_TRIGGERED.value,
             )
-        # Weight condition: weight >= ceiling OR NON_CONVERGED.
         if record.convergence_status == "NON_CONVERGED":
             continue
         if record.shaping_weight < weight_ceiling:
@@ -143,30 +137,36 @@ def evaluate_g3(
     return G3TriggerResult(eligible=True, alias_reason=None)
 
 
-def _suffix_run(records: Sequence[GenerationRecord]) -> list[GenerationRecord]:
-    """Return the maximal suffix of ``records`` whose members all share the
-    SAME frozen ``input_evidence_sha256`` (a single-bundle run, per spec
-    §6 line 246). The tail always seeds a run of length 1; the run extends
-    backwards through every preceding record whose evidence hash equals the
-    next (tailward) record's hash. A record whose evidence hash differs from
-    the next record's breaks the run (it belongs to an older bundle).
+def _suffix_run(
+    records: Sequence[GenerationRecord],
+    *,
+    rule: str = "BREAK_ON_HASH_CHANGE",
+) -> list[GenerationRecord]:
+    """Return the maximal suffix run of ``records`` per ``rule``.
 
-    This is BUNDLE-based, not ``trigger_observation_valid``-based: a
-    bundle-transition record (whose flag is False because its hash differs
-    from its PARENT's) is the SEED of the new-bundle run and IS counted
-    toward it. The trigger needs three records on ONE bundle; whether the
-    first of them followed a different bundle is irrelevant. (The flag is
-    audit-only: it records where transitions happened.)
-
-    Examples
-    --------
-    * ``[A, A, A]`` -> ``[A, A, A]``  (length 3, one bundle)
-    * ``[A, A, B]`` -> ``[B]``        (length 1; tail B is a new bundle)
-    * ``[B, A, A, A]`` -> ``[A, A, A]`` (length 3; the early B is irrelevant)
+    * ``BREAK_ON_HASH_CHANGE`` (default): the run is the maximal suffix
+      whose members all share the SAME ``input_evidence_sha256`` (a
+      single-bundle run, §6 line 246). The tail seeds a run of length 1.
+    * ``BREAK_ON_FAILURE``: the run breaks at (and excludes) the first
+      record whose ``trigger_observation_valid`` is False; that record
+      does NOT seed a new run. Most conservative.
+    * ``CONTINUE``: the run is the ENTIRE record list (no break). Least
+      conservative; spans bundles.
     """
     if not records:
         return []
-    run: list[GenerationRecord] = [records[-1]]
+    if rule == "CONTINUE":
+        return list(records)
+    if rule == "BREAK_ON_FAILURE":
+        run: list[GenerationRecord] = []
+        for record in reversed(records):
+            if not record.trigger_observation_valid:
+                break
+            run.append(record)
+        run.reverse()
+        return run
+    # BREAK_ON_HASH_CHANGE (default): single-bundle suffix run.
+    run = [records[-1]]
     for i in range(len(records) - 1, 0, -1):
         current = records[i]
         preceding = records[i - 1]

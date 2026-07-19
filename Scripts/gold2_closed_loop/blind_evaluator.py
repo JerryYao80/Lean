@@ -229,6 +229,8 @@ class BlindEvaluator:
         root: Path | str,
         code_paths: Iterable[Path | str],
         eligible_windows: Sequence[str],
+        *,
+        artifact_paths: Iterable[Path | str] | None = None,
     ) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
@@ -240,13 +242,22 @@ class BlindEvaluator:
         # Frozen code hashes captured at open time for the immutability
         # revalidation. Empty until open.
         self._frozen_code_hashes: dict[str, str] = {}
-        # Registered candidate artifact paths (source/config/data files the
-        # frozen candidates pin) for the post-open immutability revalidation.
-        # Empty until register_artifact_paths is called.
+        # Registered candidate artifact paths (source/config/data/assembly/
+        # market-model files the frozen candidates pin) for the post-open
+        # immutability revalidation. Seeded from the constructor's
+        # ``artifact_paths`` (whole-tree review: the harness never called
+        # register_artifact_paths, so data/assembly/config hashes were not
+        # revalidated post-blind). Their hashes are captured at open_blind
+        # time, like the code hashes.
         self._frozen_artifact_hashes: dict[str, str] = {}
         # Per-candidate "<window>/<stage>/<kind>" -> file path, for the
         # execute_frozen defense-in-depth source/config byte check.
         self._candidate_artifact_paths: dict[str, str] = {}
+        # Artifact paths pending open-time hashing (constructor + register).
+        self._pending_artifact_paths: list[Path] = []
+        if artifact_paths is not None:
+            for p in artifact_paths:
+                self._pending_artifact_paths.append(Path(p))
 
     # -----------------------------------------------------------------
     # Freeze
@@ -349,6 +360,14 @@ class BlindEvaluator:
         self._frozen_code_hashes = {
             str(p): _file_sha256(p) for p in self._code_paths if p.is_file()
         }
+        # Also capture the hashes of every pending artifact path (data /
+        # assembly / market-model / config / candidate source files) so
+        # validate_immutability revalidates them post-blind. The constructor
+        # + register_artifact_paths populate _pending_artifact_paths.
+        for p in self._pending_artifact_paths:
+            if p.is_file():
+                self._frozen_artifact_hashes[str(p)] = _file_sha256(p)
+        self._pending_artifact_paths = []
         payload = {
             "opened_at_utc": _now_utc_iso(),
             "eligible_windows": list(self._eligible_windows),
@@ -441,6 +460,9 @@ class BlindEvaluator:
         for p, sha in path_to_expected_sha.items():
             key = str(p)
             self._frozen_artifact_hashes[key] = sha
+            # Also queue the path for open-time hashing (so its sha is
+            # captured from the on-disk file at open, like the code paths).
+            self._pending_artifact_paths.append(Path(p))
             # If the key looks like "<window>/<stage>/<kind>", also record
             # it for the per-candidate execution-time check.
             parts = key.split("/")

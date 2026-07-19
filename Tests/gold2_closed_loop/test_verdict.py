@@ -176,3 +176,79 @@ def test_drawdown_deterioration_within_limit_ok():
         max_drawdown_degradation=0.10,
     )
     assert result.verdict == "EFFECTIVE"
+
+
+# --- §13 cond 2: G3 beats G0 in >= 60% of valid windows ----------------
+
+
+def test_g3_majority_loss_blocks_effective():
+    """§13 cond 2: G3 must beat G0 in >= required valid windows. Losing
+    the majority caps the verdict below EFFECTIVE (regression for the
+    whole-tree review finding that cond 2 was not enforced)."""
+    from Scripts.gold2_closed_loop.verdict import AcceptanceGates
+    result = decide_verdict(
+        validity="VALID",
+        aggregate_delta=0.05,
+        stages_passing={"G1", "G2", "G3"},
+        g3_alias_reason=None,
+        gates=AcceptanceGates(
+            g3_beats_g0_window_count=2,
+            required_g3_beats_g0_windows=3,
+        ),
+    )
+    assert result.verdict != "EFFECTIVE"
+    assert any("g3_beats_g0" in g for g in result.failed_gates)
+
+
+def test_g3_majority_met_allows_effective():
+    """Meeting the G3-majority gate does not block EFFECTIVE."""
+    from Scripts.gold2_closed_loop.verdict import AcceptanceGates
+    result = decide_verdict(
+        validity="VALID",
+        aggregate_delta=0.05,
+        stages_passing={"G1", "G2", "G3"},
+        g3_alias_reason=None,
+        gates=AcceptanceGates(
+            g3_beats_g0_window_count=3,
+            required_g3_beats_g0_windows=3,
+        ),
+    )
+    assert result.verdict == "EFFECTIVE"
+
+
+# --- §12/§17 DSR gate --------------------------------------------------
+
+
+def test_low_deflated_sharpe_blocks_effective():
+    """A deflated Sharpe below the preregistered floor blocks EFFECTIVE
+    (the multiple-testing-deflated Sharpe, not the raw observed one).
+    Regression for the whole-tree review finding that DSR was never wired
+    into the verdict."""
+    from Scripts.gold2_closed_loop.verdict import AcceptanceGates
+    result = decide_verdict(
+        validity="VALID",
+        aggregate_delta=0.05,
+        stages_passing={"G1", "G2", "G3"},
+        g3_alias_reason=None,
+        gates=AcceptanceGates(
+            deflated_sharpe=0.1,
+            min_deflated_sharpe=0.5,
+        ),
+    )
+    assert result.verdict != "EFFECTIVE"
+    assert "deflated_sharpe" in result.failed_gates
+
+
+def test_deflated_sharpe_met_allows_effective():
+    from Scripts.gold2_closed_loop.verdict import AcceptanceGates
+    result = decide_verdict(
+        validity="VALID",
+        aggregate_delta=0.05,
+        stages_passing={"G1", "G2", "G3"},
+        g3_alias_reason=None,
+        gates=AcceptanceGates(
+            deflated_sharpe=0.6,
+            min_deflated_sharpe=0.5,
+        ),
+    )
+    assert result.verdict == "EFFECTIVE"

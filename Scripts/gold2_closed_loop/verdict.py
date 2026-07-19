@@ -56,6 +56,10 @@ class AcceptanceGates:
 
     valid_window_count: int | None = None
     required_valid_windows: int | None = None  # 3/4 or 2/3 (§13 cond 1)
+    # §13 cond 2: G3 beats G0 in >= 60% of valid windows (3/4 or 2/3).
+    g3_beats_g0_window_count: int | None = None
+    required_g3_beats_g0_windows: int | None = None
+    total_valid_windows: int | None = None  # denominator for the 60%
     aggregate_cagr: float | None = None
     aggregate_sharpe: float | None = None
     aggregate_net_profit: float | None = None
@@ -74,6 +78,15 @@ class AcceptanceGates:
     paired_bootstrap_min_probability: float | None = None
     bootstrap_direction_conflict: bool | None = None
     stage_deltas: dict[str, float] | None = None  # G1-G0, G2-G1, G3-G2
+    # §12/§17 DSR: the deflated Sharpe must exceed the preregistered floor
+    # (the multiple-testing-deflated Sharpe, not the raw observed one).
+    deflated_sharpe: float | None = None
+    min_deflated_sharpe: float | None = None
+    # §12 effective trials (reported; the DSR already folds it in, but the
+    # gate may require a minimum effective-trial count for the verdict to
+    # claim statistical independence).
+    effective_trials: float | None = None
+    min_effective_trials: float | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +231,13 @@ def _check_acceptance_gates(gates: AcceptanceGates) -> list[str]:
             and gates.required_valid_windows is not None
             and gates.valid_window_count < gates.required_valid_windows):
         failed.append("valid_window_count")
+    # Cond 2: G3 beats G0 in >= 60% of valid windows (3/4 or 2/3). The
+    # caller supplies the count of valid windows where G3's net (or
+    # risk-adjusted) result beat G0, and the required minimum.
+    if (gates.g3_beats_g0_window_count is not None
+            and gates.required_g3_beats_g0_windows is not None
+            and gates.g3_beats_g0_window_count < gates.required_g3_beats_g0_windows):
+        failed.append("g3_beats_g0_majority")
     # Cond 3: aggregate CAGR / Sharpe / net profit > baseline.
     if (gates.aggregate_cagr is not None and gates.baseline_cagr is not None
             and gates.aggregate_cagr <= gates.baseline_cagr):
@@ -267,6 +287,19 @@ def _check_acceptance_gates(gates: AcceptanceGates) -> list[str]:
         for stage_pair, d in gates.stage_deltas.items():
             if d <= 0:
                 failed.append(f"stage_delta:{stage_pair}")
+    # §12/§17 DSR gate: the multiple-testing-deflated Sharpe must clear the
+    # preregistered floor (the observed Sharpe is NOT acceptable; the
+    # deflated one guards against selection bias from many attempts).
+    if (gates.deflated_sharpe is not None
+            and gates.min_deflated_sharpe is not None
+            and gates.deflated_sharpe < gates.min_deflated_sharpe):
+        failed.append("deflated_sharpe")
+    # §12 effective-trials floor: the verdict may require a minimum
+    # effective-trial count before it claims statistical independence.
+    if (gates.effective_trials is not None
+            and gates.min_effective_trials is not None
+            and gates.effective_trials < gates.min_effective_trials):
+        failed.append("effective_trials")
     return failed
 
 

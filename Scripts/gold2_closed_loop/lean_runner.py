@@ -92,6 +92,7 @@ def build_run_config(
     window_id: str | None = None,
     stage_id: str | None = None,
     candidate_id: str | None = None,
+    data_folder: Path | str | None = None,
 ) -> dict[str, Any]:
     """Deep-copy ``base`` and inject proof-run overrides.
 
@@ -139,6 +140,20 @@ def build_run_config(
 
     # Absolute, unique results-destination-folder per run.
     config["results-destination-folder"] = str(Path(run_dir).resolve())
+
+    # ISOLATION (spec §6 line 118): pin LEAN's data-folder to a FROZEN
+    # per-experiment snapshot root so a candidate builder CANNOT read the
+    # blind years during construction. The caller passes ``data_folder`` =
+    # an absolute path to a read-only snapshot that contains ONLY the
+    # train/review partitions (the blind partition is physically absent
+    # from the snapshot). This is the hard guarantee that the blind data
+    # is invisible during construction; the ConstructionSandbox's access
+    # log is the audit layer on top. None in unit tests only.
+    if data_folder is not None:
+        frozen = Path(data_folder).resolve()
+        config["data-folder"] = str(frozen)
+        config["data-directory"] = str(frozen)
+        config["tushare-data-path"] = str(frozen)
 
     # Deterministic packet name: <run_dir>/<run_id>.json.
     # When run_id is provided, set algorithm-id so the packet is exactly

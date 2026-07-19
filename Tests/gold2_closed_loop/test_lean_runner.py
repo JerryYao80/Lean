@@ -81,6 +81,32 @@ def test_config_disables_fallbacks_and_sets_absolute_run_dir(tmp_path):
     assert config["parameters"]["fallback-gbm-enabled"] == "false"
 
 
+def test_data_folder_pinned_to_frozen_snapshot(tmp_path):
+    """ISOLATION (spec §6 line 118): when a frozen data_folder is supplied,
+    LEAN's data-folder/data-directory/tushare-data-path are pinned to that
+    ABSOLUTE read-only snapshot — NOT the shared mutable ../../../Data tree
+    that contains the blind years. Regression for the whole-tree review
+    BLOCKER that construction could read blind OHLC."""
+    frozen = tmp_path / "frozen-snapshot"
+    frozen.mkdir()
+    config = build_run_config(
+        BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
+        run_id="run-001", data_folder=frozen,
+    )
+    assert config["data-folder"] == str(frozen.resolve())
+    assert config["data-directory"] == str(frozen.resolve())
+    assert config["tushare-data-path"] == str(frozen.resolve())
+    assert config["data-folder"] != "../../../Data"
+
+
+def test_data_folder_absent_leaves_base(tmp_path):
+    config = build_run_config(
+        BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
+        run_id="run-001",
+    )
+    assert config["data-folder"] == "../../../Data"
+
+
 def test_exact_packet_required(tmp_path):
     (tmp_path / "stale.json").write_text("{}")
     with pytest.raises(FileNotFoundError, match="expected result packet"):
