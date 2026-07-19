@@ -200,25 +200,82 @@ def _root_hash(index: list[IndexEntry]) -> str:
 def _require_failed_candidate_present(
     root: Path, index: list[IndexEntry]
 ) -> None:
-    """Refuse to seal if no failed-candidate artifact is present (spec §15
-    line 443: complete negative results must be preserved before
-    interpretation).
+    """Refuse to seal if any recorded failed candidate's artifact is
+    MISSING from the evidence tree (spec §15 line 443: complete negative
+    results must be preserved before interpretation).
 
-    A failed-candidate artifact is any indexed file whose path contains
-    'FAILED'. If the evidence tree has windows but no FAILED artifact, the
-    seal refuses (the experiment did not preserve its negative results).
+    Cross-references the candidate-events journal (if present) so the seal
+    cannot pass on a tree that recorded N failed candidates in the journal
+    but only preserved some of their on-disk artifacts. The journal records
+    every failed candidate by candidate_id; for each, the seal looks for a
+    matching ``FAILED-<candidate_id>`` (or ``FAILED-<candidate_id>.json``)
+    artifact in the index. A recorded failure with no preserved artifact
+    raises (the negative-result set is incomplete).
+
+    If the tree has window artifacts but NO journal and NO FAILED-*
+    artifact at all, the seal also refuses (no negative results preserved).
     """
     has_windows = any(e.path.startswith("windows/") for e in index)
     if not has_windows:
-        return
-    has_failed = any("FAILED" in e.path.upper() for e in index)
-    if not has_failed:
-        raise ValueError(
-            "failed candidate artifact missing: the evidence tree has "
-            "window artifacts but no FAILED-candidate record; spec §15 "
-            "line 443 requires complete negative results to be sealed "
-            "before interpreting them"
+        return  # pre-construction root: nothing to require
+    indexed_paths = {e.path for e in index}
+    # Cross-reference the candidate-events journal.
+    journal_path = root / "candidate-events.jsonl"
+    recorded_failures: list[str] = []
+    if journal_path.is_file():
+        import json as _json
+        try:
+            for line in journal_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                etype = rec.get("event_type", "")
+                # A failed candidate is recorded with a terminal-failure
+                # event type (FAILED_STRATEGY / FAILED_INFRASTRUCTURE /
+                # FAILED_EVIDENCE_CAPTURE / TIMED_OUT / NO_TRADES / PRUNED /
+                # REJECTED / INVALID / DOMINATED / DUPLICATE).
+                if etype in {
+                    "FAILED_STRATEGY", "FAILED_INFRASTRUCTURE",
+                    "FAILED_EVIDENCE_CAPTURE", "TIMED_OUT", "NO_TRADES",
+                    "PRUNED", "REJECTED", "INVALID", "DOMINATED", "DUPLICATE",
+                }:
+                    cid = rec.get("candidate_id")
+                    if cid:
+                        recorded_failures.append(str(cid))
+        except OSError:
+            pass
+    # For every recorded failed candidate, require a preserved artifact.
+    for cid in recorded_failures:
+        # Look for any indexed path containing the candidate_id under a
+        # FAILED-* name (the per-window FAILED-<id>.json convention).
+        found = any(
+            ("FAILED" in p.upper()) and (cid in p)
+            for p in indexed_paths
         )
+        if not found:
+            raise ValueError(
+                f"failed candidate artifact missing: candidate-events "
+                f"journal records failed candidate {cid!r} but no "
+                f"FAILED-{cid} artifact is in the evidence tree; spec §15 "
+                f"line 443 requires complete negative results to be sealed "
+                f"before interpreting them"
+            )
+    # If there is no journal but there are windows, require at least one
+    # FAILED-* artifact (the experiment must preserve SOME negative result).
+    if not recorded_failures:
+        has_failed = any("FAILED" in e.path.upper() for e in index)
+        if not has_failed:
+            raise ValueError(
+                "failed candidate artifact missing: the evidence tree has "
+                "window artifacts but no FAILED-candidate record and no "
+                "candidate-events journal; spec §15 line 443 requires "
+                "complete negative results to be sealed before interpreting "
+                "them"
+            )
 
 
 def _now_utc_iso() -> str:

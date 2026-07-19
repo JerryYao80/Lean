@@ -859,25 +859,109 @@ def _execute(args) -> int:
         print(f"execute: lifecycle.json unreadable: {error}", file=sys.stderr)
         return 2
     status = lifecycle.get("lifecycle_status")
-    if status != "PREREGISTERED":
+    # Enforce the §5 lifecycle state machine via state_machine.transition.
+    # Legal entry points for execute: NEW (-> PREREGISTERED is the caller's
+    # job, but a NEW root with a draft may proceed) or PREREGISTERED
+    # (-> DATA_VALIDATED -> RUNNING_CONSTRUCTION). A root already past
+    # RUNNING_CONSTRUCTION is rejected unless --resume (and resume is only
+    # legal pre-blind).
+    from Scripts.gold2_closed_loop.atomic_io import atomic_write_json
+    from Scripts.gold2_closed_loop.state_machine import (
+        LifecycleStatus,
+        transition,
+    )
+    try:
+        cur = LifecycleStatus(status) if status else LifecycleStatus.NEW
+    except ValueError:
         print(
-            f"execute: lifecycle status is {status!r}, not PREREGISTERED "
-            "(spec §5: execute may only run from PREREGISTERED)",
+            f"execute: unknown lifecycle status {status!r}", file=sys.stderr,
+        )
+        return 2
+    if args.resume:
+        # --resume: only legal pre-blind (RUNNING_CONSTRUCTION or
+        # CANDIDATES_FROZEN); the harness skips complete hash-valid ops and
+        # quarantines partial dirs. Post-blind resume is forbidden (the
+        # BlindEvaluator.resume guard enforces that at the harness layer).
+        if cur not in (LifecycleStatus.RUNNING_CONSTRUCTION,
+                       LifecycleStatus.CANDIDATES_FROZEN,
+                       LifecycleStatus.FAILED_EXECUTION):
+            print(
+                f"execute --resume: lifecycle status {cur.value!r} is not "
+                "resumable (resume is pre-blind only; spec §10)",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"execute --resume: resuming from {cur.value!r}; the harness "
+            "skips complete hash-valid operations and quarantines partial "
+            "directories (spec §10).",
+            file=sys.stderr,
+        )
+        return 0
+    if cur == LifecycleStatus.NEW:
+        # A NEW root must be preregistered first.
+        print(
+            "execute: lifecycle status is NEW; run `preregister` first "
+            "(spec §5: PREREGISTERED must precede execute)",
             file=sys.stderr,
         )
         return 2
-    # The execute command does NOT itself run LEAN (the integration harness
-    # does, against real data). It records the lifecycle transition to
-    # RUNNING_CONSTRUCTION and reports that the construction + blind
-    # evaluation must be driven by the harness. This keeps the CLI the
-    # single external interface while the heavy I/O stays in the harness.
-    lifecycle["lifecycle_status"] = "RUNNING_CONSTRUCTION"
-    from Scripts.gold2_closed_loop.atomic_io import atomic_write_json
+    if cur != LifecycleStatus.PREREGISTERED:
+        print(
+            f"execute: lifecycle status is {cur.value!r}, not PREREGISTERED "
+            "(spec §5: execute may only run from PREREGISTERED without "
+            "--resume)",
+            file=sys.stderr,
+        )
+        return 2
+    # Transition PREREGISTERED -> DATA_VALIDATED -> RUNNING_CONSTRUCTION
+    # via the §5 state machine (not a direct jump).
+    try:
+        data_validated = transition(cur, LifecycleStatus.DATA_VALIDATED)
+        running = transition(data_validated, LifecycleStatus.RUNNING_CONSTRUCTION)
+    except ValueError as error:
+        print(f"execute: lifecycle transition rejected: {error}", file=sys.stderr)
+        return 2
+    # Re-validate the Phase 0 artifact hash against the current data
+    # snapshot (spec §3 line 116: execute must re-verify Phase 0 artifact
+    # hash vs the current data snapshot). If the input snapshots changed,
+    # refuse (data drift).
+    snap_path = root / "input_snapshots.json"
+    if snap_path.is_file():
+        try:
+            from Scripts.gold2_closed_loop.evidence import snapshot_inputs
+            recorded = json.loads(snap_path.read_text(encoding="utf-8"))
+            # Re-hash every recorded snapshot path; any mismatch = drift.
+            drift = []
+            for path_str, expected_sha in recorded.items():
+                p = Path(path_str)
+                if not p.is_file():
+                    drift.append(f"{path_str} (deleted)")
+                    continue
+                from Scripts.gold2_closed_loop.sealing import _file_sha256
+                if _file_sha256(p) != expected_sha:
+                    drift.append(path_str)
+            if drift:
+                print(
+                    f"execute: input snapshot drift — {drift} — changed "
+                    "since preregistration; spec §3 line 116 requires the "
+                    "Phase 0 artifact hash to match the current data "
+                    "snapshot. Use a new experiment id.",
+                    file=sys.stderr,
+                )
+                lifecycle["lifecycle_status"] = LifecycleStatus.INVALID.value
+                atomic_write_json(lifecycle_path, lifecycle)
+                return 2
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"execute: input_snapshots.json unreadable: {error}",
+                  file=sys.stderr)
+            return 2
+    lifecycle["lifecycle_status"] = running.value
     atomic_write_json(lifecycle_path, lifecycle)
     print(
-        f"execute: experiment {root} transitioned to RUNNING_CONSTRUCTION; "
-        "drive the construction + blind evaluation via the integration "
-        "harness, then run `verify-seal`.",
+        f"execute: experiment {root} transitioned to {running.value} "
+        "(via DATA_VALIDATED, §5 state machine); drive the construction + "
+        "blind evaluation via the integration harness, then run `verify-seal`.",
         file=sys.stderr,
     )
     return 0

@@ -69,14 +69,20 @@ def build_report(
     bootstrap: dict[str, Any],
     leave_one_window_out: dict[str, float],
     paired_direction: dict[str, int],
+    aggregate_artifact_rel: str | None = None,
 ) -> Report:
     """Build the §17 final report from sealed evidence.
 
-    Every metric in the per-window reports MUST be traceable to an indexed
-    artifact: the report records ``artifact_hashes`` mapping each metric
-    source to its indexed sha256. A metric with no indexed artifact raises
-    ``ValueError`` (anti-p-hacking: the report cannot cite a number it
-    cannot seal).
+    Every metric the report cites MUST be traceable to an indexed artifact:
+    * per-window G0/G1/G2/G3 metrics carry ``artifact_rel`` (the indexed
+      packet path); the report records the sha256.
+    * the aggregate_delta / verdict / baselines / worst_window /
+      concentration / bootstrap / leave-one_window_out / paired_direction
+      are traced to ``aggregate_artifact_rel`` (the indexed aggregate
+      verdict / statistics artifact). If it is not in the seal index, the
+      report raises (anti-p-hacking: no un-sealed number in the report).
+
+    A metric with no indexed artifact raises ``ValueError``.
     """
     indexed = {e.path: e.sha256 for e in seal.index}
     artifact_hashes: dict[str, str] = {}
@@ -99,6 +105,23 @@ def build_report(
                     "evidence"
                 )
             artifact_hashes[f"{wr.window_id}/{stage}"] = sha
+    # The aggregate numbers (delta, verdict, baselines, concentration,
+    # bootstrap, LOO, paired direction) must trace to an indexed aggregate
+    # artifact (the verdict.json + statistics artifact). Without it the
+    # report refuses to publish those numbers.
+    if aggregate_artifact_rel is None:
+        raise ValueError(
+            "report: aggregate_artifact_rel is required; the aggregate "
+            "delta/verdict/baselines/concentration/bootstrap/LOO/paired-"
+            "direction numbers must trace to a sealed aggregate artifact"
+        )
+    agg_sha = indexed.get(aggregate_artifact_rel)
+    if agg_sha is None:
+        raise ValueError(
+            f"report: aggregate artifact {aggregate_artifact_rel!r} is not "
+            "in the seal index; the report may only cite sealed evidence"
+        )
+    artifact_hashes["aggregate"] = agg_sha
     return Report(
         windows=tuple(per_window),
         aggregate_delta=aggregate_delta,
