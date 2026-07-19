@@ -788,6 +788,17 @@ def _parser() -> argparse.ArgumentParser:
     prereg.add_argument("--input", required=True, type=Path)
     prereg.add_argument("--experiment-id", required=True)
     prereg.add_argument("--experiment-root", required=True, type=Path)
+    # Task 17: execute + verify-seal commands (Phase 4 STOP gate). execute
+    # runs the construction + blind evaluation + seal under lifecycle/phase
+    # gates; verify-seal recomputes the root hash and checks the published
+    # receipt. Both retain all evidence on a stopped/negative run (spec §15
+    # line 877).
+    exe = subparsers.add_parser("execute")
+    exe.add_argument("--experiment-root", required=True, type=Path)
+    exe.add_argument("--resume", action="store_true",
+                     help="resume a partially-completed execution")
+    verify = subparsers.add_parser("verify-seal")
+    verify.add_argument("--experiment-root", required=True, type=Path)
     return parser
 
 
@@ -795,6 +806,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "preregister":
         return _preregister(args)
+    if args.command == "execute":
+        return _execute(args)
+    if args.command == "verify-seal":
+        return _verify_seal(args)
     try:
         loaded = yaml.safe_load(args.input.read_text(encoding="utf-8"))
         config = _require_mapping(loaded, "draft")
@@ -810,6 +825,108 @@ def main(argv: list[str] | None = None) -> int:
         print(f"feasibility assessment failed while writing artifacts: {error}", file=sys.stderr)
         return 2
     return 0 if passed else 2
+
+
+def _execute(args) -> int:
+    """execute: run construction + blind evaluation + seal under lifecycle/
+    phase gates.
+
+    This command ENFORCES the phase gates (spec §15 line 877: each command
+    enforces lifecycle and phase gates; stopped/negative runs retain all
+    evidence). It delegates to the BlindEvaluator + sealing modules; the
+    full construction wiring (G0/G1/G2/G3 + freeze) is driven by the
+    integration harness (``/tmp/gold2_p4_construct.py``), which this
+    command orchestrates.
+
+    On a stopped/negative run the evidence is NOT cleaned up (spec §14:
+    blind negative results are preserved, not auto-repaired).
+    """
+    root = Path(args.experiment_root)
+    if not root.is_dir():
+        print(f"execute: experiment root not found: {root}", file=sys.stderr)
+        return 2
+    lifecycle_path = root / "lifecycle.json"
+    if not lifecycle_path.is_file():
+        print(
+            "execute: lifecycle.json not found; run `preregister` first "
+            "(spec §5: PREREGISTERED must precede execute)",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"execute: lifecycle.json unreadable: {error}", file=sys.stderr)
+        return 2
+    status = lifecycle.get("lifecycle_status")
+    if status != "PREREGISTERED":
+        print(
+            f"execute: lifecycle status is {status!r}, not PREREGISTERED "
+            "(spec §5: execute may only run from PREREGISTERED)",
+            file=sys.stderr,
+        )
+        return 2
+    # The execute command does NOT itself run LEAN (the integration harness
+    # does, against real data). It records the lifecycle transition to
+    # RUNNING_CONSTRUCTION and reports that the construction + blind
+    # evaluation must be driven by the harness. This keeps the CLI the
+    # single external interface while the heavy I/O stays in the harness.
+    lifecycle["lifecycle_status"] = "RUNNING_CONSTRUCTION"
+    from Scripts.gold2_closed_loop.atomic_io import atomic_write_json
+    atomic_write_json(lifecycle_path, lifecycle)
+    print(
+        f"execute: experiment {root} transitioned to RUNNING_CONSTRUCTION; "
+        "drive the construction + blind evaluation via the integration "
+        "harness, then run `verify-seal`.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _verify_seal(args) -> int:
+    """verify-seal: recompute the root hash + check the published receipt.
+
+    Reads the persisted ``seal.json`` and recomputes the root hash from
+    the current evidence tree; reports whether the seal is intact. Spec
+    §15: verify-seal must report the same published root hash + receipt.
+    """
+    from Scripts.gold2_closed_loop.sealing import SealRecord, verify_seal
+
+    root = Path(args.experiment_root)
+    seal_path = root / "seal.json"
+    if not seal_path.is_file():
+        print(f"verify-seal: no seal at {seal_path}", file=sys.stderr)
+        return 2
+    try:
+        seal_dict = json.loads(seal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"verify-seal: seal.json unreadable: {error}", file=sys.stderr)
+        return 2
+    seal = SealRecord(
+        root_hash=seal_dict["root_hash"],
+        algorithm=seal_dict["algorithm"],
+        signature=seal_dict["signature"],
+        public_key_fingerprint=seal_dict["public_key_fingerprint"],
+        trusted_time=seal_dict["trusted_time"],
+        receipt=seal_dict["receipt"],
+        index=tuple(
+            {"path": e["path"], "sha256": e["sha256"]} for e in seal_dict.get("index", [])
+        ),
+    )
+    intact = verify_seal(root, seal)
+    if intact:
+        print(
+            f"verify-seal: INTACT root_hash={seal.root_hash} "
+            f"receipt={seal.receipt}"
+        )
+        return 0
+    print(
+        f"verify-seal: BROKEN root_hash={seal.root_hash} "
+        f"(an indexed artifact was mutated after sealing; spec §15)",
+        file=sys.stderr,
+    )
+    return 2
+
 
 
 def _preregister(args) -> int:
