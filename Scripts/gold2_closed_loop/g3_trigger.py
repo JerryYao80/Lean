@@ -94,14 +94,26 @@ def evaluate_g3(
         raise ValueError(
             f"min_generations must be >= 1, got {min_generations}"
         )
-    # Build the maximal suffix run of records that all share the same frozen
-    # ``input_evidence_sha256``. The tail always seeds a run of length 1; the
-    # run extends backwards through every preceding record whose evidence
-    # hash equals the next (tailward) record's hash. This is consistent with
-    # ``GenerationJournal.observable_valid_count`` so the trigger evaluator
-    # and the journal agree on what "adjacent valid generations" means
-    # (spec §7 line 268 / §6 line 246: generations are diagnostics over a
-    # SINGLE frozen evidence bundle).
+    # Build the adjacent run ending at the tail: the maximal suffix of
+    # records that all share the SAME frozen ``input_evidence_sha256``
+    # (spec §6 line 246: "连续三代" must be over a single frozen evidence
+    # bundle, not a combination of records from different bundles). The
+    # tail always seeds a run of length 1; the run extends backwards
+    # through every preceding record whose evidence hash equals the next
+    # (tailward) record's hash. A record whose evidence hash DIFFERS from
+    # the next record's breaks the run (it belongs to an older bundle).
+    #
+    # NOTE on ``trigger_observation_valid``: that flag is PARENT-CONSISTENCY
+    # (True iff this record's hash matches its PARENT's). It marks a
+    # bundle TRANSITION (the first record on a new bundle has the flag
+    # False). The trigger run is BUNDLE-based, not parent-consistency-based:
+    # a transition record is the SEED of a new same-bundle run and IS
+    # counted toward it. So the run is built from raw evidence-hash
+    # equality, NOT from the flag. This is what the spec's "same frozen
+    # evidence bundle" requires: three generations all on bundle A are a
+    # valid run even if the first of them followed a bundle-B record. The
+    # flag is persisted for audit (it records where transitions happened)
+    # but is not the trigger-run criterion.
     run = _suffix_run(records)
     if len(run) < min_generations:
         return G3TriggerResult(
@@ -133,15 +145,24 @@ def evaluate_g3(
 
 def _suffix_run(records: Sequence[GenerationRecord]) -> list[GenerationRecord]:
     """Return the maximal suffix of ``records`` whose members all share the
-    same frozen ``input_evidence_sha256``. The tail always seeds a run of
-    length 1; the run extends backwards through every preceding record whose
-    evidence hash equals the next (tailward) record's hash.
+    SAME frozen ``input_evidence_sha256`` (a single-bundle run, per spec
+    §6 line 246). The tail always seeds a run of length 1; the run extends
+    backwards through every preceding record whose evidence hash equals the
+    next (tailward) record's hash. A record whose evidence hash differs from
+    the next record's breaks the run (it belongs to an older bundle).
+
+    This is BUNDLE-based, not ``trigger_observation_valid``-based: a
+    bundle-transition record (whose flag is False because its hash differs
+    from its PARENT's) is the SEED of the new-bundle run and IS counted
+    toward it. The trigger needs three records on ONE bundle; whether the
+    first of them followed a different bundle is irrelevant. (The flag is
+    audit-only: it records where transitions happened.)
 
     Examples
     --------
-    * ``[A, A, A]`` -> ``[A, A, A]``  (length 3)
-    * ``[A, A, C]`` -> ``[C]``        (length 1; tail C differs from prior A)
-    * ``[A, B, B]`` -> ``[B, B]``     (length 2)
+    * ``[A, A, A]`` -> ``[A, A, A]``  (length 3, one bundle)
+    * ``[A, A, B]`` -> ``[B]``        (length 1; tail B is a new bundle)
+    * ``[B, A, A, A]`` -> ``[A, A, A]`` (length 3; the early B is irrelevant)
     """
     if not records:
         return []

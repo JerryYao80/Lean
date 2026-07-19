@@ -155,3 +155,27 @@ def test_invalid_evidence_resets_observable_run(tmp_path):
     # adjacent VALID run from the tail is 1 (only the tail counts as
     # trigger-observable).
     assert journal.observable_valid_count() == 1
+
+
+def test_mid_run_bundle_transition_seeds_new_run(tmp_path):
+    """A bundle transition in the MIDDLE followed by >=2 records on the new
+    bundle: the new-bundle run is counted (the transition record is its
+    seed). Regression for the BLOCKER found in the Task 13 review: the run
+    is BUNDLE-based (single ``input_evidence_sha256``), not
+    ``trigger_observation_valid``-based, so [B,A,A,A] yields a run of 3
+    on bundle A — the trigger CAN fire on the three A records (spec §6 line
+    246: "连续三代" over a single frozen bundle)."""
+    journal = GenerationJournal(tmp_path / "gen.jsonl")
+    g1 = journal.append(_rec(1, evidence_hash="B" * 64))  # bundle B, first
+    # transition to bundle A (trigger_observation_valid=False)
+    g2 = journal.append(_rec(2, evidence_hash="A" * 64, parent=g1.generation_id))
+    g3 = journal.append(_rec(3, evidence_hash="A" * 64, parent=g2.generation_id))
+    g4 = journal.append(_rec(4, evidence_hash="A" * 64, parent=g3.generation_id))
+    recs = journal.read_all()
+    # g2 is a transition (flag False), but it SEEDS the bundle-A run of 3.
+    assert recs[1].trigger_observation_valid is False
+    assert journal.observable_valid_count() == 3
+    from Scripts.gold2_closed_loop.g3_trigger import evaluate_g3
+    res = evaluate_g3(recs, 0.2, 3.0)
+    assert res.eligible is True
+    assert res.alias_reason is None

@@ -167,20 +167,41 @@ class GenerationJournal:
             not ``last + 1``, or if ``parent_generation_id`` does not match
             the last appended generation's id (None for the first record).
 
-        The duplicate-id check runs FIRST (against the in-memory seen-set)
-        so a re-used ``generation_id`` is rejected before the parent/index
-        constraints are evaluated. The authoritative duplicate re-check
-        runs inside the lock in :meth:`_append_record` (against the
-        refreshed on-disk tail) so a concurrent writer cannot sneak in a
-        duplicate between the fast-path check and the write.
+        Ordering
+        --------
+        The duplicate-id check runs FIRST against the in-memory seen-set as
+        a fast path so a re-used ``generation_id`` is rejected without
+        taking the lock. The parent / index / trigger_valid derivation
+        does NOT run here: it runs INSIDE the lock in
+        :meth:`_append_record` against the FRESH on-disk tail (re-read by
+        :meth:`_refresh_from_disk`). Deriving parent/index against the
+        pre-lock in-memory tail would reject a perfectly-valid append by a
+        long-lived instance whose cache is stale relative to a concurrent
+        writer (e.g. instance A opened on an empty file, instance B then
+        appended gen-1; A's append of gen-2 with parent=gen-1 must succeed
+        via the in-lock refresh, not raise "must start at 1" against the
+        stale empty-tail cache). The authoritative duplicate re-check also
+        runs inside the lock against the refreshed seen-set.
         """
         if record.generation_id in self._seen_ids:
             raise ValueError(
                 f"duplicate generation_id {record.generation_id!r}; "
                 "generation ids must be unique per window journal"
             )
-        finalized = self._finalize_record(record)
-        return self._append_record(finalized)
+        # Validate only the closed-enum fields here (cheap, no tail state).
+        # Parent / index / trigger_valid / previous_record_sha256 are derived
+        # inside the lock against the refreshed on-disk tail.
+        if record.convergence_status not in _VALID_CONVERGENCE:
+            raise ValueError(
+                f"convergence_status {record.convergence_status!r} not in "
+                f"{sorted(_VALID_CONVERGENCE)}"
+            )
+        if record.terminal_reason not in _VALID_TERMINAL:
+            raise ValueError(
+                f"terminal_reason {record.terminal_reason!r} not in "
+                f"{sorted(_VALID_TERMINAL)}"
+            )
+        return self._append_record(record)
 
     def read_all(self) -> list[GenerationRecord]:
         """Return all parsed records (in file order). Does NOT take the lock."""
@@ -214,36 +235,26 @@ class GenerationJournal:
 
     def observable_valid_count(self) -> int:
         """Return the length of the maximal suffix run of generation records
-        that all share the same frozen ``input_evidence_sha256``.
+        that all share the SAME frozen ``input_evidence_sha256`` (a
+        single-bundle run, per spec §6 line 246). The tail always seeds a
+        run of length 1; the run extends backwards through every preceding
+        record whose evidence hash equals the next (tailward) record's hash.
 
-        The tail record always seeds a run of length 1 (it is the start of a
-        potential new observable run even when its evidence hash differs
-        from its parent's — a hash change breaks the PRIOR run but the tail
-        itself begins a fresh one). The run extends backwards through every
-        preceding record whose evidence hash equals the next (tailward)
-        record's hash.
-
-        This is the basis for the §7 "three adjacent valid generations"
-        trigger: the trigger evaluator (:mod:`g3_trigger`) builds the same
-        suffix run and applies the gap/weight/pending conditions. Computing
-        the run from the evidence hashes directly (rather than from the
-        per-record ``trigger_observation_valid`` flag) keeps the run
-        well-defined when the tail's evidence differs from its parent: the
-        tail still counts as 1 (a new run), not 0.
+        This matches :func:`g3_trigger._suffix_run` so the journal and the
+        trigger evaluator agree on what "three adjacent generations on one
+        bundle" means. It is BUNDLE-based, not
+        ``trigger_observation_valid``-based: a bundle-transition record (flag
+        False) seeds a new-bundle run and is counted toward it.
 
         Examples
         --------
-        * ``[A, A, A]`` -> 3  (all share hash A)
-        * ``[A, A, C]`` -> 1  (tail C differs from prior A; new run of 1)
-        * ``[A, B, B]`` -> 2  (tail two share B)
+        * ``[A, A, A]`` -> 3  (all on bundle A)
+        * ``[A, A, B]`` -> 1  (tail B is a new bundle)
+        * ``[B, A, A, A]`` -> 3  (early B irrelevant to the tail A-run)
         """
         records = self.read_all()
         if not records:
             return 0
-        # Walk from the tail backwards. The tail always counts (it seeds a
-        # run). Each preceding record counts iff its evidence hash equals
-        # the next (tailward) record's hash; the first mismatch stops the
-        # run (an earlier record belongs to a different, older run).
         count = 1
         for i in range(len(records) - 1, 0, -1):
             current = records[i]
@@ -257,20 +268,6 @@ class GenerationJournal:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _finalize_record(self, record: GenerationRecord) -> GenerationRecord:
-        """Derive ``trigger_observation_valid`` against the IN-MEMORY tail.
-
-        The on-disk tail is re-read INSIDE the lock in ``_append_record``;
-        this in-memory derivation is the optimistic path used before the
-        lock is taken (so the returned record's trigger_valid reflects the
-        state at append-call time; the in-lock re-derivation is
-        authoritative for the persisted record).
-        """
-        return self._derive_against(record, self._last_index,
-                                    self._last_generation_id,
-                                    self._last_evidence_hash,
-                                    self._last_record_sha)
-
     def _derive_against(
         self,
         record: GenerationRecord,
@@ -279,8 +276,17 @@ class GenerationJournal:
         last_evidence_hash: str | None,
         last_record_sha: str,
     ) -> GenerationRecord:
-        """Re-derive trigger_observation_valid + previous_record_sha256 +
-        parent/index constraints against a given tail state."""
+        """Derive ``trigger_observation_valid`` + ``previous_record_sha256``
+        and validate the parent / index constraints against a given tail
+        state (the FRESH on-disk tail when called inside the lock).
+
+        Raises
+        ------
+        ValueError:
+            If ``generation_index`` is not ``last + 1`` (or 1 for the first
+            record), or if ``parent_generation_id`` does not match the last
+            appended generation's id (None for the first record).
+        """
         index = record.generation_index
         parent = record.parent_generation_id
         if last_index == 0:
@@ -312,17 +318,6 @@ class GenerationJournal:
                 record.input_evidence_sha256 == last_evidence_hash
             )
             previous = last_record_sha
-        # Validate the closed-enum fields.
-        if record.convergence_status not in _VALID_CONVERGENCE:
-            raise ValueError(
-                f"convergence_status {record.convergence_status!r} not in "
-                f"{sorted(_VALID_CONVERGENCE)}"
-            )
-        if record.terminal_reason not in _VALID_TERMINAL:
-            raise ValueError(
-                f"terminal_reason {record.terminal_reason!r} not in "
-                f"{sorted(_VALID_TERMINAL)}"
-            )
         return GenerationRecord(
             generation_id=record.generation_id,
             generation_index=index,
@@ -363,7 +358,26 @@ class GenerationJournal:
 
     def _append_record(self, record: GenerationRecord) -> GenerationRecord:
         """Compute record_sha256, write the line under the lock, update state,
-        and return the persisted (hash-filled) record."""
+        and return the persisted (hash-filled) record.
+
+        All tail-sensitive derivation (parent/index validation, trigger_valid,
+        previous_record_sha256) runs INSIDE the ``flock(LOCK_EX)`` against
+        the FRESH on-disk tail re-read by :meth:`_refresh_from_disk`, so a
+        long-lived instance whose in-memory cache is stale relative to a
+        concurrent writer still derives correctly against the true tail.
+
+        Torn-tail recovery: if the on-disk file ends with a partial (no
+        trailing newline) line — a write that was interrupted by a crash —
+        :meth:`read_all` skips that fragment when refreshing state, but the
+        fragment's bytes are still physically present at EOF. Opening the
+        journal in append mode (``"ab"``) would write the new line AFTER
+        those torn bytes on the same physical line, producing an unparseable
+        merged line that bricks the journal for every future process. We
+        therefore ``truncate`` the file back to the last valid newline
+        (i.e. strip any non-newline-terminated tail) BEFORE appending, so
+        the new line begins on a fresh line. The truncation happens inside
+        the lock so it is atomic w.r.t. concurrent writers.
+        """
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -376,8 +390,8 @@ class GenerationJournal:
                         "generation ids must be unique per window journal"
                     )
                 # Re-derive parent/index/trigger_valid against the refreshed
-                # tail (the in-memory finalize used the pre-lock state; a
-                # concurrent writer may have appended since).
+                # tail. _derive_against raises ValueError on a wrong parent or
+                # a non-monotonic index (the in-lock tail is authoritative).
                 record = self._derive_against(
                     record, self._last_index, self._last_generation_id,
                     self._last_evidence_hash, self._last_record_sha,
@@ -403,6 +417,10 @@ class GenerationJournal:
                     appended_at_utc=record.appended_at_utc,
                 )
                 line = json.dumps(asdict(record), ensure_ascii=False) + "\n"
+                # Truncate any torn (non-newline-terminated) tail BEFORE
+                # appending, so the new line starts on a fresh line instead of
+                # concatenating with the torn bytes. See the docstring.
+                self._truncate_torn_tail()
                 with self.path.open("ab") as stream:
                     stream.write(line.encode("utf-8"))
                     stream.flush()
@@ -417,6 +435,36 @@ class GenerationJournal:
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
+    def _truncate_torn_tail(self) -> None:
+        """Strip a non-newline-terminated tail from the journal file.
+
+        If the file does not exist or is empty, nothing to do. If it ends
+        with ``b"\\n"`` the last line was durably completed — nothing to
+        strip. Otherwise the trailing bytes after the last ``b"\\n"`` are a
+        torn (interrupted) write: truncate them so the next append begins
+        on a fresh line. This is the recovery that makes a torn tail
+        self-healing rather than permanently bricking the journal.
+        """
+        if not self.path.is_file():
+            return
+        data = self.path.read_bytes()
+        if not data or data.endswith(b"\n"):
+            return
+        last_newline = data.rfind(b"\n")
+        if last_newline < 0:
+            # No newline at all: the entire file is a torn first line. Drop
+            # it so the journal starts clean (the in-memory state already
+            # reflects an empty chain because read_all skipped the torn line).
+            trunc_len = 0
+        else:
+            trunc_len = last_newline + 1
+        # Truncate to trunc_len bytes. Opened r+b so we can seek+truncate
+        # without erasing the file; fsync the truncation so it is durable.
+        with self.path.open("r+b") as stream:
+            stream.truncate(trunc_len)
+            stream.flush()
+            os.fsync(stream.fileno())
+
     def _load_existing(self) -> None:
         """Populate in-memory state from the on-disk tail (no lock)."""
         self._refresh_from_disk()
@@ -427,6 +475,15 @@ class GenerationJournal:
         Called once at ``__init__`` and again INSIDE the exclusive lock before
         every write, so a second GenerationJournal instance that cached
         stale state cannot break the chain or accept a duplicate id.
+
+        Chain-tail integrity: the on-disk tail record's ``record_sha256``
+        is the canonical previous-hash for the next append. A tail record
+        whose ``record_sha256`` is missing or not a 64-char hex string is
+        loud corruption (a tampered/legacy/partial-but-parseable line) —
+        we raise ``ValueError`` rather than silently falling back to an
+        earlier record's sha, which would point the next append's
+        ``previous_record_sha256`` past the corrupt tail and silently
+        break the chain.
         """
         self._seen_ids = set()
         self._last_record_sha = _ZERO_HASH
@@ -441,8 +498,14 @@ class GenerationJournal:
             self._last_generation_id = record.generation_id
             self._last_evidence_hash = record.input_evidence_sha256
             sha = record.record_sha256
-            if isinstance(sha, str) and len(sha) == 64:
-                self._last_record_sha = sha
+            if not (isinstance(sha, str) and len(sha) == 64):
+                raise ValueError(
+                    f"_refresh_from_disk: on-disk tail record "
+                    f"{record.generation_id!r} has an invalid "
+                    f"record_sha256 {sha!r}; the chain is corrupt and the "
+                    f"next append cannot be chained safely"
+                )
+            self._last_record_sha = sha
 
     @staticmethod
     def _recompute_hash(record: GenerationRecord) -> str:
