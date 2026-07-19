@@ -221,3 +221,92 @@ def test_builder_never_imports_production_inspiration():
     src = inspect.getsource(mod)
     assert "from Scripts.inspiration" not in src
     assert "import Scripts.inspiration" not in src
+
+
+# --- isolation: path traversal / absolute candidate_id ----------------
+
+
+def _req_with_id(cid: str) -> G3Request:
+    r = _request()
+    return G3Request(
+        experiment_id=r.experiment_id, window_id=r.window_id,
+        stage_id=r.stage_id, candidate_id=cid, partition=r.partition,
+        input_evidence_sha256=r.input_evidence_sha256,
+        parent_generation_id=None, generation_index=1, seed=17, budget=4,
+    )
+
+
+def test_absolute_candidate_id_is_rejected(fake_generator, tmp_path):
+    """A candidate_id that is an absolute path must NOT escape the proof
+    root (pathlib discards preceding components for an absolute final
+    segment). Regression for the BLOCKER from the Task 14 review."""
+    proof_dir = tmp_path / "proof"
+    evil = tmp_path / "evil_abs_target"
+    G3Builder(fake_generator).build(_req_with_id(str(evil)), proof_dir)
+    # No G3.cs written outside the proof root.
+    assert not (evil / "G3.cs").exists()
+    # No candidates dir created under a path that resolved outside proof.
+    assert evil.exists() is False or not (evil / "G3.cs").exists()
+
+
+def test_traversal_candidate_id_is_rejected(fake_generator, tmp_path):
+    """A candidate_id containing '..' must NOT escape proof_root/candidates/."""
+    proof_dir = tmp_path / "proof"
+    target = tmp_path / "escaped_sibling"
+    target.mkdir()
+    G3Builder(fake_generator).build(
+        _req_with_id("../escaped_sibling"), proof_dir
+    )
+    # No G3.cs written into the sibling directory outside the proof root.
+    assert not (target / "G3.cs").exists()
+
+
+def test_rejected_candidate_id_maps_to_construction_failed(
+    fake_generator, tmp_path
+):
+    """An escaping candidate_id maps to CONSTRUCTION_FAILED (not eligible),
+    and the budget is still consumed."""
+    result = G3Builder(fake_generator).build(
+        _req_with_id("../escaped"), tmp_path / "proof"
+    )
+    assert result.eligible is False
+    assert result.alias_reason == G3AliasReason.CONSTRUCTION_FAILED.value
+    assert result.attempted_trial_count == 1
+
+
+# --- empty / None source -> CONSTRUCTION_FAILED -----------------------
+
+
+def test_empty_source_maps_to_construction_failed(tmp_path):
+    """A generator returning empty/None source_text is a contract violation
+    and must map to CONSTRUCTION_FAILED (not an eligible zero-content
+    candidate). Regression for the Task 14 review."""
+
+    class EmptyGen:
+        def __call__(self, request):
+            return FakeGenerationResponse(source_text="")
+
+    result = G3Builder(EmptyGen()).build(_request(), tmp_path / "proof")
+    assert result.eligible is False
+    assert result.alias_reason == G3AliasReason.CONSTRUCTION_FAILED.value
+
+
+# --- OSError during write -> CONSTRUCTION_FAILED ----------------------
+
+
+def test_oserror_during_write_maps_to_construction_failed(
+    fake_generator, tmp_path, monkeypatch
+):
+    """A disk-full / permission / file-blocks-dir OSError during the
+    candidate write must map to CONSTRUCTION_FAILED, not propagate out of
+    build() with no result. Regression for the Task 14 review."""
+    import Scripts.gold2_closed_loop.g3_builder as mod
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mod, "atomic_write_bytes", boom)
+    result = G3Builder(fake_generator).build(_request(), tmp_path / "proof")
+    assert result.eligible is False
+    assert result.alias_reason == G3AliasReason.CONSTRUCTION_FAILED.value
+    assert result.attempted_trial_count == 1

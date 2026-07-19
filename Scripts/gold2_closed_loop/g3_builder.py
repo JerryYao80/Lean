@@ -210,19 +210,68 @@ class G3Builder:
                 g2_fallback=request.g2_candidate_set_sha256,
             )
         response_sha = canonical_hash(_response_dict(response))
-        source_text = str(getattr(response, "source_text", "") or "")
+        source_text = getattr(response, "source_text", "")
+        # A generator that omits / None / empty source_text is a contract
+        # violation: a degenerate zero-content candidate must NOT be
+        # hash-pinned and passed to the evaluator as eligible. Map it to
+        # CONSTRUCTION_FAILED (no source was produced).
+        if not isinstance(source_text, str) or not source_text.strip():
+            return self._construction_failed(
+                request_sha, candidate_dir=None,
+                g2_fallback=request.g2_candidate_set_sha256,
+                response_sha=response_sha,
+            )
         source_sha = canonical_hash({"source_text": source_text})
         config_sha = canonical_hash({
             "compiler_hash": str(getattr(response, "compiler_hash", "") or ""),
             "config_hash": str(getattr(response, "config_hash", "") or ""),
         })
-        # Write the frozen source into an ISOLATED candidate directory under
-        # the proof root. Never write into Algorithm.CSharp.
-        candidate_dir = Path(proof_root) / "candidates" / request.candidate_id
-        candidate_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(
-            candidate_dir / "G3.cs", source_text.encode("utf-8")
-        )
+        # Resolve the ISOLATED candidate directory and GUARANTEE it stays
+        # under proof_root/candidates/. The candidate_id is a free-form str
+        # on the public request dataclass, so an id containing '..' or an
+        # absolute path would otherwise escape the proof root (pathlib
+        # discards preceding components for an absolute final segment) and
+        # could write G3.cs outside the proof tree — or into
+        # Algorithm.CSharp. Reject any such id as CONSTRUCTION_FAILED.
+        candidate_root = (Path(proof_root) / "candidates").resolve()
+        try:
+            candidate_dir = (candidate_root / request.candidate_id).resolve()
+        except (OSError, ValueError):
+            return self._construction_failed(
+                request_sha, candidate_dir=None,
+                g2_fallback=request.g2_candidate_set_sha256,
+                response_sha=response_sha, source_sha=source_sha,
+                config_sha=config_sha,
+            )
+        try:
+            candidate_dir.relative_to(candidate_root)
+        except ValueError:
+            # The resolved candidate_dir is not under candidate_root: the
+            # candidate_id contained '..' / an absolute path. Refuse to
+            # write outside the proof root.
+            return self._construction_failed(
+                request_sha, candidate_dir=None,
+                g2_fallback=request.g2_candidate_set_sha256,
+                response_sha=response_sha, source_sha=source_sha,
+                config_sha=config_sha,
+            )
+        # mkdir + atomic write. Any OSError here (disk full, permission,
+        # a file blocking the dir, quota) is an execution failure: map it
+        # to CONSTRUCTION_FAILED so the candidate is closed with a terminal
+        # alias reason and the budget is consumed, rather than propagating
+        # out of build() with no result recorded.
+        try:
+            candidate_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(
+                candidate_dir / "G3.cs", source_text.encode("utf-8")
+            )
+        except OSError:
+            return self._construction_failed(
+                request_sha, candidate_dir=str(candidate_dir),
+                g2_fallback=request.g2_candidate_set_sha256,
+                response_sha=response_sha, source_sha=source_sha,
+                config_sha=config_sha,
+            )
         candidate_set_sha = canonical_hash({
             "source_sha256": source_sha,
             "config_sha256": config_sha,
