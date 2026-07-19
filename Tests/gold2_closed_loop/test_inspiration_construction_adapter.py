@@ -310,3 +310,61 @@ def test_oserror_during_write_maps_to_construction_failed(
     assert result.eligible is False
     assert result.alias_reason == G3AliasReason.CONSTRUCTION_FAILED.value
     assert result.attempted_trial_count == 1
+
+
+# --- training-gate rejection: truthy, not identity -------------------
+
+
+def test_gate_rejection_numpy_bool_maps_to_candidate_rejected(tmp_path):
+    """A training-gate rejection reported as numpy.bool_(False) (the type the
+    auto_optimize pipeline produces) MUST map to CANDIDATE_REJECTED + the G2
+    fallback + the PARTIALLY_EFFECTIVE cap. The check uses truthiness, not
+    ``is False`` (np.bool_(False) is False is False). Regression for the
+    Task 14 review BLOCKER."""
+    import numpy as np
+
+    class NPBoolGen:
+        def __call__(self, request):
+            return FakeGenerationResponse(
+                source_text="class G3 { }",
+                training_gate_passed=np.bool_(False),
+            )
+
+    req = _request()
+    req_with_g2 = G3Request(
+        experiment_id=req.experiment_id, window_id=req.window_id,
+        stage_id=req.stage_id, candidate_id=req.candidate_id,
+        partition=req.partition, input_evidence_sha256=req.input_evidence_sha256,
+        parent_generation_id=None, generation_index=1, seed=17, budget=4,
+        g2_candidate_set_sha256="g2hash" * 10,
+    )
+    result = G3Builder(NPBoolGen()).build(req_with_g2, tmp_path / "proof")
+    assert result.eligible is False
+    assert result.alias_reason == G3AliasReason.CANDIDATE_REJECTED.value
+    assert result.candidate_set_sha256 == "g2hash" * 10
+    assert result.verdict_cap == "PARTIALLY_EFFECTIVE"
+
+
+def test_gate_rejection_int_zero_maps_to_candidate_rejected(tmp_path):
+    """A training-gate rejection reported as the int 0 (another falsy
+    non-Python-bool value) MUST map to CANDIDATE_REJECTED. Regression for
+    the Task 14 review."""
+
+    class IntZeroGen:
+        def __call__(self, request):
+            return FakeGenerationResponse(
+                source_text="class G3 { }",
+                training_gate_passed=0,
+            )
+
+    req = _request()
+    req_with_g2 = G3Request(
+        experiment_id=req.experiment_id, window_id=req.window_id,
+        stage_id=req.stage_id, candidate_id=req.candidate_id,
+        partition=req.partition, input_evidence_sha256=req.input_evidence_sha256,
+        parent_generation_id=None, generation_index=1, seed=17, budget=4,
+        g2_candidate_set_sha256="g2hash" * 10,
+    )
+    result = G3Builder(IntZeroGen()).build(req_with_g2, tmp_path / "proof")
+    assert result.eligible is False
+    assert result.alias_reason == G3AliasReason.CANDIDATE_REJECTED.value

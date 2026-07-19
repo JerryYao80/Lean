@@ -292,8 +292,19 @@ class G3Builder:
         # Training-gate outcome (injected via the response): a built-and-
         # compiled candidate that the training gate rejects maps to
         # CANDIDATE_REJECTED and reuses the G2 hash.
+        #
+        # Use truthiness (``not gate_passed``), NOT identity (``is False``):
+        # the production generator may carry the gate outcome from the
+        # numpy/pandas-heavy auto_optimize pipeline as a ``numpy.bool_(False)``
+        # or an int ``0``. ``numpy.bool_(False) is False`` is False (it is a
+        # distinct type), so an identity check would let a rejected gate
+        # silently pass as eligible, skipping the CANDIDATE_REJECTED alias,
+        # the G2-hash reuse, and the PARTIALLY_EFFECTIVE verdict cap (spec
+        # §14 line 421). Truthiness correctly treats every falsy value as a
+        # rejection; the only falsy-but-valid sentinel we must NOT misread
+        # is absent (the gate outcome is a boolean pass/fail).
         gate_passed = getattr(response, "training_gate_passed", True)
-        if gate_passed is False:
+        if not gate_passed:
             g2_hash = request.g2_candidate_set_sha256
             fallback = g2_hash if g2_hash else candidate_set_sha
             return G3BuildResult(
