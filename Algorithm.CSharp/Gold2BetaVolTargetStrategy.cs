@@ -94,8 +94,17 @@ namespace QuantConnect.Algorithm.CSharp
             SetAlpha(_trendAlpha);
             _portfolio = new Gold2VolTargetPortfolioModel(_vol, _gold, GetDecimalParameter("rebalance-threshold", 0.05m));
             SetPortfolioConstruction(_portfolio);
-            AddRiskManagement(new Gold2ExtremeRiskModel(_ext, _gold, GetDecimalParameter("extreme-vol-cap", 0.3m)));
-            AddRiskManagement(new Gold2RealRateCapModel(_realrate, _gold));
+            // C2: G2 shaping feedback drives a per-layer penalty multiplier
+            // (default 1.0 = neutral = G0). effective_cap = base_cap / penalty,
+            // so penalty=1.0 -> effCap=baseCap (G0/G1 byte-identical); penalty>1.0
+            // -> tighter cap (G2 diverges from G1). These terms are NOT in
+            // GetTunableParameterNames (G1 grid stays {trend-ma-short,vol-target}).
+            var extremePenalty = GetDecimalParameter("extreme_risk_contrib_penalty", 1.0m);
+            var realratePenalty = GetDecimalParameter("realrate_cap_contrib_penalty", 1.0m);
+            var effExtremeCap = Math.Max(0m, _extremeCap / Math.Max(0.0001m, extremePenalty));
+            var effRealRateCap = Math.Max(0m, GetDecimalParameter("realrate-cap", 0.6m) / Math.Max(0.0001m, realratePenalty));
+            AddRiskManagement(new Gold2ExtremeRiskModel(_ext, _gold, effExtremeCap));
+            AddRiskManagement(new Gold2RealRateCapModel(_realrate, _gold, effRealRateCap));
             SetExecution(new AShareLotSizeExecutionModel());
         }
 
