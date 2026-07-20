@@ -767,3 +767,6 @@ def test_candidate_id_has_no_path_separator(tmp_path):
             f"candidate_id {req.candidate_id!r} contains '/'; run_id would "
             f"nest the LEAN packet into a missing subdir")
         assert "\\" not in req.candidate_id
+        assert req.partition == "W1/train", (
+            f"partition field {req.partition!r} was sanitized; only candidate_id "
+            f"may be sanitized — partition must stay original in the journal")
