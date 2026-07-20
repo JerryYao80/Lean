@@ -676,7 +676,6 @@ def test_run_lean_config_path_absolute(tmp_path, monkeypatch):
 def test_build_run_config_rejects_slash_in_run_id(tmp_path):
     """C1 layer 2: even if an upstream leaks a '/' into run_id, build_run_config
     must raise loudly rather than let LEAN silently drop the packet."""
-    import pytest
     with pytest.raises(ValueError, match="path separator"):
         build_run_config(
             BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
