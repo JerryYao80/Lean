@@ -671,3 +671,25 @@ def test_run_lean_config_path_absolute(tmp_path, monkeypatch):
     )
     assert Path(result.config_path).is_absolute()
     assert Path(result.config_path).is_file()
+
+
+def test_build_run_config_rejects_slash_in_run_id(tmp_path):
+    """C1 layer 2: even if an upstream leaks a '/' into run_id, build_run_config
+    must raise loudly rather than let LEAN silently drop the packet."""
+    import pytest
+    with pytest.raises(ValueError, match="path separator"):
+        build_run_config(
+            BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
+            run_id="W1-G1-G1-W1/train-0",
+        )
+    with pytest.raises(ValueError, match="path separator"):
+        build_run_config(
+            BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
+            run_id="back\\slash",
+        )
+    # A clean run_id still works (regression guard).
+    cfg = build_run_config(
+        BASE, tmp_path / "run", "Gold2ClosedLoopProofStrategy", {},
+        run_id="W1-G1-G1-W1-train-0",
+    )
+    assert cfg["algorithm-id"] == "W1-G1-G1-W1-train-0"

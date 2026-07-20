@@ -161,6 +161,17 @@ def build_run_config(
     # run_id is optional here so build_run_config can be used for pure config
     # construction in tests; run_lean REQUIRES it to locate the packet.
     if run_id is not None:
+        # C1 layer 2: a '/' or '\' in run_id would nest the LEAN packet path
+        # <run_dir>/<run_id>.json into a missing subdir; LEAN's
+        # BacktestingResultHandler.StoreResult swallows that write in its
+        # catch(Exception){Log.Error}, silently dropping the packet. Refuse
+        # loudly here so the exact-packet invariant is enforced pre-launch.
+        if "/" in run_id or "\\" in run_id:
+            raise ValueError(
+                f"run_id contains a path separator: {run_id!r}; "
+                f"packet path <run_dir>/<run_id>.json would nest into a "
+                f"nonexistent subdir and LEAN swallows the write"
+            )
         config["algorithm-id"] = run_id
 
     # Disable every side-effect fallback the proof must not depend on.
