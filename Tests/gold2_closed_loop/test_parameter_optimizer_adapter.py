@@ -736,3 +736,34 @@ def test_runner_returning_none_is_failed_infrastructure_no_dangling(fake_runner,
         "REGISTERED",
         "FAILED_INFRASTRUCTURE",
     ]
+
+
+def test_candidate_id_has_no_path_separator(tmp_path):
+    """C1: candidate_id must never contain '/' so run_id (and thus the LEAN
+    result-packet path <run_dir>/<run_id>.json) cannot nest into a missing
+    subdir. partition may carry 'W1/train' as a string field; the candidate
+    id must sanitize it."""
+    calls = []
+
+    def runner(req):
+        calls.append(req)
+        return TrialResult(status="SUCCEEDED",
+                          metrics={"sharpe": 1.0, "net_profit": 0.1,
+                                   "mdd": 0.05, "trades": 5, "dsr": 0.5},
+                          error=None)
+
+    opt = ParameterOptimizerAdapter(
+        runner, budget=4, seed=17,
+        journal_path=tmp_path / "g1.jsonl",
+        stage_id="G1", window_id="W1",
+    )
+    opt.run(
+        {"trend-ma-short": {"type": "choice", "values": ["20", "30"]},
+         "vol-target": {"type": "choice", "values": ["0.11", "0.15"]}},
+        "W1/train",  # partition carries a slash (the real P2 wiring passes this)
+    )
+    for req in calls:
+        assert "/" not in req.candidate_id, (
+            f"candidate_id {req.candidate_id!r} contains '/'; run_id would "
+            f"nest the LEAN packet into a missing subdir")
+        assert "\\" not in req.candidate_id

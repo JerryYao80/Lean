@@ -204,7 +204,12 @@ class ParameterOptimizerAdapter(Adapter):
             if trial_count >= self._budget:
                 break
             parameters = grid[idx]
-            candidate_id = f"{self._stage_id}-{partition}-{trial_count}"
+            # C1: sanitize the partition's '/' so candidate_id (and downstream
+            # run_id -> algorithm-id -> LEAN packet path <run_dir>/<run_id>.json)
+            # never nests into a missing subdir. partition keeps its original
+            # string form in the journal; only the path-flowing id is sanitized.
+            safe_partition = partition.replace("/", "-").replace("\\", "-")
+            candidate_id = f"{self._stage_id}-{safe_partition}-{trial_count}"
             request = OptimizationRequest(
                 experiment_id=self._experiment_id,
                 window_id=self._window_id,
