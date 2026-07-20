@@ -13,7 +13,7 @@ No production code is modified.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from Scripts.gold2_closed_loop.event_journal import EventJournal
 from Scripts.gold2_closed_loop.schemas import validate_candidate_event
@@ -75,6 +75,50 @@ class CandidateRegistry:
         record = self.journal.append("REGISTERED", payload)
         validate_candidate_event(record)
         return record
+
+    def register_and_record(
+        self,
+        candidate_id: str,
+        partition: str,
+        parameters: dict[str, Any],
+        *,
+        outcome: Callable[[], dict[str, Any]],
+        execution_status: str = "PENDING",
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Register a candidate AND record its outcome in ONE journal-critical
+        section, so a crash between register() and record_outcome() cannot
+        leave a dangling PENDING record (whole-tree review).
+
+        ``outcome`` is a callable that runs the trial and returns a dict
+        with keys ``event_type`` / ``execution_status`` / ``parameters`` /
+        ``metrics`` / ``error`` (any may be omitted; defaults are applied).
+        If ``outcome`` raises, a FAILED_INFRASTRUCTURE terminal event is
+        appended so the candidate is closed (no dangling PENDING).
+
+        Returns ``(registered_record, terminal_record_or_None)``.
+        """
+        registered = self.register(
+            candidate_id=candidate_id, partition=partition,
+            parameters=parameters, execution_status=execution_status,
+        )
+        try:
+            result = outcome() or {}
+        except Exception as exc:
+            result = {
+                "event_type": "FAILED_INFRASTRUCTURE",
+                "execution_status": "FAILED_INFRASTRUCTURE",
+                "error": str(exc),
+            }
+        terminal = self.record_outcome(
+            candidate_id=candidate_id,
+            event_type=str(result.get("event_type", "SUCCEEDED")),
+            execution_status=str(result.get("execution_status", "SUCCEEDED")),
+            partition=partition,
+            parameters=result.get("parameters", parameters),
+            metrics=result.get("metrics"),
+            error=result.get("error"),
+        )
+        return registered, terminal
 
     def record_outcome(
         self,

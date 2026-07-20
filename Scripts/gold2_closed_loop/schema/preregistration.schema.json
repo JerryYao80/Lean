@@ -18,6 +18,8 @@
     "maximum_staleness_days",
     "equivalence_tolerances",
     "success_thresholds",
+    "candidate_gates",
+    "selection",
     "g3"
   ],
   "properties": {
@@ -133,6 +135,41 @@
         "max_drawdown_degradation": {
           "type": "number",
           "minimum": 0
+        }
+      }
+    },
+    "candidate_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_trades", "max_mdd", "min_dsr"],
+      "properties": {
+        "min_trades": {"type": "integer", "minimum": 0},
+        "max_mdd": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_dsr": {"type": "number"},
+        "subwindow_spread_max": {"type": "number", "minimum": 0}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ranking_metric", "tie_break"],
+      "properties": {
+        "ranking_metric": {
+          "type": "string",
+          "enum": ["sharpe", "net_profit", "cagr", "sortino", "calmar"]
+        },
+        "tie_break": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "direction"],
+            "properties": {
+              "metric": {"type": "string"},
+              "direction": {"type": "string", "enum": ["asc", "desc"]}
+            }
+          }
         }
       }
     },

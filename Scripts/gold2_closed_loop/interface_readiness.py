@@ -42,8 +42,16 @@ _FORBIDDEN_REFERENCES: tuple[str, ...] = (
 _FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("global_results_glob",
      re.compile(r"glob\s*\.\s*glob\s*\(\s*[^)]*Results", re.IGNORECASE)),
+    # mtime_select: forbid mtime-based ARTIFACT SELECTION (sorting/globbing
+    # Results by .st_mtime). The bare ``.st_mtime`` token is too broad: it
+    # false-positives on legitimate file-identity checks like
+    # ``st_mtime_ns`` used for dedup in data_sources.py (whole-tree review).
+    # Narrow to mtime used as a sort/glob key, which is the actual §9
+    # violation. ``.st_mtime_ns`` (a distinct attribute) is NOT matched.
     ("mtime_select",
-     re.compile(r"\.st_mtime|sorted\s*\(\s*[^)]*key\s*=\s*[^)]*mtime",
+     re.compile(r"sorted\s*\(.*(?:st_mtime|mtime).*\)|"
+                r"\.st_mtime\b(?!\w).*sort|"
+                r"glob\s*\.\s*glob\s*\(.*(?:st_mtime|mtime)",
                 re.IGNORECASE)),
     ("optionvolarb_path",
      re.compile(r"OptionVolArb", re.IGNORECASE)),
@@ -101,14 +109,28 @@ def inspect_proof_interfaces(
     forbidden_refs: set[str] = set()
     forbidden_pats: set[str] = set()
     files_scanned = 0
+    # The scanner's own source (this file) defines the forbidden patterns
+    # as STRING LITERALS; scanning it would self-trigger. Skip it (the
+    # scanner is trusted infrastructure, not a proof module under test).
+    self_path = Path(__file__).resolve()
     if root_path.is_dir():
         for path in sorted(root_path.rglob(f"*{_PY_EXT}")):
             if not path.is_file():
+                continue
+            if path.resolve() == self_path:
+                # Don't scan the scanner itself.
+                files_scanned += 1
                 continue
             files_scanned += 1
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
+                # A .py file that cannot be read is itself a readiness
+                # failure (whole-tree review): silently skipping it would
+                # let a module with forbidden imports + an unreadable
+                # encoding pass. Record a forbidden pattern so the caller
+                # sees the file was not scannable.
+                forbidden_pats.add("unreadable_module")
                 continue
             for ref in _FORBIDDEN_REFERENCES:
                 # Whole-token match: ``import evolution_scheduler``,

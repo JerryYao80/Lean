@@ -149,6 +149,30 @@ def decide_verdict(
         raise ValueError(
             "decide_verdict: aggregate_delta is required for a VALID verdict"
         )
+    # NaN / non-finite guard (whole-tree review BLOCKER): a NaN
+    # aggregate_delta bypassed the ``<= 0`` check (NaN <= 0 is False) and
+    # every §13 comparison, producing a spurious EFFECTIVE. Reject it as
+    # NOT_EVALUATED+UNPROVEN (the evidence is unusable, like an INVALID
+    # experiment).
+    import math as _math
+    if _math.isnan(aggregate_delta) or _math.isinf(aggregate_delta):
+        return VerdictResult(
+            verdict=HistoricalVerdict.NOT_EVALUATED.value,
+            disposition=Disposition.UNPROVEN.value,
+            reason=f"aggregate_delta is non-finite ({aggregate_delta})",
+        )
+    # Likewise reject non-finite gate values before they corrupt a
+    # comparison (a NaN gate value would silently pass every check).
+    if gates is not None:
+        for _name, _val in _acceptance_gate_values(gates):
+            if isinstance(_val, float) and (
+                _math.isnan(_val) or _math.isinf(_val)
+            ):
+                return VerdictResult(
+                    verdict=HistoricalVerdict.NOT_EVALUATED.value,
+                    disposition=Disposition.UNPROVEN.value,
+                    reason=f"acceptance gate {_name!r} is non-finite ({_val})",
+                )
     passing = set(stages_passing or ())
     # 2. G3 alias caps.
     if g3_alias_reason == G3AliasReason.CONSTRUCTION_FAILED.value:
@@ -301,6 +325,33 @@ def _check_acceptance_gates(gates: AcceptanceGates) -> list[str]:
             and gates.effective_trials < gates.min_effective_trials):
         failed.append("effective_trials")
     return failed
+
+
+def _acceptance_gate_values(gates: AcceptanceGates):
+    """Yield (name, value) for every numeric gate value, so the caller can
+    reject non-finite (NaN/±Infinity) values before any comparison."""
+    for attr in (
+        "aggregate_cagr", "aggregate_sharpe", "aggregate_net_profit",
+        "baseline_cagr", "baseline_sharpe", "baseline_net_profit",
+        "information_ratio", "single_trade_contribution",
+        "max_single_trade_contribution", "single_month_contribution",
+        "max_single_month_contribution", "min_leave_one_window_out_delta",
+        "paired_bootstrap_p_value", "paired_bootstrap_min_probability",
+        "deflated_sharpe", "min_deflated_sharpe",
+        "effective_trials", "min_effective_trials",
+        "drawdown_deterioration", "max_drawdown_degradation",
+    ):
+        val = getattr(gates, attr, None)
+        if isinstance(val, float):
+            yield attr, val
+    if gates.stage_deltas:
+        for k, v in gates.stage_deltas.items():
+            if isinstance(v, float):
+                yield f"stage_delta:{k}", v
+    if gates.leave_one_window_out_deltas:
+        for k, v in gates.leave_one_window_out_deltas.items():
+            if isinstance(v, float):
+                yield f"loo:{k}", v
 
 
 def _check_invalid_reason(reason: str) -> None:

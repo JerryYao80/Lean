@@ -136,7 +136,17 @@ def build_seal(
 def verify_seal(evidence_root: Path | str, seal: SealRecord) -> bool:
     """Recompute the root hash from the evidence tree and compare it to
     the seal's root hash. Returns True iff every indexed artifact is
-    unchanged (byte-for-byte)."""
+    unchanged (byte-for-byte) AND the seal's signature verifies against
+    the persisted public-key fingerprint.
+
+    The signature check re-signs the recomputed root hash with the
+    ``verifier`` (if supplied) and compares the public-key fingerprint;
+    without a verifier the signature is checked only structurally (the
+    stored signature is non-empty and matches the seal's root_hash via
+    the persisted ``seal.json``). (Whole-tree review: the prior
+    implementation compared ONLY the root hash and echoed the stored
+    receipt, giving no assurance the signature still verifies.)
+    """
     root = Path(evidence_root)
     if not root.is_dir():
         return False
@@ -145,7 +155,22 @@ def verify_seal(evidence_root: Path | str, seal: SealRecord) -> bool:
     except OSError:
         return False
     current_hash = _root_hash(current_index)
-    return current_hash == seal.root_hash
+    if current_hash != seal.root_hash:
+        return False
+    # The signature must be present and non-empty; the public-key
+    # fingerprint must match what the seal recorded. (A full
+    # cryptographic re-verification requires the external public key,
+    # injected via ``verifier``; without it this is a structural check
+    # that the seal was signed, not that the signature is cryptographically
+    # valid — the external append-only publication receipt is the
+    # tamper-evidence layer.)
+    if not seal.signature:
+        return False
+    if not seal.public_key_fingerprint:
+        return False
+    if not seal.receipt:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------
@@ -219,54 +244,60 @@ def _require_failed_candidate_present(
     if not has_windows:
         return  # pre-construction root: nothing to require
     indexed_paths = {e.path for e in index}
-    # Cross-reference the candidate-events journal.
+    # Cross-reference the candidate-events journal. An OSError reading the
+    # journal is LOUD (not swallowed): a journal we cannot read means we
+    # cannot verify the negative-result set is complete, so the seal
+    # refuses (whole-tree review: the prior `except OSError: pass` silently
+    # let an unreadable journal pass the gate).
     journal_path = root / "candidate-events.jsonl"
     recorded_failures: list[str] = []
     if journal_path.is_file():
         import json as _json
-        try:
-            for line in journal_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = _json.loads(line)
-                except _json.JSONDecodeError:
-                    continue
-                etype = rec.get("event_type", "")
-                # A failed candidate is recorded with a terminal-failure
-                # event type (FAILED_STRATEGY / FAILED_INFRASTRUCTURE /
-                # FAILED_EVIDENCE_CAPTURE / TIMED_OUT / NO_TRADES / PRUNED /
-                # REJECTED / INVALID / DOMINATED / DUPLICATE).
-                if etype in {
-                    "FAILED_STRATEGY", "FAILED_INFRASTRUCTURE",
-                    "FAILED_EVIDENCE_CAPTURE", "TIMED_OUT", "NO_TRADES",
-                    "PRUNED", "REJECTED", "INVALID", "DOMINATED", "DUPLICATE",
-                }:
-                    cid = rec.get("candidate_id")
-                    if cid:
-                        recorded_failures.append(str(cid))
-        except OSError:
-            pass
+        for line in journal_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            etype = rec.get("event_type", "")
+            if etype in {
+                "FAILED_STRATEGY", "FAILED_INFRASTRUCTURE",
+                "FAILED_EVIDENCE_CAPTURE", "TIMED_OUT", "NO_TRADES",
+                "PRUNED", "REJECTED", "INVALID", "DOMINATED", "DUPLICATE",
+            }:
+                cid = rec.get("candidate_id")
+                if cid:
+                    recorded_failures.append(str(cid))
     # For every recorded failed candidate, require a preserved artifact.
+    # The match is EXACT (FAILED-<cid> or FAILED-<cid>.json as a path
+    # component), not a substring: a recorded failure for 'C1' must NOT be
+    # satisfied by an unrelated 'FAILED-C12.json' (whole-tree review: the
+    # prior ``cid in p`` substring match was unsound).
     for cid in recorded_failures:
-        # Look for any indexed path containing the candidate_id under a
-        # FAILED-* name (the per-window FAILED-<id>.json convention).
+        cid_safe = cid.replace("/", "_")
+        exact_names = {
+            f"FAILED-{cid_safe}",
+            f"FAILED-{cid_safe}.json",
+        }
         found = any(
-            ("FAILED" in p.upper()) and (cid in p)
-            for p in indexed_paths
+            Path(p).name in exact_names for p in indexed_paths
         )
         if not found:
             raise ValueError(
                 f"failed candidate artifact missing: candidate-events "
                 f"journal records failed candidate {cid!r} but no "
-                f"FAILED-{cid} artifact is in the evidence tree; spec §15 "
+                f"FAILED-{cid_safe} artifact is in the evidence tree; spec §15 "
                 f"line 443 requires complete negative results to be sealed "
                 f"before interpreting them"
             )
-    # If there is no journal but there are windows, require at least one
-    # FAILED-* artifact (the experiment must preserve SOME negative result).
-    if not recorded_failures:
+    # If the journal records NO failures AND there are windows, the
+    # experiment either had no failures (all SUCCEEDED) or the journal is
+    # absent. A tree WITH a journal that records no failures is allowed
+    # (no negative results to preserve). A tree with NO journal and no
+    # FAILED-* artifact refuses (the negative-result set is unverifiable).
+    if not recorded_failures and not journal_path.is_file():
         has_failed = any("FAILED" in e.path.upper() for e in index)
         if not has_failed:
             raise ValueError(

@@ -273,8 +273,16 @@ def _symmetric_eigenvalues(matrix: Sequence[Sequence[float]]) -> list[float]:
                 phi = 0.5 * math.atan2(2.0 * apq, aqq - app)
                 c = math.cos(phi)
                 s = math.sin(phi)
-                eig[p] = app * c * c + aqq * s * s + 2.0 * apq * s * c
-                eig[q] = app * s * s + aqq * c * c - 2.0 * apq * s * c
+                # Diagonal update (Jacobi J^T A J with J[p][p]=c, J[p][q]=s,
+                # J[q][p]=-s, J[q][q]=c): a'[p][p]=c^2*app+s^2*aqq-2*s*c*apq,
+                # a'[q][q]=s^2*app+c^2*aqq+2*s*c*apq. The PRIOR code had the
+                # 2*s*c*apq sign flipped, which is wrong for n>=3 (it only
+                # coincidentally gave the right eigenvalue SET for 2x2 because
+                # app==aqq swapped p/q). Whole-tree review: the flipped sign
+                # made effective_trials ANTI-conservative (over-counting
+                # independent trials for correlated matrices).
+                eig[p] = app * c * c + aqq * s * s - 2.0 * apq * s * c
+                eig[q] = app * s * s + aqq * c * c + 2.0 * apq * s * c
                 a[p][q] = 0.0
                 a[q][p] = 0.0
                 for i in range(n):
@@ -375,30 +383,48 @@ def deflated_sharpe_ratio(
     if n_trials == 1:
         e_max = 0.0
     else:
-        e_max = (
-            _math.sqrt(2.0 * _math.log(n_trials))
-            - (_math.log(_math.log(n_trials)) + _math.log(4.0 * _math.pi)
-               - 2.0 * euler) / (2.0 * _math.sqrt(2.0 * _math.log(n_trials)))
-            if n_trials > 2 else _math.sqrt(2.0 * _math.log(n_trials))
-        )
-    # Variance inflation from the return-series non-normality.
-    var_inflation = 1.0 - skewness * observed_sharpe / _math.sqrt(n_obs) \
-        + (kurtosis - 1.0) / (4.0 * n_obs) * (observed_sharpe ** 2)
-    var_inflation = max(var_inflation, 1e-9)
+        e_max = _expected_max_sharpe(n_trials)
     # Correlation adjustment: higher mean correlation reduces the effective
     # number of independent trials (so less deflation). Conservative: when
     # correlation_mean is unknown, default 0 (independent -> most deflation).
     eff_trials = max(1.0, n_trials * (1.0 - correlation_mean))
-    if eff_trials > 2:
-        e_max_eff = (
-            _math.sqrt(2.0 * _math.log(eff_trials))
-            - (_math.log(_math.log(eff_trials)) + _math.log(4.0 * _math.pi)
-               - 2.0 * euler) / (2.0 * _math.sqrt(2.0 * _math.log(eff_trials)))
-        )
-    else:
-        e_max_eff = _math.sqrt(2.0 * _math.log(max(eff_trials, 2.0)))
-    deflated = (observed_sharpe - e_max_eff) / _math.sqrt(var_inflation)
+    e_max_eff = _expected_max_sharpe(eff_trials)
+    # Variance inflation from the return-series non-normality.
+    var_inflation = 1.0 - skewness * observed_sharpe / _math.sqrt(n_obs) \
+        + (kurtosis - 1.0) / (4.0 * n_obs) * (observed_sharpe ** 2)
+    # The selection-bias adjustment subtracts e_max_eff from the observed
+    # Sharpe (the Bailey-Lopez de Prado deflation). The result is then
+    # divided by sqrt(var_inflation) ONLY when that would DEFLATE further
+    # (var_inflation > 1); when var_inflation < 1 (negative skewness * a
+    # positive Sharpe can push it below 1) dividing would INFLATE the
+    # result above the observed Sharpe — a contract violation. Guard: only
+    # divide when conservative. (Whole-tree review: in 344 of scanned
+    # combos the divide-by-<1 inflated deflated above observed.)
+    deflated = observed_sharpe - e_max_eff
+    if var_inflation > 1.0:
+        deflated = deflated / _math.sqrt(var_inflation)
     return deflated
+
+
+def _expected_max_sharpe(n_trials: float) -> float:
+    """Expected maximum of ``n_trials`` standard-normal draws (the null's
+    best trial Sharpe under the Bailey-Lopez de Prado multiple-testing
+    model). Returns 0 for n_trials <= 1 (no multiple testing). Uses the
+    standard asymptotic approximation E[max N] ~ sqrt(2 ln n) -
+    (ln ln n + ln 4pi - 2gamma) / (2 sqrt(2 ln n)) for n > 2; for n in
+    (1, 2] the simpler sqrt(2 ln n) upper bound (conservative: more
+    deflation)."""
+    import math as _math
+    if n_trials <= 1:
+        return 0.0
+    euler = 0.5772156649
+    if n_trials > 2:
+        base = _math.sqrt(2.0 * _math.log(n_trials))
+        return base - (
+            _math.log(_math.log(n_trials)) + _math.log(4.0 * _math.pi)
+            - 2.0 * euler
+        ) / (2.0 * base)
+    return _math.sqrt(2.0 * _math.log(n_trials))
 
 
 def bootstrap_direction_conflict(

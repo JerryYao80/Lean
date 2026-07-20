@@ -67,7 +67,10 @@ def _evidence_tree(tmp_path: Path, *, with_failed: bool = True) -> Path:
     (root / "feasibility" / "window_inventory.json").write_text("{}\n")
     (root / "snapshots").mkdir()
     (root / "snapshots" / "inputs.json").write_text("{}\n")
-    (root / "candidate-events.jsonl").write_text('{"candidate_id":"C0"}\n')
+    (root / "candidate-events.jsonl").write_text(
+        '{"candidate_id":"C0","event_type":"REGISTERED","execution_status":"PENDING"}\n'
+        '{"candidate_id":"C1","event_type":"FAILED_STRATEGY","execution_status":"FAILED_STRATEGY"}\n'
+    )
     (root / "windows").mkdir()
     (root / "windows" / "W1").mkdir()
     (root / "windows" / "W1" / "G0.json").write_text('{"packet":true}\n')

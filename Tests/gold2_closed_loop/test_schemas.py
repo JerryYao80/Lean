@@ -80,6 +80,19 @@ def _minimal_preregistration() -> dict:
             "paired_bootstrap_ci_level": 0.90,
             "max_drawdown_degradation": 0.10,
         },
+        "candidate_gates": {
+            "min_trades": 4,
+            "max_mdd": 0.30,
+            "min_dsr": 0.0,
+            "subwindow_spread_max": 0.05,
+        },
+        "selection": {
+            "ranking_metric": "sharpe",
+            "tie_break": [
+                {"metric": "net_profit", "direction": "desc"},
+                {"metric": "mdd", "direction": "asc"},
+            ],
+        },
         "g3": {
             "attribution_gap_threshold": 0.001,
             "non_convergence_threshold": 0.05,

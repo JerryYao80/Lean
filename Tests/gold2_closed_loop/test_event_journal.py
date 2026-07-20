@@ -376,6 +376,13 @@ def test_preregistration_nested_nan_rejected(tmp_path):
             "paired_bootstrap_ci_level": 0.90,
             "max_drawdown_degradation": 0.10,
         },
+        "candidate_gates": {
+            "min_trades": 4, "max_mdd": 0.30, "min_dsr": 0.0,
+        },
+        "selection": {
+            "ranking_metric": "sharpe",
+            "tie_break": [{"metric": "net_profit", "direction": "desc"}],
+        },
         "g3": {
             "attribution_gap_threshold": 0.001,
             "non_convergence_threshold": 0.05,

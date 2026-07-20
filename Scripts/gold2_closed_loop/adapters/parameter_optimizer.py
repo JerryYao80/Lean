@@ -131,7 +131,7 @@ class ParameterOptimizerAdapter(Adapter):
         stage_id: str = "G1",
         run_dir: Path | str | None = None,
         trace_path: Path | str | None = None,
-        ranking_metric: str = "sharpe",
+        ranking_metric: str | None = None,
     ) -> None:
         if budget < 1:
             raise ValueError(
@@ -148,7 +148,21 @@ class ParameterOptimizerAdapter(Adapter):
         self._stage_id = str(stage_id)
         self._run_dir = Path(run_dir) if run_dir is not None else Path(".")
         self._trace_path = Path(trace_path) if trace_path is not None else None
-        self._ranking_metric = str(ranking_metric)
+        # Ranking metric + tie-break: sourced from the preregistration's
+        # `selection` block (whole-tree review: these were hard-coded kwargs
+        # / constants, never preregistered, so two runs could select G1 by
+        # different metrics with no audit trail). The explicit kwarg still
+        # overrides (unit-test back-door), but the preregistered value is
+        # the production source.
+        sel = (preregistration or {}).get("selection") or {}
+        self._ranking_metric = str(
+            ranking_metric if ranking_metric is not None
+            else sel.get("ranking_metric", "sharpe")
+        )
+        self._tie_break = sel.get("tie_break") or [
+            {"metric": "net_profit", "direction": "desc"},
+            {"metric": "mdd", "direction": "asc"},
+        ]
 
     # ------------------------------------------------------------------
     # Public API
