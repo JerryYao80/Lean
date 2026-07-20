@@ -17,6 +17,11 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
     {
         private readonly Gold2RealRateCapFactor _cap;
         private readonly Symbol _gold;
+        // C2: optional effective cap override. When >0 it overrides the factor's
+        // cap value (used by G2 shaping: effRealRateCap = base_realrate_cap / penalty).
+        // G0 path uses the legacy 2-arg ctor -> _effRealRateCap=0 -> no override ->
+        // behavior byte-identical to before.
+        private readonly decimal _effRealRateCap;
 
         public string Name => "Gold2RealRateCapModel";
 
@@ -24,13 +29,23 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
         {
             _cap = cap;
             _gold = gold;
+            _effRealRateCap = 0m;
+        }
+
+        public Gold2RealRateCapModel(Gold2RealRateCapFactor cap, Symbol gold, decimal effRealRateCap)
+            : this(cap, gold)
+        {
+            _effRealRateCap = effRealRateCap;
         }
 
         public override IEnumerable<IPortfolioTarget> ManageRisk(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
-            // 直接调用真实因子 wrapper 的 Compute(而非自行重写 regime→cap 逻辑);
-            // 与 Gold2RealRateCapFactor 单一事实来源,避免双路分叉。
-            var capFactor = _cap.Compute(_gold, algorithm.Time).Value;
+            // C2: when an effective cap override is set (G2 shaping path), use it
+            // instead of the factor's baked-in risingFastCap; otherwise delegate to
+            // the factor exactly as before (G0 path, byte-identical).
+            var capFactor = _effRealRateCap > 0m
+                ? _effRealRateCap
+                : _cap.Compute(_gold, algorithm.Time).Value;
             foreach (var t in targets)
             {
                 // 只对本模型的 gold 标的施 cap;非 gold 标的直接透传。
