@@ -40,12 +40,21 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2
 
         public override IEnumerable<IPortfolioTarget> ManageRisk(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
-            // C2: when an effective cap override is set (G2 shaping path), use it
-            // instead of the factor's baked-in risingFastCap; otherwise delegate to
-            // the factor exactly as before (G0 path, byte-identical).
-            var capFactor = _effRealRateCap > 0m
-                ? _effRealRateCap
-                : _cap.Compute(_gold, algorithm.Time).Value;
+            // C2: the realrate cap applies ONLY in RISING_FAST (mirrors
+            // Gold2RealRateCapFactor.Compute: RISING_FAST -> risingFastCap, else 1.0).
+            // Compute the factor once for the regime + regime-dependent cap.
+            // In RISING_FAST: use the effective-cap override when set (G2 shaping:
+            // effRealRateCap = risingFastCap / penalty), else the factor's cap.
+            // In non-rising regimes: no cap (1.0) — the shaping penalty must NOT
+            // leak a cap into regimes that the factor leaves uncapped.
+            // G0 byte-identical: 2-arg ctor -> _effRealRateCap=0 -> no override ->
+            // factor.Value; OR 3-arg ctor with penalty=1.0 -> effRealRateCap=
+            // risingFastCap = factor.Value. Either way capFactor == factor.Value.
+            var computed = _cap.Compute(_gold, algorithm.Time);
+            var regime = (GoldRegime)(decimal)computed.RawValue;
+            var capFactor = regime == GoldRegime.RISING_FAST
+                ? (_effRealRateCap > 0m ? _effRealRateCap : computed.Value)
+                : 1.0m;
             foreach (var t in targets)
             {
                 // 只对本模型的 gold 标的施 cap;非 gold 标的直接透传。
