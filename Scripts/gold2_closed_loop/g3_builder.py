@@ -135,6 +135,17 @@ class G3BuildResult:
     candidate_dir: str | None
     attempted_trial_count: int
     verdict_cap: str | None = None
+    # Task 6: optional candidate_class + dll_path carried from the generator
+    # response. Default None so G0 / static-stub paths that do NOT supply
+    # these attrs (e.g. construct_p3._StaticGen, FakeGenerationResponse in the
+    # g3_builder tests) are unaffected — `getattr(response, ..., None)` in
+    # build() yields None, and positional construction in _construction_failed
+    # still works (these fields come AFTER verdict_cap, the prior last field).
+    # Task 7's _resolve_final_stage / _frozen_params_for consume these to load
+    # the candidate dll + algorithm-type-name into the LEAN config when a G3
+    # candidate compiled + passed the train gate.
+    candidate_class: str | None = None
+    dll_path: str | None = None
 
 
 class GenerationResponse(Protocol):
@@ -144,6 +155,14 @@ class GenerationResponse(Protocol):
     production; the test fixtures use ``FakeGenerationResponse``). The
     builder reads them to compute the frozen response/source/config hashes
     and to detect the training-gate outcome.
+
+    Task 6 extension: ``candidate_class`` and ``dll_path`` are OPTIONAL
+    extras carried from the generator response into ``G3BuildResult`` so
+    Task 7's ``_resolve_final_stage`` / ``_frozen_params_for`` can load the
+    candidate dll + algorithm-type-name into the LEAN config when a G3
+    candidate compiled + passed the train gate. Static stubs / G0 fixtures
+    that omit them are handled by ``getattr(response, ..., None)`` in
+    ``build()`` and default to None on ``G3BuildResult``.
     """
 
     source_text: str
@@ -153,6 +172,11 @@ class GenerationResponse(Protocol):
     # built and compiled but the training gate rejected it -> CANDIDATE_REJECTED.
     # When None/True, the candidate passed the training gate -> eligible.
     training_gate_passed: Any
+    # Optional (Task 6): carried into G3BuildResult for Task 7 consumption.
+    # Use ``Any`` typing (like ``training_gate_passed``) so a Protocol-based
+    # type checker does not require every generator to declare them.
+    candidate_class: Any
+    dll_path: Any
 
 
 class G3Builder:
@@ -330,6 +354,14 @@ class G3Builder:
             candidate_dir=str(candidate_dir),
             attempted_trial_count=1,
             verdict_cap=None,
+            # Task 6: thread optional candidate_class + dll_path from the
+            # generator response into G3BuildResult. getattr(..., None)
+            # so static-stub / G0 generators that omit these attrs stay
+            # None (no positional breakage; defaults declared on the
+            # dataclass). Task 7 reads these to load the candidate dll
+            # + algorithm-type-name into the LEAN config.
+            candidate_class=getattr(response, "candidate_class", None),
+            dll_path=getattr(response, "dll_path", None),
         )
 
     # ------------------------------------------------------------------
@@ -367,6 +399,18 @@ def _response_dict(response: Any) -> dict[str, Any]:
     Only the hash-relevant fields are extracted; the source_text is hashed
     separately (it is the primary economic artifact). ``training_gate_passed``
     is NOT part of the response hash (it is an outcome, not an input).
+
+    Task 6 decision: ``candidate_class`` and ``dll_path`` are ALSO excluded
+    from the response hash. They are DERIVED outputs of the generation
+    (compiled out of source_text + dotnet build), not inputs. Including them
+    would couple the frozen response hash to the candidate dll path, which
+    varies across file-system layouts (tmp_path in tests vs. canonical
+    proof_root in production) without changing the economic identity of the
+    candidate. ``source_text`` + ``compiler_hash`` (the dll's sha256) +
+    ``config_hash`` already capture identity; ``candidate_class`` is
+    extractable from ``source_text`` via ``_extract_class_name``; and
+    ``dll_path`` is a filesystem location, not a content hash. Consistent
+    with ``training_gate_passed`` treatment (outcomes stay out of the hash).
     """
     return {
         "source_text": str(getattr(response, "source_text", "") or ""),

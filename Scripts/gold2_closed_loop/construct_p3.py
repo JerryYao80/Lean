@@ -72,6 +72,26 @@ class _StaticGen:
         )
 
 
+def _select_generator(proof_root):
+    """G3 generator selection. Default: real LLM (G3RealGenerator).
+
+    Env override:
+      GOLD2_G3_GENERATOR=static -> ``_StaticGen`` (reproduce the frozen
+      4-defect experiment without calling the LLM or dotnet; used in tests
+      and as a fallback when the LLM endpoint is unavailable).
+
+    ``proof_root`` is the experiment's proof root; ``G3RealGenerator`` uses
+    it to compute ``proof_root/candidates/<candidate_id>`` (matching
+    ``G3Builder.build``'s candidate_dir convention at g3_builder.py:236-238).
+    The static stub ignores ``proof_root`` (it produces a fixed source).
+    """
+    import os
+    if os.environ.get("GOLD2_G3_GENERATOR", "real") == "static":
+        return _StaticGen()
+    from Scripts.gold2_closed_loop.g3_real_generator import G3RealGenerator
+    return G3RealGenerator(proof_root=proof_root)
+
+
 def _build_g3_request(window_id: str, evidence_hash: str, g2_hash: str) -> G3Request:
     return G3Request(
         experiment_id="E1",
@@ -235,13 +255,21 @@ def main() -> int:
         g3_build = None
         if trigger.eligible:
             req = _build_g3_request(wid, evidence_hash, g2_hash)
-            build = G3Builder(_StaticGen(), budget=4).build(req, wdir / "proof")
+            build = G3Builder(_select_generator(wdir / "proof"), budget=4).build(req, wdir / "proof")
             g3_build = {
                 "eligible": build.eligible,
                 "alias_reason": build.alias_reason,
                 "source_sha256": build.source_sha256,
                 "candidate_set_sha256": build.candidate_set_sha256,
                 "verdict_cap": build.verdict_cap,
+                # Task 6: carry candidate_class + dll_path into p3_report.json
+                # so Task 7's _resolve_final_stage / _frozen_params_for can
+                # load the candidate dll + algorithm-type-name into the LEAN
+                # config when a G3 candidate compiled + passed the train gate.
+                # None on the static-stub / CONSTRUCTION_FAILED / CANDIDATE_REJECTED
+                # paths (getattr(..., None) in g3_builder.build).
+                "candidate_class": build.candidate_class,
+                "dll_path": build.dll_path,
             }
         report["windows"].append({
             "window_id": wid,
