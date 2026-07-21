@@ -194,9 +194,13 @@ def generate_reconstruction(prompt: str, *, base_url="https://mydamoxing.cn",
 ### 3.4 LLM 输出 → 编译 → 冻结 → gate
 
 1. LLM 返回 C# 子类源码 → `G3Builder.build` 已做 `atomic_write_bytes(candidate_dir/"G3.cs", source_text)`(`g3_builder.py:263-267`)。
-2. `dotnet build` 候选目录 → 真实 `compiler_hash`(不再是 `"c0mp1ler"*8`);失败 → `compiler_hash=""` → `CONSTRUCTION_FAILED`(`g3_builder.py:283-291`)。
-3. 训练期 gate:在 `<W>/train` 跑一次 G3Real 候选,`training_gate_passed` = 训练期 sharpe ≥ `min_dsr=0.0`(与 G1 同款门,不改门槛)。
-4. 返回 `GenerationResponse(source_text=<C#源码>, compiler_hash=<真 hash>, config_hash=<config>, training_gate_passed=<gate>)` —— G3Builder 已消费此协议(`g3_builder.py:140-155`)。`not gate_passed` → `CANDIDATE_REJECTED` 复用 G2 hash(`g3_builder.py:307-321`)。
+2. **编译 harness**:`G3RealGenerator` 在 `candidate_dir/` 放一个 `.csproj` 模板(新文件 `Scripts/gold2_closed_loop/g3_real_candidate.csproj.tmpl`),`<Reference>`/`<ProjectReference>` 指向 `Algorithm.CSharp.csproj` + `Common.csproj` + `Engine.csproj`(基类 `Gold2ReconstructionCandidateBase` 与 Risk Model 类都在 `Algorithm.CSharp`)。然后 `dotnet build candidate_dir/<candidate_id>.csproj -o candidate_dir/bin/` → 产出 `<candidate_id>.dll`(含 LLM 子类)。真实 `compiler_hash` = 该 dll 的 SHA256(不再是 `"c0mp1ler"*8`);build 失败 → `compiler_hash=""` → `CONSTRUCTION_FAILED`(`g3_builder.py:283-291`)。
+3. 训练期 gate:在 `<W>/train` 跑一次 G3Real 候选(LEAN config `algorithm-type-name=<LLM 子类名,如 Gold2G3Real_<candidate_id_safe>>`、`algorithm-location=<candidate_dir>/bin/<candidate_id>.dll`),`training_gate_passed` = 训练期 sharpe ≥ `min_dsr=0.0`(与 G1 同款门,不改门槛)。子类名 = `config_hash` 字段的一部分(见 §3.6)。
+4. 返回 `GenerationResponse(source_text=<C#源码>, compiler_hash=<dll sha256>, config_hash=<config 含子类名 + algorithm-location>, training_gate_passed=<gate>)` —— G3Builder 已消费此协议(`g3_builder.py:140-155`)。`not gate_passed` → `CANDIDATE_REJECTED` 复用 G2 hash(`g3_builder.py:307-321`)。
+
+### 3.6 algorithm-type-name 透传(给 P4 盲跑)
+
+`G3RealGenerator` 把 LLM 产出的子类名(如 `Gold2G3Real_<candidate_id_safe>`)与编译出的 dll 路径写进 `config_hash` 的输入(一个 JSON:`{"algorithm_type_name":..., "algorithm_location":..., "instrument":...}`)。`_frozen_params_for`(§4.2)对 G3 从此 JSON 读 `algorithm_type_name` + `algorithm_location`,供 P4 盲跑 config 用。`candidate_id_safe` 由 `partition.replace("/","-")`(C1 已建立的净化)保证文件系统安全。
 
 ### 3.5 Q-B 修复:regime 非对称 Risk Model
 
@@ -297,6 +301,7 @@ LLM 生成的 `Gold2RegimeAsymmetricRiskModel`(LLM 可内联进 `G3.cs`,或作�
 | `Algorithm.CSharp/Models/Gold2/Reconstruction/Gold2InstrumentSpec.cs` | 新建 instrument registry | §2 多标的统一 |
 | `Scripts/gold2_closed_loop/g3_real_llm_client.py` | 新建 glm-5.2 HTTP 客户端(mirror soloquant,不 import) | §3.3 LLM 契约 |
 | `Scripts/gold2_closed_loop/g3_real_generator.py` | 新建 `G3RealGenerator`(调 LLM + 编译 + gate → GenerationResponse) | §3.4 输出→冻结 |
+| `Scripts/gold2_closed_loop/g3_real_candidate.csproj.tmpl` | 新建候选编译 .csproj 模板(指向 Algorithm.CSharp.csproj) | §3.4 编译 harness |
 | `Scripts/gold2_closed_loop/construct_p3.py:238` | `G3Builder(_StaticGen(),...)` → `G3Builder(G3RealGenerator(),...)`(env 可切回 static) | §4.1 supersede |
 | `Scripts/gold2_closed_loop/construct_p4.py:116-128,98-113` | `_resolve_final_stage` G3 编译通过时返回 "G3";`_frozen_params_for` G3 读 algorithm-type-name | §4.2 真候选 |
 | `Tests/gold2_closed_loop/`(Python 单测) | 测试矩阵 §6 | 全部 |
