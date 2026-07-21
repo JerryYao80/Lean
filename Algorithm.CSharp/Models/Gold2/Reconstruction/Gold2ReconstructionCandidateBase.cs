@@ -75,16 +75,23 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
 
         public override void Initialize()
         {
+            // Q-C 多标的统一(spec §2.2): spec 驱动 AddEquity/AddData ticker/market/data-source。
+            // 默认 instrument="518880" 时 spec 产出的 AddEquity/AddData 调用与原
+            // Gold2BetaVolTargetStrategy.cs:67-77 逐字节一致(同一 ticker/market/data-type 组合)。
+            // 518880 的 factor 构造保留内联(见下方 _realrateInner 注释)。
+            var spec = Gold2InstrumentRegistry.Get(GetParameter("instrument", "518880"));
+
             SetAccountCurrency(Currencies.CNY);
             SetCash(GetDecimalParameter("initial-capital", 1_000_000m));
             SetStartDate(GetDateParameter("start-date", new DateTime(2020, 1, 1)));
             SetEndDate(GetDateParameter("end-date", new DateTime(2026, 6, 23)));
 
-            // SetBenchmark must be called AFTER AddEquity so SymbolCache resolves "518880"
+            // SetBenchmark must be called AFTER AddEquity so SymbolCache resolves the ticker
             // to the SSE symbol; otherwise QCAlgorithm.SetBenchmark(string) falls through
-            // to Symbol.Create("518880", Equity, Market.USA) and the benchmark security
+            // to Symbol.Create(ticker, Equity, Market.USA) and the benchmark security
             // has no A-share data → flat-0 benchmark → wrong Beta/Alpha/IR stats.
-            var eq = AddEquity("518880", Resolution.Daily, Market.SSE);
+            // spec.Market 是 Market.SSE 常量值("sse"),与原硬编码 Market.SSE 等价。
+            var eq = AddEquity(spec.Ticker, Resolution.Daily, spec.Market);
             eq.FeeModel = new AShareStockFeeModel();
             eq.FillModel = new AShareStockFillModel();
             eq.BuyingPowerModel = new AShareStockBuyingPowerModel();
@@ -92,15 +99,21 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
             _gold = eq.Symbol;
             SetBenchmark(_gold);
 
-            _auSym = AddData<AuShfDailyBar>("AU.SHF", Resolution.Daily).Symbol;
-            _vixSym = AddData<FredMacroData>("VIX", Resolution.Daily).Symbol;
-            _dfii10Sym = AddData<FredMacroData>("DFII10", Resolution.Daily).Symbol;
+            // spec-driven custom data: AddData<T>(ticker, Resolution.Daily)。spec 的 *DataSource
+            // 字段是 Type,通过非泛型 AddData(Type, ticker, ...) 重载调用(QCAlgorithm.Python.cs:154)。
+            // 对 518880 等价于: AddData<AuShfDailyBar>("AU.SHF", Resolution.Daily) 等 3 条原调用。
+            _auSym = AddData(spec.GoldDataSource, spec.GoldDataTicker, Resolution.Daily, null, false, 1m).Symbol;
+            _vixSym = AddData(spec.MacroVixDataSource, spec.VixTicker, Resolution.Daily, null, false, 1m).Symbol;
+            _dfii10Sym = AddData(spec.MacroRealRateDataSource, spec.RealRateTicker, Resolution.Daily, null, false, 1m).Symbol;
 
             _trend = new Gold2TrendFactor(GetIntParameter("trend-ma-short", 20), GetIntParameter("trend-ma-long", 120));
             _vol = new Gold2VolRegimeFactor(GetDecimalParameter("ewma-lambda", 0.94m),
                 GetDecimalParameter("vol-target", 0.11m), GetIntParameter("vol-warmup", 60),
                 GetDecimalParameter("smooth-alpha", 0.25m));
             _ext = new Gold2ExtremeRiskFactor();
+            // 共享 inner: DFII10 数据通过 OnData 注入到 _realrateInner(Gold2BetaVolTargetStrategy.cs:144),
+            // 而 _realrate 包装同一实例。spec.RegimeFactorFactory 是扩展点(供未来 instrument 用);
+            // 518880 保留内联构造以维持共享 inner 语义 + G0 byte-identical。
             _realrateInner = new GoldRealRateRegimeFactor();
             _realrate = new Gold2RealRateCapFactor(_realrateInner, GetDecimalParameter("realrate-cap", 0.6m));
 

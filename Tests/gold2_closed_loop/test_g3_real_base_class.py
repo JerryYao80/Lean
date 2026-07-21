@@ -23,3 +23,12 @@ def test_base_class_implements_same_interfaces():
     assert "Gold2ReconstructionCandidateBase : QCAlgorithm, IOptimizableStrategy, IRlStateExportable" in src
     for name in ["trend-ma-short","vol-target","extreme-vol-cap","realrate-cap","trend-disable"]:
         assert name in src, f"base class must expose tunable {name}"
+
+def test_instrument_registry_has_518880():
+    spec_cs = ROOT / "Algorithm.CSharp/Models/Gold2/Reconstruction/Gold2InstrumentSpec.cs"
+    assert spec_cs.exists()
+    src = spec_cs.read_text()
+    assert "518880" in src and "SSE" in src
+    assert "AuShfDailyBar" in src and "AU.SHF" in src
+    assert "FredMacroData" in src and "VIX" in src and "DFII10" in src
+    assert "throw new ArgumentException" in src
