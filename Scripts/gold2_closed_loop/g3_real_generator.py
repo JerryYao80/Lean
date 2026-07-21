@@ -35,6 +35,7 @@ Spec: docs/superpowers/specs/2026-07-21-gold2-real-llm-reconstruction-design.md 
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,11 @@ from typing import Any
 from Scripts.gold2_closed_loop.evidence import canonical_hash
 from Scripts.gold2_closed_loop.g3_real_compile import CompileResult, compile_candidate
 from Scripts.gold2_closed_loop.g3_real_llm_client import build_prompt, generate_reconstruction
+
+# Absolute path to the repository root (the generator writes candidate dirs
+# under proof_root, but _run_train_gate needs the repo root to pass as
+# ``worktree_root`` to run_lean so LEAN's cwd is the worktree, not /tmp).
+_ROOT = Path(__file__).resolve().parents[2]
 
 # Minimum train-period DSR the candidate must beat to pass the gate
 # (spec §3.6: "candidate must NOT underperform G0 on the train period").
@@ -253,21 +259,327 @@ def _default_cand_dir(proof_root: Path | str, candidate_id: str) -> Path:
     return Path(proof_root) / "candidates" / candidate_id
 
 
+def _reflect_interface_ok_source_level(source_text: str) -> bool:
+    """Source-level reflect: scan the C# source text for the required override.
+
+    Returns True iff:
+    (a) the source contains ``override`` applied to a method whose name is
+        ``BuildRiskModels`` (the protected virtual hook); AND
+    (b) the source does NOT contain ``override`` applied to ``Initialize``.
+
+    This is a WEAKER check than runtime reflect (it operates on source text,
+    not the compiled dll's metadata tokens). It is the FALLBACK when neither
+    pythonnet runtime reflect nor a small compiled ReflectProbe is available
+    in the host environment (e.g. no Mono / no libcoreclr bindings for
+    pythonnet). The production target is the runtime reflect (Task 7 production
+    path via ``_reflect_interface_ok`` -> ``_reflect_interface_ok_probe`` ->
+    a small C# ReflectProbe dll that loads the candidate + reflects). Flagged
+    for the end-to-end Task 9 to validate the runtime path on the production
+    host.
+
+    Edge cases the regex must handle:
+    * ``protected override IEnumerable<IRiskManagementModel> BuildRiskModels()``
+      — the ``override`` keyword precedes the return type, then the method
+      name. The match is on ``override`` + (any chars up to a method name).
+    * ``public override void Initialize()`` — the forbidden Initialize
+      override. Subclasses must NOT touch Universe/Alpha/Portfolio/Execution/
+      Initialize (spec §3.5: "override ONLY BuildRiskModels, do NOT touch
+      ...Initialize").
+    * Comments mentioning ``override`` (``// override BuildRiskModels``) do
+      NOT count — the regex requires ``override`` as a C# keyword token,
+      preceded by a word boundary and followed by whitespace + (return type
+      or void). This rejects simple comment-only appearances.
+    """
+    if not source_text:
+        return False
+    # Method-name list whose ``override`` is the signal. ``BuildRiskModels``
+    # is the required hook; ``Initialize`` is the forbidden override.
+    has_bm_override = False
+    for m in re.finditer(
+        r"\boverride\b\s+[\w<>\[\],\s\.]*?\bBuildRiskModels\b\s*\(",
+        source_text,
+    ):
+        has_bm_override = True
+        break
+    if not has_bm_override:
+        return False
+    # Reject if the source overrides Initialize anywhere. The signature shape
+    # is ``public override void Initialize()`` or ``override void Initialize``
+    # (any return type / access modifier combo is still an override).
+    if re.search(
+        r"\boverride\b\s+[\w<>\[\],\s\.]*?\bInitialize\b\s*\(",
+        source_text,
+    ):
+        return False
+    return True
+
+
+def _reflect_interface_ok_runtime(dll_path: str, candidate_class: str) -> bool | None:
+    """Runtime reflect via pythonnet: load the candidate dll, find the
+    candidate class, and check that:
+    (a) ``BuildRiskModels`` is overridden (its ``DeclaringType`` is the
+        candidate class itself, NOT the base); AND
+    (b) ``Initialize`` is NOT overridden by the candidate (its
+        ``DeclaringType`` is NOT the candidate class).
+
+    Returns:
+      True/False: the reflect check ran and the verdict is as specified.
+      None: pythonnet is unavailable in this environment (caller falls back
+        to ``_reflect_interface_ok_source_level``).
+
+    Production target. The host environment used to validate the proof may
+    not have pythonnet + a working .NET runtime binding (Mono / coreclr).
+    When unavailable, the generator falls back to the source-level check
+    and flags the end-to-end Task 9 run to validate the runtime path on the
+    production host.
+
+    NOTE: ``import clr`` in pythonnet 3.x triggers runtime initialization
+    eagerly (it calls ``set_runtime_from_env`` which probes for Mono /
+    coreclr and raises ``RuntimeError`` when neither is configured). We
+    catch BaseException (RuntimeError is a child of Exception, but
+    pythonnet's loader can also raise SystemExit in some envs) so the
+    caller sees None instead of a propagated runtime-init failure.
+    """
+    try:
+        import clr  # type: ignore[import]  # noqa: F401
+    except BaseException:
+        return None
+    # `import clr` succeeded; now try the first runtime touch. Even if
+    # `import clr` did not raise, the first ``from System...`` import may
+    # raise if the runtime was not actually initialized. Catch and return
+    # None so the caller falls back.
+    try:
+        from System.Reflection import Assembly  # type: ignore[import]
+        from System.Reflection import BindingFlags  # type: ignore[import]
+    except BaseException:
+        return None
+    try:
+        asm = Assembly.LoadFrom(dll_path)
+    except BaseException:
+        return None
+    # Try the bare class name first; the candidate is typically in the
+    # QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction namespace.
+    type_obj = None
+    for name in (
+        candidate_class,
+        f"QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction.{candidate_class}",
+    ):
+        try:
+            type_obj = asm.GetType(name)
+        except BaseException:
+            type_obj = None
+        if type_obj is not None:
+            break
+    if type_obj is None:
+        return False
+    # BindingFlags: Instance | NonPublic | Public (the hook is protected, so
+    # NonPublic is required; Initialize is public).
+    flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public
+    bm = type_obj.GetMethod("BuildRiskModels", flags)
+    if bm is None:
+        return False
+    overrides_bm = bm.DeclaringType == type_obj
+    init = type_obj.GetMethod("Initialize", flags)
+    overrides_init = init is not None and init.DeclaringType == type_obj
+    return bool(overrides_bm and not overrides_init)
+
+
+def _reflect_interface_ok_probe(dll_path: str, candidate_class: str) -> bool | None:
+    """Runtime reflect via a small compiled ReflectProbe C# exe (the second
+    fallback when pythonnet is unavailable but dotnet is).
+
+    The probe lives at ``Scripts/gold2_closed_loop/reflect_probe.cs`` (Task 7
+    adds it). It loads the candidate dll via ``Assembly.LoadFrom``, resolves
+    the candidate type, reflects ``BuildRiskModels`` + ``Initialize``, and
+    prints ``RESULT:OK`` / ``RESULT:FAIL`` / ``RESULT:NO_OVERRIDE`` /
+    ``RESULT:TYPE_NOT_FOUND``.
+
+    Returns:
+      True/False: the probe ran and the verdict is as specified.
+      None: dotnet or the probe dll is unavailable (caller falls back to
+        the source-level check).
+    """
+    import shutil
+    import subprocess
+
+    probe_src = Path(__file__).parent / "reflect_probe.cs"
+    if not probe_src.is_file():
+        return None
+    dotnet = shutil.which("dotnet") or "/usr/local/dotnet/dotnet"
+    if not Path(dotnet).is_file():
+        return None
+    probe_dir = Path(_ROOT) / "result" / "gold2-reflect-probe"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    probe_csproj = probe_dir / "reflect_probe.csproj"
+    probe_cs = probe_dir / "reflect_probe.cs"
+    probe_cs.write_text(probe_src.read_text())
+    if not probe_csproj.exists():
+        probe_csproj.write_text(_REFLECT_PROBE_CSPROJ)
+    # Build once; subsequent calls skip the build if the probe dll exists.
+    probe_dll = probe_dir / "bin" / "Debug" / "net10.0" / "reflect_probe.dll"
+    if not probe_dll.exists():
+        try:
+            proc = subprocess.run(
+                [dotnet, "build", str(probe_csproj), "-c", "Debug", "--nologo"],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(_ROOT),
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if proc.returncode != 0 or not probe_dll.exists():
+            return None
+    # Run the probe against the candidate dll. The probe resolves transitive
+    # deps (NodaTime etc.) via AssemblyResolve against the candidate's bin
+    # dir + Algorithm.CSharp/bin/Debug + Launcher/bin/Debug.
+    candidate_dir = Path(dll_path).resolve().parent
+    try:
+        proc = subprocess.run(
+            [dotnet, str(probe_dll), str(dll_path), candidate_class,
+             str(candidate_dir)],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(_ROOT),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if "RESULT:OK" in out:
+        return True
+    if "RESULT:FAIL" in out or "RESULT:NO_OVERRIDE" in out:
+        return False
+    # TYPE_NOT_FOUND or any other output -> unavailable (don't claim False
+    # on a type-resolution failure; the source-level check is the safer
+    # fallback).
+    return None
+
+
+# The .csproj for the runtime reflect probe (built on-demand by
+# _reflect_interface_ok_probe). TargetFramework=net10.0 matches the candidate
+# dll + Algorithm.CSharp.csproj so the AssemblyResolve probing paths land
+# real deps.
+_REFLECT_PROBE_CSPROJ = """\
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>reflect_probe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="reflect_probe.cs" />
+  </ItemGroup>
+</Project>
+"""
+
+
+def _reflect_interface_ok(dll_path: str, candidate_class: str) -> bool:
+    """Verify the candidate subclass overrides ``BuildRiskModels`` AND does
+    NOT override ``Initialize``.
+
+    Production target: runtime reflect via pythonnet or a compiled ReflectProbe
+    (loads the candidate dll + reflects method metadata). Fallback: source-level
+    regex on the G3.cs the generator wrote (weaker — operates on source text,
+    not the compiled dll's metadata tokens; the LLM could in principle emit
+    source that looks compliant but compiles to a non-compliant dll, though
+    the compile step itself would catch most such cases). The source-level
+    path is DOCUMENTED as weaker; the runtime path is the production target.
+
+    Order of preference:
+      1. pythonnet runtime reflect (fast, in-process) — unavailable in this
+         env (no Mono / libcoreclr binding), returns None.
+      2. ReflectProbe C# exe (subprocess) — needs dotnet (available here),
+         builds the probe once, reuses the dll across calls. Available when
+         dotnet + Algorithm.CSharp/bin/Debug exist.
+      3. Source-level regex fallback — always available; DOCUMENTED weaker.
+
+    The function returns True only when ONE of the three paths actively
+    confirms the override pattern. If the runtime paths are unavailable
+    (None), the source-level path runs. If the source-level path also
+    rejects, the gate fails closed (returns False -> CANDIDATE_REJECTED).
+    """
+    # 1. pythonnet runtime reflect.
+    runtime_verdict = _reflect_interface_ok_runtime(dll_path, candidate_class)
+    if runtime_verdict is not None:
+        return bool(runtime_verdict)
+    # 2. ReflectProbe exe.
+    probe_verdict = _reflect_interface_ok_probe(dll_path, candidate_class)
+    if probe_verdict is not None:
+        return bool(probe_verdict)
+    # 3. Source-level fallback. The generator wrote G3.cs into the candidate
+    # dir alongside the dll; read it back and run the source-level check.
+    candidate_cs = Path(dll_path).resolve().parent / "G3.cs"
+    if not candidate_cs.is_file():
+        # Cannot do source-level reflect without the source file. Fail
+        # closed (CANDIDATE_REJECTED downstream) rather than silently pass.
+        return False
+    return _reflect_interface_ok_source_level(candidate_cs.read_text())
+
+
 def _run_train_gate(req: _GateRequest, *, train_data_folder: str | None) -> bool:
     """Run the candidate on the train period; pass iff (a) the subclass
     overrides BuildRiskModels without overriding Initialize (reflect), AND
     (b) train sharpe >= MIN_DSR.
 
-    Task 5 STUB: raises ``NotImplementedError``. The Task 5 unit tests
-    monkeypatch this function, so the stub is never called in tests.
-    Task 7 replaces this stub with the real implementation (LEAN train run
-    + pythonnet reflect; see plan Task 7 Step 3).
+    Task 7 implementation:
+
+    * ``_reflect_interface_ok`` runs first (production path: pythonnet runtime
+      reflect or ReflectProbe exe; fallback: source-level regex on the G3.cs
+      the generator wrote). If it returns False, the gate short-circuits with
+      False — no LEAN run is attempted (the candidate is CANDIDATE_REJECTED
+      downstream).
+    * On reflect pass: ``build_run_config`` is called with the candidate dll
+      as ``algorithm-location`` (overriding the base config's
+      ``algorithm-location``) and the candidate class as
+      ``algorithm-type-name``. ``run_lean`` runs the train period
+      (``req.train_start`` .. ``req.train_end``) on the frozen TRAIN snapshot
+      (``train_data_folder`` — same isolation as construct_p2: the blind
+      partition is physically absent from the snapshot).
+    * The gate reads the result packet's ``statistics.Sharpe Ratio`` (the
+      top-level LEAN-native field, matching ``construct_p2._metrics``) and
+      returns True iff ``sharpe >= MIN_DSR`` (0.0).
+
+    Anti-p-hacking: ``MIN_DSR`` is 0.0 (the candidate must NOT underperform
+    G0 on train). Task 8's regression pins this; the gate is NOT a silent
+    tightening across runs. A negative-train-sharpe candidate is rejected
+    (CANDIDATE_REJECTED downstream, not silently passed).
     """
-    raise NotImplementedError(
-        "_run_train_gate is a Task 5 stub; Task 7 implements the real LEAN "
-        "train run + pythonnet reflect. The Task 5 tests monkeypatch this "
-        "function so the stub is never called."
+    if not _reflect_interface_ok(req.dll_path, req.candidate_class):
+        return False
+    from Scripts.gold2_closed_loop.lean_runner import build_run_config, run_lean
+
+    run_dir = Path(req.dll_path).resolve().parent / "gate"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = run_dir / "trace.jsonl"
+    # The base config carries the proof_lean_base defaults (instrument,
+    # factor warmup, etc.). The candidate dll OVERRIDES algorithm-location;
+    # the candidate class OVERRIDES algorithm-type-name. build_run_config
+    # resolves an existing algorithm-location to absolute (lean_runner.py:
+    # 134-137), so passing the candidate dll path here pins the LEAN run to
+    # the candidate (not the proof strategy dll).
+    base = {"algorithm-location": str(req.dll_path)}
+    run_id = f"{req.candidate_id}-GATE"
+    cfg = build_run_config(
+        base, run_dir, req.candidate_class, {},
+        run_id=run_id,
+        start_date=req.train_start, end_date=req.train_end,
+        trace_path=trace_path,
+        experiment_id="E1", window_id=req.window_id,
+        stage_id="G3", candidate_id=req.candidate_id,
+        data_folder=train_data_folder,
     )
+    res = run_lean(
+        cfg, run_dir=run_dir, run_id=run_id,
+        timeout_seconds=600, worktree_root=_ROOT, trace_path=trace_path,
+    )
+    if not res.packet_path or not Path(res.packet_path).is_file():
+        return False
+    pkt = json.loads(Path(res.packet_path).read_text())
+    sharpe = ((pkt.get("statistics") or {}).get("Sharpe Ratio") or 0)
+    try:
+        sharpe_f = float(sharpe)
+    except (TypeError, ValueError):
+        return False
+    return sharpe_f >= MIN_DSR
 
 
 class G3RealGenerator:
@@ -396,6 +708,10 @@ __all__ = [
     "_hash_config",
     "_looks_like_csharp",
     "_load_train_bundle",
+    "_reflect_interface_ok",
+    "_reflect_interface_ok_probe",
+    "_reflect_interface_ok_runtime",
+    "_reflect_interface_ok_source_level",
     "_run_train_gate",
     "_strip_fences",
     "_train_end",

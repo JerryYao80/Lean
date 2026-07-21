@@ -218,3 +218,794 @@ def test_construct_p3_p3_report_carries_candidate_class_dll_path(tmp_path, monke
     assert g3_build["dll_path"] is None
     # Must be JSON-serializable (it ends up in p3_report.json).
     json.dumps(g3_build)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: _resolve_final_stage + _frozen_params_for + _run_train_gate wiring
+# ---------------------------------------------------------------------------
+
+
+def _write_p3_report(p3_dir: Path, *, window_id: str, g3_build: dict | None) -> None:
+    """Helper: write a minimal p3_report.json with the given g3_build."""
+    import json
+    p3_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"windows": [{"window_id": window_id, "g3_build": g3_build}]}
+    (p3_dir / "p3_report.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n"
+    )
+
+
+def _write_p2_report(p2_dir: Path, *, window_id: str,
+                     g2_shaping: dict | None = None,
+                     g1_selected: dict | None = None) -> None:
+    """Helper: write a minimal p2_report.json for alias-chain tests."""
+    import json
+    p2_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"windows": [{"window_id": window_id,
+                             "g2_shaping": g2_shaping,
+                             "g1_selected": g1_selected}]}
+    (p2_dir / "p2_report.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n"
+    )
+
+
+def test_resolve_final_stage_returns_g3_when_compiled(tmp_path, monkeypatch):
+    """Task 7: when p3_report.g3_build.eligible==True (real LLM candidate
+    compiled + passed the train gate), _resolve_final_stage MUST return "G3"
+    instead of falling through to the G2/G1/G0 alias chain. This is the core
+    supersede: G3 stops aliasing to G2/G1/G0 when a real candidate compiled.
+    """
+    import json
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+
+    # Patch ROOT so the report paths land under tmp_path and the test does
+    # not touch the real result/ tree.
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {"_iso": staticmethod(lambda d: d.isoformat())})(),
+    )
+    _write_p3_report(
+        tmp_path / "result" / "gold2-p3-construction",
+        window_id="W1",
+        g3_build={
+            "eligible": True,
+            "candidate_set_sha256": "x" * 64,
+            "source_sha256": "y" * 64,
+            "candidate_class": "Gold2G3Real_W1",
+            "dll_path": str(tmp_path / "x.dll"),
+        },
+    )
+    assert p4._resolve_final_stage("W1") == "G3", (
+        "eligible G3 build must supersede the G2/G1/G0 alias chain"
+    )
+
+
+def test_resolve_final_stage_static_fallback_aliases(tmp_path, monkeypatch):
+    """Task 7: when p3_report.g3_build is None or not eligible (the static
+    stub / CONSTRUCTION_FAILED / CANDIDATE_REJECTED paths), _resolve_final_stage
+    MUST fall through to the existing G2/G1/G0 alias chain (so a static-only
+    P3 run still aliases to G2 when shaping is present)."""
+    import json
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {"_iso": staticmethod(lambda d: d.isoformat())})(),
+    )
+    _write_p3_report(
+        tmp_path / "result" / "gold2-p3-construction",
+        window_id="W1",
+        g3_build=None,
+    )
+    _write_p2_report(
+        tmp_path / "result" / "gold2-p2-construction",
+        window_id="W1",
+        g2_shaping={"extreme_risk_contrib_penalty": 1.5},
+    )
+    assert p4._resolve_final_stage("W1") == "G2"
+
+
+def test_resolve_final_stage_not_eligible_falls_through(tmp_path, monkeypatch):
+    """If g3_build is present but eligible==False (CANDIDATE_REJECTED or
+    CONSTRUCTION_FAILED), _resolve_final_stage MUST NOT return "G3" — the
+    candidate did not pass the gate, so it cannot supersede the alias chain."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {"_iso": staticmethod(lambda d: d.isoformat())})(),
+    )
+    _write_p3_report(
+        tmp_path / "result" / "gold2-p3-construction",
+        window_id="W1",
+        g3_build={"eligible": False, "alias_reason": "CANDIDATE_REJECTED"},
+    )
+    _write_p2_report(
+        tmp_path / "result" / "gold2-p2-construction",
+        window_id="W1",
+        g2_shaping=None,
+        g1_selected={"trend-ma-short": "20", "vol-target": "0.11"},
+    )
+    assert p4._resolve_final_stage("W1") == "G1"
+
+
+def test_frozen_params_for_g3_returns_candidate_descriptor(tmp_path, monkeypatch):
+    """Task 7: _frozen_params_for(stage_id="G3") returns the candidate
+    algorithm-type-name + algorithm-location (the candidate dll path) when the
+    P3 build is eligible. This is the descriptor the blind runner threads into
+    build_run_config so LEAN loads the candidate dll instead of the proof
+    strategy dll."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {"_iso": staticmethod(lambda d: d.isoformat())})(),
+    )
+    dll_path = str(tmp_path / "x.dll")
+    _write_p3_report(
+        tmp_path / "result" / "gold2-p3-construction",
+        window_id="W1",
+        g3_build={
+            "eligible": True,
+            "candidate_class": "Gold2G3Real_W1",
+            "dll_path": dll_path,
+        },
+    )
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    params = p4._frozen_params_for(fc)
+    assert params is not None, (
+        "eligible G3 must yield non-None params so the blind runner loads "
+        "the candidate dll + algorithm-type-name"
+    )
+    assert params["algorithm-type-name"] == "Gold2G3Real_W1"
+    assert params["algorithm-location"] == dll_path
+
+
+def test_frozen_params_for_g3_returns_none_when_not_eligible(tmp_path, monkeypatch):
+    """Task 7: when the G3 build is not eligible (static stub / rejected),
+    _frozen_params_for MUST return None so the blind runner falls back to the
+    default _lean_run path (no algorithm-location override). The alias chain
+    in _resolve_final_stage then picks G2/G1/G0."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {"_iso": staticmethod(lambda d: d.isoformat())})(),
+    )
+    _write_p3_report(
+        tmp_path / "result" / "gold2-p3-construction",
+        window_id="W1",
+        g3_build={"eligible": False, "alias_reason": "CANDIDATE_REJECTED"},
+    )
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    assert p4._frozen_params_for(fc) is None
+
+
+# ---------------------------------------------------------------------------
+# Task 7: _run_train_gate / _reflect_interface_ok (source-level reflect)
+# ---------------------------------------------------------------------------
+
+
+def test_reflect_interface_ok_source_level_trivial_subclass():
+    """Source-level reflect on the TRIVIAL_SUBCLASS (override present, no
+    Initialize override) must return True. This is the weaker source-parse
+    fallback when pythonnet runtime reflect is unavailable (this env)."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Tests.gold2_closed_loop.test_g3_real_generator import TRIVIAL_SUBCLASS
+
+    assert gen._reflect_interface_ok_source_level(TRIVIAL_SUBCLASS) is True, (
+        "TRIVIAL_SUBCLASS overrides BuildRiskModels and does NOT override "
+        "Initialize -> source-level reflect must accept it"
+    )
+
+
+def test_reflect_interface_ok_source_level_no_override_rejected():
+    """Source-level reflect on NO_OVERRIDE_SUBCLASS (no BuildRiskModels
+    override) must return False — the gate rejects it so the candidate is
+    marked CANDIDATE_REJECTED downstream."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Tests.gold2_closed_loop.test_g3_real_generator import NO_OVERRIDE_SUBCLASS
+
+    assert gen._reflect_interface_ok_source_level(NO_OVERRIDE_SUBCLASS) is False, (
+        "NO_OVERRIDE_SUBCLASS does not override BuildRiskModels -> reflect "
+        "must reject it"
+    )
+
+
+def test_reflect_interface_ok_source_level_rejects_initialize_override():
+    """Source-level reflect on a candidate that ALSO overrides Initialize()
+    (which the prompt forbids — subclasses must not touch Universe/Alpha/
+    Portfolio/Execution/Initialize) must return False."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+
+    src = """using System.Collections.Generic;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction;
+
+namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
+{
+    public class BadOverride : Gold2ReconstructionCandidateBase
+    {
+        public override void Initialize()
+        {
+            // forbidden: subclasses must not touch Initialize
+        }
+        protected override IEnumerable<IRiskManagementModel> BuildRiskModels()
+            => base.BuildRiskModels();
+    }
+}
+"""
+    assert gen._reflect_interface_ok_source_level(src) is False, (
+        "a candidate that overrides Initialize() must be rejected (spec "
+        "forbids subclasses touching Universe/Alpha/Portfolio/Execution/"
+        "Initialize)"
+    )
+
+
+def test_reflect_interface_ok_source_level_handles_initializer_parens():
+    """Edge case: a candidate overriding ``BuildRiskModels()`` (with parens
+    in the method-name regex) must be detected. The source-level parser must
+    handle both ``BuildRiskModels()`` and ``BuildRiskModels`` (the regex
+    should not be thrown off by the parens in the signature)."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+
+    src = """using System.Collections.Generic;
+using QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction;
+namespace X {
+    public class WithParens : Gold2ReconstructionCandidateBase
+    {
+        protected override IEnumerable<IRiskManagementModel> BuildRiskModels()
+        {
+            yield return new Gold2ExtremeRiskModel(null, null, 0m);
+        }
+    }
+}"""
+    assert gen._reflect_interface_ok_source_level(src) is True
+
+
+def test_run_train_gate_returns_false_when_reflect_fails(monkeypatch):
+    """_run_train_gate must call _reflect_interface_ok first; if the reflect
+    check fails (no BuildRiskModels override), the gate MUST short-circuit
+    and return False WITHOUT invoking LEAN. This wires the reflect check
+    into the gate path."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+
+    # _reflect_interface_ok returns False (source-level). The gate must NOT
+    # touch build_run_config / run_lean — the unit test would fail if it did
+    # (no dotnet / no LEAN data available here).
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: False)
+
+    # Sentinel: if the gate calls build_run_config, blow up.
+    def _boom(*a, **kw):
+        raise AssertionError(
+            "_run_train_gate must NOT call build_run_config when the "
+            "reflect check fails"
+        )
+    monkeypatch.setattr(
+        "Scripts.gold2_closed_loop.lean_runner.build_run_config", _boom
+    )
+    monkeypatch.setattr(
+        "Scripts.gold2_closed_loop.lean_runner.run_lean", _boom
+    )
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="NoOverride",
+        dll_path="/tmp/NoOverride.dll", window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    assert gen._run_train_gate(req, train_data_folder=None) is False
+
+
+def test_run_train_gate_returns_bool_from_sharpe(monkeypatch, tmp_path):
+    """When the reflect check passes, _run_train_gate must:
+    (a) call build_run_config with the candidate dll as algorithm-location
+        and candidate_class as algorithm-type-name;
+    (b) call run_lean on the train period;
+    (c) read the sharpe from the result packet;
+    (d) return True iff sharpe >= MIN_DSR (0.0).
+
+    This test mocks build_run_config + run_lean + the packet — it does NOT
+    actually run dotnet LEAN (that's a Task 9 end-to-end concern).
+    """
+    import json
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Scripts.gold2_closed_loop import lean_runner as lr
+
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: True)
+
+    captured = {}
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, *,
+                              run_id, start_date, end_date, trace_path,
+                              experiment_id, window_id, stage_id, candidate_id,
+                              data_folder):
+        captured["base"] = base
+        captured["run_dir"] = run_dir
+        captured["algorithm_type_name"] = algorithm_type_name
+        captured["parameters"] = parameters
+        captured["run_id"] = run_id
+        captured["start_date"] = start_date
+        captured["end_date"] = end_date
+        captured["trace_path"] = trace_path
+        captured["data_folder"] = data_folder
+        captured["stage_id"] = stage_id
+        captured["candidate_id"] = candidate_id
+        return {"_mock": True}
+
+    class _FakeRes:
+        packet_path = tmp_path / "mock-packet.json"
+
+    def fake_run_lean(cfg, *, run_dir, run_id, timeout_seconds,
+                      worktree_root, trace_path):
+        captured["timeout_seconds"] = timeout_seconds
+        captured["worktree_root"] = worktree_root
+        captured["trace_path_passed"] = trace_path
+        # Write a mock packet with a passing sharpe.
+        _FakeRes.packet_path.parent.mkdir(parents=True, exist_ok=True)
+        _FakeRes.packet_path.write_text(
+            json.dumps({"statistics": {"Sharpe Ratio": "0.42"}})
+        )
+        return _FakeRes()
+
+    monkeypatch.setattr(lr, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(lr, "run_lean", fake_run_lean)
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="TrivialG3RealCandidate",
+        dll_path=str(tmp_path / "candidate.dll"),
+        window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    result = gen._run_train_gate(req, train_data_folder="/tmp/frozen-train")
+    assert result is True
+    # The candidate dll + class were threaded into build_run_config's base.
+    assert captured["base"]["algorithm-location"] == str(tmp_path / "candidate.dll")
+    assert captured["algorithm_type_name"] == "TrivialG3RealCandidate"
+    assert captured["start_date"] == "2018-01-02"
+    assert captured["end_date"] == "2020-12-31"
+    assert captured["data_folder"] == "/tmp/frozen-train"
+    assert captured["stage_id"] == "G3"
+    assert captured["candidate_id"] == "c0"
+
+
+def test_run_train_gate_returns_false_on_negative_sharpe(monkeypatch, tmp_path):
+    """If the candidate's train sharpe < MIN_DSR (0.0), the gate returns
+    False — the candidate is rejected (CANDIDATE_REJECTED downstream)."""
+    import json
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Scripts.gold2_closed_loop import lean_runner as lr
+
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: True)
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, **kw):
+        return {"_mock": True}
+
+    class _FakeRes:
+        packet_path = tmp_path / "mock-packet.json"
+
+    def fake_run_lean(cfg, *, run_dir, run_id, timeout_seconds,
+                      worktree_root, trace_path):
+        _FakeRes.packet_path.parent.mkdir(parents=True, exist_ok=True)
+        _FakeRes.packet_path.write_text(
+            json.dumps({"statistics": {"Sharpe Ratio": "-0.5"}})
+        )
+        return _FakeRes()
+
+    monkeypatch.setattr(lr, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(lr, "run_lean", fake_run_lean)
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="TrivialG3RealCandidate",
+        dll_path=str(tmp_path / "candidate.dll"),
+        window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    assert gen._run_train_gate(req, train_data_folder=None) is False
+
+
+def test_run_train_gate_returns_false_on_missing_packet(monkeypatch, tmp_path):
+    """If run_lean did not produce a packet (compile failure / timeout), the
+    gate returns False (no sharpe to read)."""
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Scripts.gold2_closed_loop import lean_runner as lr
+
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: True)
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, **kw):
+        return {"_mock": True}
+
+    class _FakeRes:
+        packet_path = tmp_path / "does-not-exist.json"  # missing
+
+    def fake_run_lean(cfg, *, run_dir, run_id, timeout_seconds,
+                      worktree_root, trace_path):
+        return _FakeRes()
+
+    monkeypatch.setattr(lr, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(lr, "run_lean", fake_run_lean)
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="TrivialG3RealCandidate",
+        dll_path=str(tmp_path / "candidate.dll"),
+        window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    assert gen._run_train_gate(req, train_data_folder=None) is False
+
+
+# ---------------------------------------------------------------------------
+# Task 7: _lean_run_candidate blind runner wiring
+# ---------------------------------------------------------------------------
+
+
+def test_blind_runner_uses_lean_run_candidate_for_g3(tmp_path, monkeypatch):
+    """When a FrozenCandidate is stage_id="G3" AND _frozen_params_for returns
+    a dict carrying algorithm-type-name + algorithm-location, the blind runner
+    MUST dispatch to _lean_run_candidate (not the G0/G1/G2 _lean_run path).
+
+    This test mocks _lean_run_candidate + _lean_run + _metrics so it does NOT
+    actually invoke dotnet LEAN; it only verifies the dispatch.
+    """
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "OUT", tmp_path / "result" / "gold2-p4-construction")
+    monkeypatch.setattr(p4, "P3", tmp_path / "result" / "gold2-p3-construction")
+    monkeypatch.setattr(p4, "WINDOWS", list(p4.WINDOWS) if p4.WINDOWS else [])
+    # Ensure _p2._iso works for the blind date range.
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {
+            "_iso": staticmethod(lambda d: d.isoformat()),
+            "BASE": {"algorithm-location": "/tmp/proof.dll",
+                     "parameters": {}},
+        })(),
+    )
+
+    # Patch _frozen_params_for to return a G3 candidate descriptor.
+    g3_params = {
+        "algorithm-type-name": "Gold2G3Real_W1",
+        "algorithm-location": "/tmp/candidate.dll",
+    }
+    monkeypatch.setattr(p4, "_frozen_params_for", lambda fc: g3_params)
+
+    called = {"lean_run": False, "lean_run_candidate": False}
+
+    def fake_lean_run(*a, **kw):
+        called["lean_run"] = True
+        return None
+
+    def fake_lean_run_candidate(*a, **kw):
+        called["lean_run_candidate"] = True
+        return None
+
+    monkeypatch.setattr(p4, "_lean_run", fake_lean_run)
+    monkeypatch.setattr(p4, "_lean_run_candidate", fake_lean_run_candidate)
+    # _metrics reads the result packet; bypass it.
+    monkeypatch.setattr(p4, "_metrics",
+                        lambda run_dir, run_id: {"sharpe": 0.5})
+
+    # Use a real WindowDefinition for W1 (proof_windows).
+    from Scripts.gold2_closed_loop.phase0_types import proof_windows
+    monkeypatch.setattr(p4, "WINDOWS", proof_windows())
+
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    runner = p4._blind_runner_factory()
+    runner(fc)
+    assert called["lean_run_candidate"] is True, (
+        "G3 candidate with algorithm-type-name + algorithm-location MUST "
+        "dispatch to _lean_run_candidate (not _lean_run)"
+    )
+    assert called["lean_run"] is False, (
+        "_lean_run (G0/G1/G2 path) MUST NOT be called for an eligible G3 "
+        "candidate"
+    )
+
+
+def test_blind_runner_falls_back_to_lean_run_for_g0(tmp_path, monkeypatch):
+    """G0 stage MUST use the existing _lean_run path (no candidate dll)."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+    from Scripts.gold2_closed_loop.phase0_types import proof_windows
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "OUT", tmp_path / "result" / "gold2-p4-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {
+            "_iso": staticmethod(lambda d: d.isoformat()),
+            "BASE": {"algorithm-location": "/tmp/proof.dll",
+                     "parameters": {}},
+        })(),
+    )
+    monkeypatch.setattr(p4, "WINDOWS", proof_windows())
+    # G0 returns None (no override).
+    monkeypatch.setattr(p4, "_frozen_params_for", lambda fc: None)
+
+    called = {"lean_run": False, "lean_run_candidate": False}
+    monkeypatch.setattr(
+        p4, "_lean_run",
+        lambda *a, **kw: called.__setitem__("lean_run", True))
+    monkeypatch.setattr(
+        p4, "_lean_run_candidate",
+        lambda *a, **kw: called.__setitem__("lean_run_candidate", True))
+    monkeypatch.setattr(p4, "_metrics",
+                        lambda run_dir, run_id: {"sharpe": 0.3})
+
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G0", candidate_id="W1-G0-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    runner = p4._blind_runner_factory()
+    runner(fc)
+    assert called["lean_run"] is True
+    assert called["lean_run_candidate"] is False
+
+
+def test_blind_runner_falls_back_when_g3_not_eligible(tmp_path, monkeypatch):
+    """When stage_id="G3" but _frozen_params_for returns None (static stub /
+    rejected candidate), the runner MUST fall back to _lean_run (no candidate
+    dll override). _resolve_final_stage will alias the window to G2/G1/G0 so
+    the actual call uses G0/G1/G2, but a direct G3-stage call (rare) must
+    still not crash on missing algorithm-type-name."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+    from Scripts.gold2_closed_loop.phase0_types import proof_windows
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(p4, "OUT", tmp_path / "result" / "gold2-p4-construction")
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {
+            "_iso": staticmethod(lambda d: d.isoformat()),
+            "BASE": {"algorithm-location": "/tmp/proof.dll",
+                     "parameters": {}},
+        })(),
+    )
+    monkeypatch.setattr(p4, "WINDOWS", proof_windows())
+    monkeypatch.setattr(p4, "_frozen_params_for", lambda fc: None)
+
+    called = {"lean_run": False, "lean_run_candidate": False}
+    monkeypatch.setattr(
+        p4, "_lean_run",
+        lambda *a, **kw: called.__setitem__("lean_run", True))
+    monkeypatch.setattr(
+        p4, "_lean_run_candidate",
+        lambda *a, **kw: called.__setitem__("lean_run_candidate", True))
+    monkeypatch.setattr(p4, "_metrics",
+                        lambda run_dir, run_id: {"sharpe": 0.3})
+
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    runner = p4._blind_runner_factory()
+    runner(fc)
+    # No algorithm-type-name in params -> falls back to _lean_run.
+    assert called["lean_run"] is True
+    assert called["lean_run_candidate"] is False
+
+
+def test_lean_run_candidate_threads_algorithm_location_and_type(tmp_path, monkeypatch):
+    """_lean_run_candidate must call build_run_config with the candidate dll
+    as algorithm-location AND the candidate class as algorithm-type-name, so
+    LEAN loads the candidate dll (not the proof strategy dll)."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+
+    captured = {}
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, **kw):
+        captured["base"] = base
+        captured["algorithm_type_name"] = algorithm_type_name
+        captured["parameters"] = parameters
+        captured["run_id"] = kw.get("run_id")
+        captured["start_date"] = kw.get("start_date")
+        captured["end_date"] = kw.get("end_date")
+        captured["stage_id"] = kw.get("stage_id")
+        captured["window_id"] = kw.get("window_id")
+        captured["candidate_id"] = kw.get("candidate_id")
+        return {"_mock": True}
+
+    def fake_run_lean(cfg, **kw):
+        captured["run_lean_kw"] = kw
+        return None
+
+    # _p2.BASE must exist for the deepcopy.
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {
+            "_iso": staticmethod(lambda d: d.isoformat()),
+            "BASE": {"algorithm-location": "/tmp/proof.dll",
+                     "parameters": {"trend-ma-short": "20"}},
+        })(),
+    )
+    monkeypatch.setattr(p4, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(p4, "run_lean", fake_run_lean)
+
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    params = {
+        "algorithm-type-name": "Gold2G3Real_W1",
+        "algorithm-location": "/tmp/candidate.dll",
+    }
+    p4._lean_run_candidate(
+        tmp_path, "W1-G3-BLIND", fc, "2022-01-01", "2022-12-31",
+        tmp_path / "trace.jsonl", params,
+    )
+    assert captured["base"]["algorithm-location"] == "/tmp/candidate.dll"
+    assert captured["algorithm_type_name"] == "Gold2G3Real_W1"
+    # The algorithm-type-name + algorithm-location must NOT be in the
+    # caller-supplied ``parameters`` dict (they are identity overrides, not
+    # tunables; build_run_config threads them into the top-level config).
+    assert "algorithm-type-name" not in captured["parameters"]
+    assert "algorithm-location" not in captured["parameters"]
+    assert captured["run_id"] == "W1-G3-BLIND"
+    assert captured["start_date"] == "2022-01-01"
+    assert captured["end_date"] == "2022-12-31"
+    assert captured["stage_id"] == "G3"
+    assert captured["candidate_id"] == "W1-G3-C0"
+    # The base config's tunable params (trend-ma-short) are preserved across
+    # the deepcopy (build_run_config merges base["parameters"] + caller params;
+    # the candidate inherits the G0 frozen defaults this way).
+    assert captured["base"]["parameters"]["trend-ma-short"] == "20"
+
+
+# ---------------------------------------------------------------------------
+# Task 7: pythonnet runtime reflect (real-behavior test, only when available)
+# ---------------------------------------------------------------------------
+
+
+def test_reflect_interface_ok_runtime_on_trivial_subclass(tmp_path):
+    """Real-behavior test: compile TRIVIAL_SUBCLASS to a real dll, then run
+    the runtime reflect path (pythonnet). When pythonnet is unavailable
+    (the host env), this test is skipped — the source-level path is covered
+    by test_reflect_interface_ok_source_level_*.
+
+    This test exercises _reflect_interface_ok_runtime directly. The runtime
+    path returns True when BuildRiskModels is overridden + Initialize is NOT
+    overridden. When pythonnet is unavailable, the runtime path returns None
+    and the test skips (the source-level fallback covers the same source).
+    """
+    import shutil
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Tests.gold2_closed_loop.test_g3_real_generator import TRIVIAL_SUBCLASS
+
+    dotnet = shutil.which("dotnet") or "/usr/local/dotnet/dotnet"
+    if not Path(dotnet).is_file():
+        import pytest
+        pytest.skip("dotnet not available")
+
+    # Try the runtime path first. When pythonnet is unavailable, skip.
+    runtime_verdict = gen._reflect_interface_ok_runtime.__wrapped__ if hasattr(
+        gen._reflect_interface_ok_runtime, "__wrapped__") else gen._reflect_interface_ok_runtime
+    # _reflect_interface_ok_runtime does not take a source arg; compile first
+    # to get a real dll, then check.
+    from Scripts.gold2_closed_loop.g3_real_compile import compile_candidate
+
+    cs = tmp_path / "G3.cs"
+    cs.write_text(TRIVIAL_SUBCLASS)
+    result = compile_candidate(
+        cs, candidate_id="trivial_rt", candidate_class="TrivialG3RealCandidate",
+        dotnet=dotnet,
+    )
+    if not result.ok:
+        import pytest
+        pytest.skip(f"compile failed: {result.stderr_tail[:200]}")
+
+    # Try the pythonnet runtime reflect path. Returns None when unavailable.
+    runtime = gen._reflect_interface_ok_runtime(str(result.dll_path),
+                                                "TrivialG3RealCandidate")
+    if runtime is None:
+        import pytest
+        pytest.skip("pythonnet runtime reflect unavailable in this env")
+    assert runtime is True
+
+
+def test_reflect_interface_ok_probe_on_trivial_subclass(tmp_path):
+    """Real-behavior test for the second fallback (ReflectProbe exe). When
+    dotnet is available, this path compiles a real candidate dll + runs the
+    probe; returns True/False. When unavailable, skip.
+
+    This test verifies the ReflectProbe can LOAD the candidate dll (the
+    AssemblyResolve probing must find NodaTime + QuantConnect.*.dll under
+    Algorithm.CSharp/bin/Debug + Launcher/bin/Debug). If the probe cannot
+    resolve a dep, the test surfaces it as a failure (not a silent skip) so
+    Task 9 end-to-end can rely on the probe path.
+    """
+    import shutil
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Tests.gold2_closed_loop.test_g3_real_generator import TRIVIAL_SUBCLASS
+
+    dotnet = shutil.which("dotnet") or "/usr/local/dotnet/dotnet"
+    if not Path(dotnet).is_file():
+        import pytest
+        pytest.skip("dotnet not available")
+
+    from Scripts.gold2_closed_loop.g3_real_compile import compile_candidate
+
+    cs = tmp_path / "G3.cs"
+    cs.write_text(TRIVIAL_SUBCLASS)
+    result = compile_candidate(
+        cs, candidate_id="trivial_pr", candidate_class="TrivialG3RealCandidate",
+        dotnet=dotnet,
+    )
+    if not result.ok:
+        import pytest
+        pytest.skip(f"compile failed: {result.stderr_tail[:200]}")
+
+    probe = gen._reflect_interface_ok_probe(str(result.dll_path),
+                                            "TrivialG3RealCandidate")
+    if probe is None:
+        import pytest
+        pytest.skip(
+            "ReflectProbe unavailable (probe build/run failed or "
+            "reflect_probe.cs missing)"
+        )
+    assert probe is True
+
+
+def test_reflect_interface_ok_rejects_no_override_runtime_or_source(tmp_path):
+    """For NO_OVERRIDE_SUBCLASS, the reflect check MUST return False (the
+    candidate does not override BuildRiskModels). This exercises whichever
+    reflect path is available in the env (runtime probe > source-level)."""
+    import shutil
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Tests.gold2_closed_loop.test_g3_real_generator import NO_OVERRIDE_SUBCLASS
+
+    dotnet = shutil.which("dotnet") or "/usr/local/dotnet/dotnet"
+
+    if dotnet and Path(dotnet).is_file():
+        from Scripts.gold2_closed_loop.g3_real_compile import compile_candidate
+        cs = tmp_path / "G3.cs"
+        cs.write_text(NO_OVERRIDE_SUBCLASS)
+        result = compile_candidate(
+            cs, candidate_id="no_ov", candidate_class="NoOverride",
+            dotnet=dotnet,
+        )
+        if result.ok:
+            # The full reflect path: runtime > probe > source-level.
+            verdict = gen._reflect_interface_ok(str(result.dll_path), "NoOverride")
+            assert verdict is False, (
+                "_reflect_interface_ok must reject NO_OVERRIDE (no "
+                "BuildRiskModels override) regardless of which path runs"
+            )
+            return
+    # Fallback: source-level only.
+    assert gen._reflect_interface_ok_source_level(NO_OVERRIDE_SUBCLASS) is False

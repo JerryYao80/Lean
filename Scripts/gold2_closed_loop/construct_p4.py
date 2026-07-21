@@ -24,6 +24,7 @@ STOP P4 criterion (design §4 / §15):
 """
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from pathlib import Path
@@ -49,6 +50,7 @@ from Scripts.gold2_closed_loop.verdict import decide_verdict
 from Scripts.gold2_closed_loop.sealing import build_seal, verify_seal
 from Scripts.gold2_closed_loop.evidence import canonical_hash
 from Scripts.gold2_closed_loop.phase0_types import proof_windows
+from Scripts.gold2_closed_loop.lean_runner import build_run_config, run_lean
 
 # C4: import the solidified P2 construct script's _lean_run / _metrics so the
 # blind runner actually invokes dotnet Launcher on the blind year (not a precomputed
@@ -97,9 +99,43 @@ def _frozen_candidates(window_id: str) -> list[FrozenCandidate]:
 
 def _frozen_params_for(fc: FrozenCandidate) -> dict | None:
     """The frozen candidate's LEAN parameters for the blind run.
-    G0: None (proof_lean_base defaults). G1: selected params. G2: shaping.
-    G3 aliases handled by _resolve_final_stage."""
+
+    G0: None (proof_lean_base defaults).
+    G1: selected params.
+    G2: shaping.
+    G3 (Task 7): when p3_report.g3_build.eligible==True, returns the candidate
+        ``algorithm-type-name`` + ``algorithm-location`` so the blind runner
+        loads the candidate dll instead of the proof strategy dll. When the
+        G3 build is not eligible (static stub / CANDIDATE_REJECTED /
+        CONSTRUCTION_FAILED), returns None — _resolve_final_stage then aliases
+        the window to G2/G1/G0 (the static-stub 4-defect path is unaffected).
+    """
     if fc.stage_id == "G0":
+        return None
+    if fc.stage_id == "G3":
+        # Task 7: G3 supersede. When the real LLM candidate compiled + passed
+        # the train gate, p3_report.g3_build carries candidate_class +
+        # dll_path. Thread them into the blind runner's config so LEAN loads
+        # the candidate dll + algorithm-type-name. When the build is NOT
+        # eligible (static stub / rejected), return None so the blind runner
+        # falls back to the default _lean_run path; _resolve_final_stage then
+        # aliases the window to G2/G1/G0 (no change to the frozen 4-defect
+        # p4_report.json — new run writes a new ev_root).
+        p3_path = P3 / "p3_report.json"
+        if not p3_path.is_file():
+            return None
+        p3_report = json.loads(p3_path.read_text())
+        win3 = next(
+            (w for w in p3_report.get("windows", [])
+             if w.get("window_id") == fc.window_id),
+            None,
+        )
+        g3b = (win3 or {}).get("g3_build") or {}
+        if g3b.get("eligible"):
+            return {
+                "algorithm-type-name": g3b.get("candidate_class"),
+                "algorithm-location": g3b.get("dll_path"),
+            }
         return None
     p2 = json.loads((ROOT / "result" / "gold2-p2-construction"
                      / "p2_report.json").read_text())
@@ -115,9 +151,31 @@ def _frozen_params_for(fc: FrozenCandidate) -> dict | None:
 
 def _resolve_final_stage(window_id: str) -> str:
     """Walk the G3->G2->G1->G0 alias chain to the final candidate stage that
-    actually carries runnable params. G3 _StaticGen stub does not compile, so
-    the final runnable candidate is the deepest of G2/G1 that produced params,
-    else G0."""
+    actually carries runnable params.
+
+    Task 7 supersede: BEFORE the G2/G1/G0 alias chain, check p3_report for a
+    real LLM-compiled G3 candidate. When ``g3_build.eligible`` is True (the
+    candidate compiled + passed the train gate + the reflect check verified
+    the subclass overrides BuildRiskModels without overriding Initialize),
+    return "G3" — the blind runner then loads the candidate dll. This is the
+    core supersede: G3 stops aliasing to G2/G1/G0.
+
+    When the G3 build is NOT eligible (static stub / CONSTRUCTION_FAILED /
+    CANDIDATE_REJECTED), fall through to the G2/G1/G0 alias chain — the
+    existing 4-defect path is unchanged (the frozen p4_report.json is NOT
+    modified; a new run writes a new ev_root).
+    """
+    p3_path = P3 / "p3_report.json"
+    if p3_path.is_file():
+        p3 = json.loads(p3_path.read_text())
+        win3 = next(
+            (w for w in p3.get("windows", [])
+             if w.get("window_id") == window_id),
+            None,
+        )
+        g3b = (win3 or {}).get("g3_build") or {}
+        if g3b.get("eligible"):
+            return "G3"
     p2 = json.loads((ROOT / "result" / "gold2-p2-construction"
                      / "p2_report.json").read_text())
     win = next(w for w in p2["windows"] if w["window_id"] == window_id)
@@ -128,19 +186,79 @@ def _resolve_final_stage(window_id: str) -> str:
     return "G0"
 
 
+def _lean_run_candidate(run_dir, run_id, fc, start, end, trace, params):
+    """Task 7: LEAN runner for a real G3 candidate (compiled dll + class).
+
+    The G0/G1/G2 path (``_lean_run``) hardcodes
+    ``algorithm-type-name="Gold2ClosedLoopProofStrategy"`` and the proof
+    strategy dll as ``algorithm-location``. A real G3 candidate has its OWN
+    class (subclass of ``Gold2ReconstructionCandidateBase``) + its OWN dll
+    (compiled by ``g3_real_compile.compile_candidate``). This runner threads
+    the candidate's ``algorithm-type-name`` + ``algorithm-location`` into
+    ``build_run_config``'s base so LEAN loads the candidate dll instead of
+    the proof strategy dll.
+
+    The base config is a deep-copy of ``_p2.BASE`` (the proof_lean_base
+    defaults) with ``algorithm-location`` overridden to the candidate dll
+    path + ``algorithm-type-name`` is passed as the
+    ``algorithm_type_name`` argument (so build_run_config injects it). The
+    candidate's params dict (from ``_frozen_params_for``) carries the
+    algorithm-type-name + algorithm-location only; the remaining
+    tunable params fall through to the proof_lean_base defaults (G0 frozen
+    defaults — the candidate was trained on those, so the blind run uses
+    the same defaults).
+    """
+    candidate_type = params["algorithm-type-name"]
+    candidate_dll = params["algorithm-location"]
+    base = copy.deepcopy(_p2.BASE)
+    base["algorithm-location"] = str(candidate_dll)
+    # Drop the algorithm-type-name / algorithm-location from the params dict
+    # (they are NOT tunable params; they are algorithm-identity overrides
+    # that build_run_config threads into the top-level config, not the
+    # ``parameters`` dict).
+    params_for_lean = {
+        k: v for k, v in params.items()
+        if k not in ("algorithm-type-name", "algorithm-location")
+    }
+    cfg = build_run_config(
+        base, run_dir, candidate_type, params_for_lean,
+        run_id=run_id, start_date=start, end_date=end,
+        trace_path=trace, experiment_id="E1", window_id=fc.window_id,
+        stage_id=fc.stage_id, candidate_id=fc.candidate_id,
+    )
+    return run_lean(cfg, run_dir=run_dir, run_id=run_id, timeout_seconds=600,
+                    worktree_root=ROOT, trace_path=trace)
+
+
 def _blind_runner_factory():
     """C4: a runner that ACTUALLY invokes dotnet Launcher on the window's blind
-    year, replacing the precomputed-dict runner that reused train metrics."""
+    year, replacing the precomputed-dict runner that reused train metrics.
+
+    Task 7: when the frozen candidate is a real G3 candidate (``_frozen_params_for``
+    returns a dict carrying ``algorithm-type-name`` + ``algorithm-location``),
+    the runner uses ``_lean_run_candidate`` to load the candidate dll; else it
+    uses the existing ``_lean_run`` path (G0/G1/G2 — proof strategy dll with
+    params override). This is the core supersede: the blind run for an
+    eligible G3 window loads the LLM-reconstructed candidate, not the G0
+    proof strategy."""
     def runner(fc: FrozenCandidate):
         wdef = next(w for w in WINDOWS if w.window_id == fc.window_id)
         blind_dir = OUT / fc.window_id / "blind" / fc.stage_id
         blind_dir.mkdir(parents=True, exist_ok=True)
         trace = blind_dir / "trace.jsonl"
         params = _frozen_params_for(fc)
-        _lean_run(blind_dir, f"{fc.window_id}-{fc.stage_id}-BLIND",
-                  fc.stage_id, fc.candidate_id, fc.window_id,
-                  _p2._iso(wdef.blind[0]), _p2._iso(wdef.blind[1]),
-                  trace, params_override=params)
+        if (fc.stage_id == "G3" and params
+                and "algorithm-type-name" in params
+                and "algorithm-location" in params):
+            _lean_run_candidate(blind_dir,
+                                f"{fc.window_id}-{fc.stage_id}-BLIND",
+                                fc, _p2._iso(wdef.blind[0]),
+                                _p2._iso(wdef.blind[1]), trace, params)
+        else:
+            _lean_run(blind_dir, f"{fc.window_id}-{fc.stage_id}-BLIND",
+                      fc.stage_id, fc.candidate_id, fc.window_id,
+                      _p2._iso(wdef.blind[0]), _p2._iso(wdef.blind[1]),
+                      trace, params_override=params)
         return _metrics(blind_dir, f"{fc.window_id}-{fc.stage_id}-BLIND")
     return runner
 
