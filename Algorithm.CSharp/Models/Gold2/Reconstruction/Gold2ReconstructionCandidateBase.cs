@@ -31,8 +31,8 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
     /// byte-identical to G0.
     ///
     /// LLM-generated subclasses override BuildRiskModels() to return regime-
-    /// asymmetric Risk Models (e.g. relax cap in trending bull). Task 2 will
-    /// refactor Initialize() to use the Gold2InstrumentSpec registry.
+    /// asymmetric Risk Models (e.g. relax cap in trending bull). Task 2 refactored
+    /// Initialize() to use the Gold2InstrumentSpec registry (spec-driven AddEquity/AddData).
     ///
     /// 详见 docs/superpowers/specs/2026-07-21-gold2-real-llm-reconstruction-design.md §3.1。
     /// </summary>
@@ -99,9 +99,13 @@ namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
             _gold = eq.Symbol;
             SetBenchmark(_gold);
 
-            // spec-driven custom data: AddData<T>(ticker, Resolution.Daily)。spec 的 *DataSource
-            // 字段是 Type,通过非泛型 AddData(Type, ticker, ...) 重载调用(QCAlgorithm.Python.cs:154)。
-            // 对 518880 等价于: AddData<AuShfDailyBar>("AU.SHF", Resolution.Daily) 等 3 条原调用。
+            // spec-driven custom data: registry 返回 Type(非泛型),必须用非泛型
+            // AddData(Type, ticker, Resolution, DateTimeZone, bool, decimal) 重载
+            // (QCAlgorithm.Python.cs:154)。该重载与原 AddData<T>(ticker, Resolution)
+            // 在运行期等价 —— 泛型 AddData<T>(string, Resolution?) 最终通过
+            // AddData(typeof(T), ticker, resolution, null, fillForward, leverage) 委派
+            // 到同一实现(QCAlgorithm.cs:2737),因此对 518880 产出的 _auSym/_vixSym/_dfii10Sym
+            // 与原硬编码 AddData<AuShfDailyBar>("AU.SHF", Resolution.Daily) 等三条调用逐字节相同。
             _auSym = AddData(spec.GoldDataSource, spec.GoldDataTicker, Resolution.Daily, null, false, 1m).Symbol;
             _vixSym = AddData(spec.MacroVixDataSource, spec.VixTicker, Resolution.Daily, null, false, 1m).Symbol;
             _dfii10Sym = AddData(spec.MacroRealRateDataSource, spec.RealRateTicker, Resolution.Daily, null, false, 1m).Symbol;
