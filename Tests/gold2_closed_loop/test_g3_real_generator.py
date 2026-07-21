@@ -182,6 +182,87 @@ def test_generator_returns_generation_response_shape(monkeypatch, tmp_path):
     assert expected_cs.read_text().strip() == TRIVIAL_SUBCLASS.strip()
 
 
+def test_extract_class_name_picks_candidate_subclass_not_first_class():
+    """_extract_class_name must return the class extending
+    Gold2ReconstructionCandidateBase, NOT the first class in the source.
+
+    The prompt allows helper RiskManagementModel subclasses in the same file,
+    and the LLM may emit them in any order. If a helper (e.g.
+    ``public class HelperRiskModel : RiskManagementModel``) is declared BEFORE
+    the candidate subclass, the naive first-class regex would pick the helper
+    and pin it into ``config_hash``'s ``algorithm_type_name``. Task 7's
+    reflect would then fail to find ``BuildRiskModels`` on the helper ->
+    false CANDIDATE_REJECTED. This test pins the fix.
+
+    Also covers the generic-declaration edge case (``class Foo<T> : Base``).
+    """
+    from Scripts.gold2_closed_loop.g3_real_generator import _extract_class_name
+
+    # Helper RiskManagementModel BEFORE the candidate subclass (the bug).
+    src_helper_first = """
+using System.Collections.Generic;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction;
+
+namespace QuantConnect.Algorithm.CSharp.Models.Gold2.Reconstruction
+{
+    public class HelperRiskModel : RiskManagementModel
+    {
+        public override IEnumerable<IRiskManagementModel> ManageRisk(
+            QCAlgorithmFramework algorithm)
+        {
+            return base.ManageRisk(algorithm);
+        }
+    }
+
+    public class Gold2G3Real_W1 : Gold2ReconstructionCandidateBase
+    {
+        protected override IEnumerable<IRiskManagementModel> BuildRiskModels()
+        {
+            yield return new HelperRiskModel();
+        }
+    }
+}
+"""
+    assert _extract_class_name(src_helper_first) == "Gold2G3Real_W1", (
+        "_extract_class_name must return the Gold2ReconstructionCandidateBase "
+        "subclass, not the first-declared helper RiskManagementModel"
+    )
+
+    # Candidate BEFORE the helper (original happy path; must still work).
+    src_candidate_first = """
+namespace X {
+    public class TrivialG3RealCandidate : Gold2ReconstructionCandidateBase
+    {
+        protected override IEnumerable<IRiskManagementModel> BuildRiskModels()
+            => base.BuildRiskModels();
+    }
+    public class HelperRiskModel : RiskManagementModel { }
+}
+"""
+    assert _extract_class_name(src_candidate_first) == "TrivialG3RealCandidate"
+
+    # Generic declaration: ``class Foo<T> : Gold2ReconstructionCandidateBase``.
+    src_generic = (
+        "namespace X { public class Foo<T> : "
+        "Gold2ReconstructionCandidateBase { } }"
+    )
+    assert _extract_class_name(src_generic) == "Foo", (
+        "_extract_class_name must handle generic declarations "
+        "(class Foo<T> : Base)"
+    )
+
+    # No candidate subclass present -> None (caller treats as
+    # contract-violation / non-C# response).
+    src_no_candidate = (
+        "namespace X { public class Helper : RiskManagementModel { } }"
+    )
+    assert _extract_class_name(src_no_candidate) is None
+
+    # No class at all (e.g. LLM apology) -> None.
+    assert _extract_class_name("sorry, I cannot help") is None
+
+
 def test_interface_violation_no_buildriskmodels_override_rejected(monkeypatch, tmp_path):
     """A subclass that does NOT override BuildRiskModels() must fail the train
     gate (reflect check rejects), so training_gate_passed=False downstream

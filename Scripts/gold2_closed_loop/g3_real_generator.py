@@ -57,8 +57,13 @@ _SUBCLASS_RE = re.compile(
     r":\s*Gold2ReconstructionCandidateBase\b",
     re.MULTILINE,
 )
+# Matches ``class <Name>`` so the base-list (everything up to the opening
+# ``{``) can be scanned for ``Gold2ReconstructionCandidateBase``. Does NOT
+# consume anything after the class name; ``_extract_class_name`` finds the
+# next ``{`` itself so generic declarations (``class Foo<T,...>``) and
+# multi-base lists (``class Foo : Base, IFoo``) are handled uniformly.
 _CLASS_NAME_RE = re.compile(
-    r"\bclass\s+(\w+)\s*(?:\{|:|\s)",
+    r"\bclass\s+(\w+)",
     re.MULTILINE,
 )
 
@@ -147,14 +152,43 @@ def _looks_like_csharp(source: str) -> bool:
 def _extract_class_name(source: str) -> str | None:
     """Extract the candidate class name from the C# source.
 
-    Returns the FIRST class declared in the source (the LLM is instructed
-    to emit the candidate subclass first; helper Risk Model subclasses
-    follow). Returns None if no class declaration is found.
+    Iterates over every ``class <Name> ...`` declaration in the source and
+    returns the name of the class whose base-list (the text between the
+    class name and the opening ``{``) contains
+    ``Gold2ReconstructionCandidateBase``. This is the candidate subclass —
+    not a helper RiskManagementModel that the LLM may emit before or after
+    it (the prompt allows helper subclasses in the same file, and the LLM
+    may emit them in any order).
+
+    Why not return the first class: a helper like
+    ``public class HelperRiskModel : RiskManagementModel {...}`` declared
+    before the candidate subclass would otherwise be picked, pinned into
+    ``config_hash``'s ``algorithm_type_name``, and Task 7's reflect would
+    fail to find ``BuildRiskModels`` on ``HelperRiskModel`` -> false
+    CANDIDATE_REJECTED.
+
+    Also handles generic declarations (``class Foo<T> : Base``) by reading
+    the base-list regardless of the optional ``<...>`` arity.
+
+    Returns None if no class extending ``Gold2ReconstructionCandidateBase``
+    is found (the caller treats None as a non-C# / contract-violation
+    response).
     """
-    m = _CLASS_NAME_RE.search(source)
-    if not m:
-        return None
-    return m.group(1)
+    for m in _CLASS_NAME_RE.finditer(source):
+        name = m.group(1)
+        # The base-list starts at the end of the class-name match and runs
+        # up to the opening ``{``. Scan that window for the base class name.
+        # ``m.end()`` is just past the captured class name + one trailing
+        # char (the regex's non-capturing group consumes one of ``{``, ``:``,
+        # or whitespace). Find the next ``{`` from here; the text in between
+        # is the base-list (possibly with generic arity, interfaces, etc.).
+        brace_idx = source.find("{", m.end())
+        if brace_idx == -1:
+            continue
+        base_list = source[m.end():brace_idx]
+        if _BASE_CLASS_NAME in base_list:
+            return name
+    return None
 
 
 def _load_train_bundle(window_id: str) -> dict:
