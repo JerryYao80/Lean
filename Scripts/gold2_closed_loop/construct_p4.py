@@ -210,6 +210,20 @@ def _lean_run_candidate(run_dir, run_id, fc, start, end, trace, params):
     """
     candidate_type = params["algorithm-type-name"]
     candidate_dll = params["algorithm-location"]
+    # CRITICAL: loud-fail pre-launch if the candidate dll is missing. Without
+    # this, build_run_config (lean_runner.py:134-139) silently falls through
+    # to DEFAULT_PROOF_DLL.resolve() (the G0 proof strategy dll), and LEAN
+    # would load the G0 strategy under the candidate's algorithm-type-name ->
+    # a runtime type-load failure mid-LEAN, not a pre-launch refusal. The C1
+    # "loud fail not silent" principle (lean_runner.py:166-174 run_id path-
+    # separator guard) applies here too: refuse to launch a blind run whose
+    # frozen candidate dll is absent.
+    assert Path(candidate_dll).is_file(), (
+        f"candidate dll missing: {candidate_dll}; refusing to launch the "
+        f"blind run with a silent fallback to the G0 proof strategy dll "
+        f"(build_run_config would resolve algorithm-location to "
+        f"DEFAULT_PROOF_DLL when the candidate path does not exist)"
+    )
     base = copy.deepcopy(_p2.BASE)
     base["algorithm-location"] = str(candidate_dll)
     # Drop the algorithm-type-name / algorithm-location from the params dict

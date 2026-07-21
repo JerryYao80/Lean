@@ -16,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
@@ -657,6 +659,136 @@ def test_run_train_gate_returns_false_on_missing_packet(monkeypatch, tmp_path):
     assert gen._run_train_gate(req, train_data_folder=None) is False
 
 
+def test_run_train_gate_returns_false_on_missing_sharpe_key(monkeypatch, tmp_path):
+    """Regression (review Important 1): if the packet exists but
+    ``statistics.Sharpe Ratio`` is MISSING, the gate MUST return False —
+    NOT silently pass via `0 >= 0.0`. The prior implementation used
+    ``(... or 0)`` which defaulted a missing sharpe to 0, falsely passing
+    the gate. A malformed packet (compile crash mid-LEAN / partial packet
+    / missing statistics block) fails closed -> CANDIDATE_REJECTED.
+    """
+    import json
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Scripts.gold2_closed_loop import lean_runner as lr
+
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: True)
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, **kw):
+        return {"_mock": True}
+
+    class _FakeRes:
+        packet_path = tmp_path / "malformed-packet.json"
+
+    def fake_run_lean(cfg, *, run_dir, run_id, timeout_seconds,
+                      worktree_root, trace_path):
+        _FakeRes.packet_path.parent.mkdir(parents=True, exist_ok=True)
+        # Packet exists but the statistics block is missing the Sharpe Ratio
+        # key. A silent `or 0` default would pass this -> 0 >= 0.0 -> True
+        # (false positive). The fix returns False.
+        _FakeRes.packet_path.write_text(
+            json.dumps({"statistics": {"Total Orders": "10"}})
+        )
+        return _FakeRes()
+
+    monkeypatch.setattr(lr, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(lr, "run_lean", fake_run_lean)
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="TrivialG3RealCandidate",
+        dll_path=str(tmp_path / "candidate.dll"),
+        window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    assert gen._run_train_gate(req, train_data_folder=None) is False, (
+        "packet missing `statistics.Sharpe Ratio` MUST fail the gate "
+        "(not silently pass via `or 0` -> 0 >= 0.0)"
+    )
+
+
+def test_run_train_gate_returns_false_when_statistics_block_missing(monkeypatch, tmp_path):
+    """Regression (review Important 1, sibling): if the packet has NO
+    ``statistics`` block at all (a more degenerate malformed packet), the
+    gate MUST return False (not silently pass via `or 0`)."""
+    import json
+    import Scripts.gold2_closed_loop.g3_real_generator as gen
+    from Scripts.gold2_closed_loop import lean_runner as lr
+
+    monkeypatch.setattr(gen, "_reflect_interface_ok",
+                        lambda dll, cls: True)
+
+    def fake_build_run_config(base, run_dir, algorithm_type_name, parameters, **kw):
+        return {"_mock": True}
+
+    class _FakeRes:
+        packet_path = tmp_path / "no-stats-packet.json"
+
+    def fake_run_lean(cfg, *, run_dir, run_id, timeout_seconds,
+                      worktree_root, trace_path):
+        _FakeRes.packet_path.parent.mkdir(parents=True, exist_ok=True)
+        _FakeRes.packet_path.write_text(json.dumps({"charts": {}}))
+        return _FakeRes()
+
+    monkeypatch.setattr(lr, "build_run_config", fake_build_run_config)
+    monkeypatch.setattr(lr, "run_lean", fake_run_lean)
+
+    req = gen._GateRequest(
+        candidate_id="c0", candidate_class="TrivialG3RealCandidate",
+        dll_path=str(tmp_path / "candidate.dll"),
+        window_id="W1",
+        train_start="2018-01-02", train_end="2020-12-31",
+    )
+    assert gen._run_train_gate(req, train_data_folder=None) is False
+
+
+def test_lean_run_candidate_loud_fails_on_missing_dll(tmp_path, monkeypatch):
+    """Regression (review Important 2): if the candidate dll is missing at
+    blind-run time, ``_lean_run_candidate`` MUST raise pre-launch (loud fail).
+    Without this guard, build_run_config (lean_runner.py:134-139) silently
+    falls through to DEFAULT_PROOF_DLL.resolve() (G0 proof dll), and LEAN
+    would load the G0 strategy under the candidate's algorithm-type-name ->
+    runtime type-load failure mid-LEAN, not a pre-launch refusal."""
+    import Scripts.gold2_closed_loop.construct_p4 as p4
+    from Scripts.gold2_closed_loop.blind_evaluator import FrozenCandidate
+
+    monkeypatch.setattr(p4, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        p4, "_p2",
+        type("P2Stub", (), {
+            "_iso": staticmethod(lambda d: d.isoformat()),
+            "BASE": {"algorithm-location": "/tmp/proof.dll",
+                     "parameters": {}},
+        })(),
+    )
+
+    # Sentinel: build_run_config must NOT be called when the dll is missing.
+    def _boom(*a, **kw):
+        raise AssertionError(
+            "_lean_run_candidate must NOT call build_run_config when the "
+            "candidate dll is missing (should loud-fail pre-launch)"
+        )
+    monkeypatch.setattr(p4, "build_run_config", _boom)
+    monkeypatch.setattr(p4, "run_lean", _boom)
+
+    fc = FrozenCandidate(
+        window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
+        candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
+        config_sha256="cf" * 32,
+    )
+    params = {
+        "algorithm-type-name": "Gold2G3Real_W1",
+        "algorithm-location": str(tmp_path / "does-not-exist.dll"),
+    }
+    with pytest.raises(AssertionError) as excinfo:
+        p4._lean_run_candidate(
+            tmp_path, "W1-G3-BLIND", fc, "2022-01-01", "2022-12-31",
+            tmp_path / "trace.jsonl", params,
+        )
+    assert "candidate dll missing" in str(excinfo.value), (
+        "the loud-fail message must identify the missing dll"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task 7: _lean_run_candidate blind runner wiring
 # ---------------------------------------------------------------------------
@@ -856,6 +988,13 @@ def test_lean_run_candidate_threads_algorithm_location_and_type(tmp_path, monkey
     monkeypatch.setattr(p4, "build_run_config", fake_build_run_config)
     monkeypatch.setattr(p4, "run_lean", fake_run_lean)
 
+    # Create the candidate dll on disk so the pre-launch assert passes (the
+    # loud-fail guard at construct_p4.py:221 refuses to launch when the dll
+    # is missing). The dll content does not matter — build_run_config + run_lean
+    # are mocked; only the path's existence is checked.
+    candidate_dll = tmp_path / "candidate.dll"
+    candidate_dll.write_bytes(b"\x4d\x5a" + b"\x00" * 100)
+
     fc = FrozenCandidate(
         window_id="W1", stage_id="G3", candidate_id="W1-G3-C0",
         candidate_set_sha256="cs" * 32, source_sha256="ss" * 32,
@@ -863,13 +1002,13 @@ def test_lean_run_candidate_threads_algorithm_location_and_type(tmp_path, monkey
     )
     params = {
         "algorithm-type-name": "Gold2G3Real_W1",
-        "algorithm-location": "/tmp/candidate.dll",
+        "algorithm-location": str(candidate_dll),
     }
     p4._lean_run_candidate(
         tmp_path, "W1-G3-BLIND", fc, "2022-01-01", "2022-12-31",
         tmp_path / "trace.jsonl", params,
     )
-    assert captured["base"]["algorithm-location"] == "/tmp/candidate.dll"
+    assert captured["base"]["algorithm-location"] == str(candidate_dll)
     assert captured["algorithm_type_name"] == "Gold2G3Real_W1"
     # The algorithm-type-name + algorithm-location must NOT be in the
     # caller-supplied ``parameters`` dict (they are identity overrides, not

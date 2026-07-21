@@ -534,9 +534,16 @@ def _run_train_gate(req: _GateRequest, *, train_data_folder: str | None) -> bool
       (``req.train_start`` .. ``req.train_end``) on the frozen TRAIN snapshot
       (``train_data_folder`` — same isolation as construct_p2: the blind
       partition is physically absent from the snapshot).
-    * The gate reads the result packet's ``statistics.Sharpe Ratio`` (the
-      top-level LEAN-native field, matching ``construct_p2._metrics``) and
-      returns True iff ``sharpe >= MIN_DSR`` (0.0).
+    * The gate reads the result packet's top-level ``statistics.Sharpe Ratio``
+      field (LEAN's display-name field, e.g. ``"0.082"``) and returns True iff
+      ``sharpe >= MIN_DSR`` (0.0). This is the SAME value
+      ``construct_p2._metrics`` reads (via
+      ``totalPerformance.portfolioStatistics.sharpeRatio`` — the lowercase
+      camelCase field under ``totalPerformance``); both are LEAN-native and
+      carry the same value, but the gate reads the top-level display-name
+      field while ``_metrics`` reads the camelCase one. Either field yields
+      the same verdict (they are populated from the same PortfolioStatistics
+      instance by ``BacktestingResultHandler.StoreResult``).
 
     Anti-p-hacking: ``MIN_DSR`` is 0.0 (the candidate must NOT underperform
     G0 on train). Task 8's regression pins this; the gate is NOT a silent
@@ -574,7 +581,19 @@ def _run_train_gate(req: _GateRequest, *, train_data_folder: str | None) -> bool
     if not res.packet_path or not Path(res.packet_path).is_file():
         return False
     pkt = json.loads(Path(res.packet_path).read_text())
-    sharpe = ((pkt.get("statistics") or {}).get("Sharpe Ratio") or 0)
+    # CRITICAL: do NOT default to 0 when the sharpe key is missing. A
+    # malformed packet (compile crash mid-LEAN / partial packet / missing
+    # statistics block) MUST NOT silently pass the gate: `0 >= 0.0` would
+    # mark a degenerate candidate as eligible. Fail closed -> False so the
+    # candidate is CANDIDATE_REJECTED downstream. The packet-present +
+    # reflect-pass short-circuits above handle the genuine missing-packet
+    # case; this handles a packet that exists but lacks the sharpe field.
+    stats = pkt.get("statistics")
+    if not isinstance(stats, dict):
+        return False
+    sharpe = stats.get("Sharpe Ratio")
+    if sharpe is None:
+        return False
     try:
         sharpe_f = float(sharpe)
     except (TypeError, ValueError):
