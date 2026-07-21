@@ -1148,3 +1148,284 @@ def test_reflect_interface_ok_rejects_no_override_runtime_or_source(tmp_path):
             return
     # Fallback: source-level only.
     assert gen._reflect_interface_ok_source_level(NO_OVERRIDE_SUBCLASS) is False
+
+
+# ---------------------------------------------------------------------------
+# Task 8: anti-p-hacking + §6 isolation + freeze-before-open regression
+# ---------------------------------------------------------------------------
+# These tests pin existing correct behavior (the Task 7 review already
+# confirmed the audit). They exist so future changes cannot silently regress
+# the anti-p-hacking guarantees: MIN_DSR stays 0.0, the LLM prompt never
+# sees blind-year tokens, the G1 grid is not widened, new G3 modules stay
+# §6-isolated from production daemons, and the freeze hash is computed
+# BEFORE the blind partition opens.
+
+
+def test_no_p_hacking_regression():
+    """Anti-p-hacking audit (pinned as a regression):
+
+    1. ``MIN_DSR == 0.0`` — the train gate is NOT silently tightened across
+       runs. A negative-sharpe candidate is rejected (>= 0.0); a positive
+       one passes. A non-zero MIN_DSR would let a future change silently
+       raise the bar and reject candidates that previously passed.
+    2. ``build_prompt(...)`` does NOT leak any blind-year token into the
+       LLM prompt (``blind`` / ``2022`` / ``2023`` / ``2024`` / ``2025``).
+       The prompt is built ONLY from the TRAIN-period review bundle + the
+       production C# source files (which themselves carry no blind-year
+       data). An empty ``layer_attribution`` exercises the degenerate
+       bundle path; a real bundle would carry train-period attribution
+       values, still no blind tokens.
+    3. The G1 grid is unchanged: ``construct_p2.py`` still parametrizes the
+       G1 search over ``trend-ma-short in {20, 30}`` and
+       ``vol-target in {0.11, 0.15}``. A future widening (e.g. adding 10/40
+       to trend-ma-short or 0.05/0.20 to vol-target) would silently let the
+       search pick a different candidate set, retroactively changing the
+       frozen G1 evidence G3 builds on.
+    4. The G1/G2 budgets + seeds are unchanged: ``budget=4, seed=17`` for
+       G1, ``budget=2, seed=17`` for G2. A change here would re-roll the
+       search and silently produce different G1/G2 candidates.
+
+    This test is a STATIC source-level pin: it greeps the construct_p2 /
+    g3_real_generator / g3_real_llm_client source for these constants. If a
+    future change moves them (e.g. into a config file), update the
+    assertion to match the new location — the goal is to pin the values,
+    not the source layout.
+    """
+    # 1. MIN_DSR stays 0.0.
+    from Scripts.gold2_closed_loop.g3_real_generator import MIN_DSR
+    assert MIN_DSR == 0.0, (
+        f"MIN_DSR must stay 0.0 (no silent gate tightening); got {MIN_DSR}"
+    )
+
+    # 2. build_prompt does NOT leak blind-year tokens.
+    from Scripts.gold2_closed_loop.g3_real_llm_client import build_prompt
+    p = build_prompt({"layer_attribution": {}}, instrument="518880")
+    pl = p.lower()
+    for tok in ("blind", "2022", "2023", "2024", "2025"):
+        assert tok not in pl, (
+            f"build_prompt must not leak blind-year token {tok!r} into the "
+            f"LLM prompt (spec §6 anti-p-hacking); prompt length={len(p)}"
+        )
+
+    # 3. G1 grid unchanged: trend-ma-short in {20, 30}, vol-target in {0.11, 0.15}.
+    import Scripts.gold2_closed_loop.construct_p2 as p2
+    src = Path(p2.__file__).read_text()
+    # The grid is a literal dict at construct_p2.py:116-117:
+    #   {"trend-ma-short": {"type": "choice", "values": ["20", "30"]},
+    #    "vol-target": {"type": "choice", "values": ["0.11", "0.15"]}}
+    # Match the literal shape so a future refactor cannot silently widen it.
+    assert '"trend-ma-short"' in src and '"vol-target"' in src, (
+        "construct_p2 must still parametrize the G1 search over "
+        "trend-ma-short + vol-target"
+    )
+    assert '"20"' in src and '"30"' in src, (
+        "G1 trend-ma-short grid must still be {20, 30}"
+    )
+    assert '"0.11"' in src and '"0.15"' in src, (
+        "G1 vol-target grid must still be {0.11, 0.15}"
+    )
+    # Pin the grid as a literal dict (not a dynamic list): the assertion
+    # ``"values": ["20", "30"]`` appears as a literal in the source. If a
+    # future refactor builds the list dynamically, this assertion breaks
+    # and the reviewer must update it (the goal is to catch silent widening).
+    assert '"values": ["20", "30"]' in src, (
+        "G1 trend-ma-short values must be the literal ['20', '30'] "
+        "(dynamic widening would require updating this assertion)"
+    )
+    assert '"values": ["0.11", "0.15"]' in src, (
+        "G1 vol-target values must be the literal ['0.11', '0.15'] "
+        "(dynamic widening would require updating this assertion)"
+    )
+
+    # 4. Budget + seed unchanged.
+    #    G1: budget=4, seed=17 (construct_p2.py:113)
+    #    G2: budget=2, seed=17 (construct_p2.py:150)
+    assert "budget=4, seed=17" in src, (
+        "G1 ParameterOptimizerAdapter must keep budget=4, seed=17 "
+        "(re-rolling the seed would silently change the G1 candidate set)"
+    )
+    assert "budget=2, seed=17" in src, (
+        "G2 FeedbackConstructionAdapter must keep budget=2, seed=17 "
+        "(re-rolling the seed would silently change the G2 shaping bundle)"
+    )
+
+
+def test_forbidden_references_not_matched():
+    """§6 isolation regression: the new G3-Real module names must NOT match
+    any of ``interface_readiness._FORBIDDEN_REFERENCES`` as whole tokens.
+
+    The proof interface readiness scanner (spec §6 line 158) statically
+    rejects any proof module that imports the production daemon / evolution
+    / generation / layer-state machinery. The check is whole-token: it
+    splits the source on non-alphanumeric characters and checks each token
+    against the forbidden list.
+
+    This test replicates that check against the new G3-Real module names
+    (``g3_real_llm_client``, ``g3_real_generator``, ``g3_real_compile``,
+    ``g3_real_candidate``). None of them must match any forbidden token as
+    a whole token — otherwise the readiness scanner would false-positive on
+    the new modules and block the proof at the STOP P2 interface gate.
+
+    The check also verifies the §6 isolation is structural: the new module
+    names do not CONTAIN any forbidden token as a substring that would
+    match the regex word-boundary check the scanner uses
+    (``re.search(r"\\b" + re.escape(ref) + r"\\b", text)``).
+    """
+    import re
+    from Scripts.gold2_closed_loop import interface_readiness as ir
+
+    new_modules = (
+        "g3_real_llm_client",
+        "g3_real_generator",
+        "g3_real_compile",
+        "g3_real_candidate",
+    )
+    for new_mod in new_modules:
+        # Whole-token check: split on non-alphanumeric/underscore, check
+        # membership. This is the same logic interface_readiness uses (it
+        # applies a regex word-boundary search, which is equivalent to a
+        # whole-token match on identifiers).
+        tokens = re.split(r"[^A-Za-z0-9_]", new_mod)
+        for forb in ir._FORBIDDEN_REFERENCES:
+            assert forb not in tokens, (
+                f"new module {new_mod!r} must not match forbidden token "
+                f"{forb!r} as a whole token (§6 isolation)"
+            )
+            # Also replicate the regex word-boundary check the scanner uses
+            # (interface_readiness.py:138) so the test mirrors the actual
+            # production gate logic.
+            assert not re.search(
+                r"\b" + re.escape(forb) + r"\b", new_mod
+            ), (
+                f"new module {new_mod!r} must not match forbidden token "
+                f"{forb!r} via word-boundary regex (§6 isolation, "
+                f"interface_readiness.py:138)"
+            )
+
+
+def test_freeze_before_open_order():
+    """Freeze-before-open ordering regression (spec §6 line 118: 全局一次冻结).
+
+    The G3 candidate's ``source_sha256`` MUST be computed BEFORE the blind
+    partition opens. Concretely:
+
+    * ``G3Builder.build`` (g3_builder.py) computes ``source_sha =
+      canonical_hash({"source_text": source_text})`` and freezes it into
+      ``G3BuildResult.source_sha256``. It does NOT open the blind — the
+      blind is opened LATER by ``BlindEvaluator.open_blind`` (a separate
+      module). This pins the ordering: the freeze hash is computed in the
+      builder, the open is a downstream one-shot in the evaluator.
+    * ``g3_builder`` source MUST NOT reference ``open_blind`` (the builder
+      is responsible for FREEZING, not OPENING). If a future change moved
+      ``open_blind`` into the builder, the freeze/open ordering would
+      collapse and a candidate could be opened before its source hash was
+      pinned.
+    * ``g3_builder`` source MUST reference ``source_sha`` (the freeze hash
+      IS computed in build()).
+    * ``blind_evaluator`` MUST expose ``open_blind`` + ``validate_immutability``
+      (the gate exists so the open can be guarded by a post-open
+      immutability revalidation).
+
+    This test is a source-level pin: it greps the module sources for the
+    presence/absence of these identifiers. If a future refactor renames
+    them, update the assertion to match.
+    """
+    import inspect
+    from Scripts.gold2_closed_loop import g3_builder, blind_evaluator
+
+    builder_src = inspect.getsource(g3_builder)
+    # The builder computes source_sha (the freeze hash) in build().
+    assert "source_sha" in builder_src, (
+        "g3_builder must compute source_sha (the freeze hash) in build()"
+    )
+    # The builder MUST NOT open the blind — that's the evaluator's job.
+    # The identifier ``open_blind`` must not appear in the builder source.
+    assert "open_blind" not in builder_src, (
+        "g3_builder must NOT open the blind (open_blind is the evaluator's "
+        "job; freezing happens in build, opening is a downstream one-shot)"
+    )
+
+    # The evaluator exposes the open + the immutability gate.
+    evaluator_src = inspect.getsource(blind_evaluator)
+    assert "def open_blind" in evaluator_src, (
+        "blind_evaluator must expose open_blind (the freeze->open gate)"
+    )
+    assert "def validate_immutability" in evaluator_src, (
+        "blind_evaluator must expose validate_immutability (post-open "
+        "revalidation of every frozen code + artifact hash)"
+    )
+    # Cross-check: BlindEvaluator class has both methods (not just module-level).
+    assert hasattr(blind_evaluator.BlindEvaluator, "open_blind"), (
+        "BlindEvaluator.open_blind must exist"
+    )
+    assert hasattr(blind_evaluator.BlindEvaluator, "validate_immutability"), (
+        "BlindEvaluator.validate_immutability must exist"
+    )
+
+
+def test_run_train_gate_uses_train_not_blind():
+    """Anti-p-hacking: ``_run_train_gate`` operates on the TRAIN period,
+    NEVER the blind period.
+
+    Source-level pin: ``_run_train_gate`` references ``req.train_start`` /
+    ``req.train_end`` (which come from ``phase0_types.proof_windows()[w].train``),
+    NOT ``w.blind`` or ``req.blind``. A future change that swapped train for
+    blind here would let the gate peek at the blind partition — a §6 line
+    118 violation (the blind is physically absent from the train snapshot,
+    but the gate must ALSO not be wired to read blind dates even if the
+    data folder leaked).
+
+    Also verifies the helpers ``_train_start`` / ``_train_end`` read
+    ``w.train[0]`` / ``w.train[1]`` from ``phase0_types.proof_windows()``
+    (the canonical source of train-period dates), NOT ``w.blind``.
+    """
+    import inspect
+    from Scripts.gold2_closed_loop import g3_real_generator as gen
+    from Scripts.gold2_closed_loop.phase0_types import proof_windows, WindowDefinition
+
+    # _run_train_gate source.
+    gate_src = inspect.getsource(gen._run_train_gate)
+    assert "train_start" in gate_src, (
+        "_run_train_gate must reference train_start (from w.train via "
+        "_GateRequest.train_start)"
+    )
+    assert "train_end" in gate_src, (
+        "_run_train_gate must reference train_end (from w.train via "
+        "_GateRequest.train_end)"
+    )
+    # The gate MUST NOT reference w.blind or req.blind anywhere in its body.
+    assert "w.blind" not in gate_src, (
+        "_run_train_gate must NOT reference w.blind (anti-p-hacking: the "
+        "gate runs on the TRAIN period, never the blind)"
+    )
+    assert "req.blind" not in gate_src, (
+        "_run_train_gate must NOT reference req.blind (anti-p-hacking: the "
+        "gate runs on the TRAIN period, never the blind)"
+    )
+
+    # The helpers _train_start / _train_end read w.train (the canonical
+    # source from phase0_types.proof_windows), NOT w.blind.
+    start_src = inspect.getsource(gen._train_start)
+    end_src = inspect.getsource(gen._train_end)
+    assert "w.train" in start_src, (
+        "_train_start must read w.train[0] from phase0_types.proof_windows()"
+    )
+    assert "w.train" in end_src, (
+        "_train_end must read w.train[1] from phase0_types.proof_windows()"
+    )
+    assert "w.blind" not in start_src, (
+        "_train_start must NOT read w.blind (anti-p-hacking)"
+    )
+    assert "w.blind" not in end_src, (
+        "_train_end must NOT read w.blind (anti-p-hacking)"
+    )
+
+    # Cross-check: phase0_types.WindowDefinition carries both .train and
+    # .blind as DateRange fields, so the helpers COULD have read .blind.
+    # Pin that .train is the source the helpers use (not .blind).
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(WindowDefinition)}
+    assert "train" in fields and "blind" in fields, (
+        "WindowDefinition must carry both .train and .blind (the helpers "
+        "chose .train; this assertion pins that choice)"
+    )
