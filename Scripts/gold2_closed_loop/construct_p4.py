@@ -341,11 +341,26 @@ def main() -> int:
     loo = leave_one_window_out(deltas)
     direction = window_paired_direction(deltas)
     aggregate_delta = sum(deltas.values())
+    # G3-Real supersede: G3 is "activated" (g3_alias_reason=None) iff at least
+    # one window's alias-chain终点 is a REAL compiled+gate-passed G3 candidate
+    # (_resolve_final_stage returns "G3"). _resolve_final_stage only returns
+    # "G3" when p3_report.g3_build.eligible is True (compiled + train-gate
+    # passed); CONSTRUCTION_FAILED / CANDIDATE_REJECTED windows alias back to
+    # G2/G1/G0 and do NOT activate G3. When no window produced a real G3
+    # candidate (e.g. _StaticGen static-stub run, or all LLM candidates
+    # failed), g3_alias_reason stays NOT_TRIGGERED — the honest legacy
+    # verdict (the 4-defect frozen experiment's path, byte-identical).
+    # decide_verdict treats g3_alias_reason=None as G3 activated (activated
+    # set adds "G3"); with stages_passing=set() the verdict still cannot
+    # reach EFFECTIVE on activation alone — it falls to PARTIALLY_EFFECTIVE
+    # unless all §13 gates pass, so this never falsely inflates the verdict.
+    from Scripts.gold2_closed_loop.state_machine import G3AliasReason
+    g3_activated = any(_resolve_final_stage(w) == "G3" for w in g0_blind)
     verdict = decide_verdict(
         validity="VALID",
         aggregate_delta=aggregate_delta,
         stages_passing=set(),
-        g3_alias_reason="NOT_TRIGGERED",
+        g3_alias_reason=None if g3_activated else G3AliasReason.NOT_TRIGGERED.value,
     )
     ev_root = OUT / "evidence"
     ev_root.mkdir(parents=True, exist_ok=True)
