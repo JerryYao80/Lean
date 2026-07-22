@@ -441,7 +441,12 @@ STOCK_SPECIAL_APIS = [
         chunk_strategy=ChunkStrategy.STOCK,  # 注意：此接口要求 ts_code(必填)+日期范围
         code_field="ts_code",
         category="stock_special",
-        enabled=False  # 禁用：需要特殊参数处理(ts_code+start_date+end_date)，且数据量极大
+        # 启用：crowding 因子需要 cost_5pct/95pct/weight_avg/winner_rate 字段。
+        # incremental_update.py 通过 PER_CODE_RANGE_APIS 走 ts_code 迭代 +
+        # start_date/end_date 区间拉取（mirror index_daily 的 STOCK 策略）。
+        # 数据量大：crowding_factor_builder 仅消费 CSI300 成分股，但全市场下载
+        # 在 tushare 频控下仍可控（per-ts_code 单次≤4000 行）。
+        enabled=True
     ),
     APIConfig(
         api_name="cyq_chips",

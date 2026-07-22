@@ -410,3 +410,36 @@ def test_adj_factor_forward_fills_across_date_gap(tmp_path, monkeypatch):
     )
     assert crowding_row_12["cost_95pct_adj"] == pytest.approx(12.0 * 0.5)
     assert crowding_row_12["weight_avg_adj"] == pytest.approx(11.0 * 0.5)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Task 2: cyq_perf enabled in registry + active in incremental_update download set
+# ────────────────────────────────────────────────────────────────────────────
+def test_cyq_perf_enabled_in_registry():
+    """Plan Task 2: api_registry.py cyq_perf enabled=False → True (STOCK chunk kept)."""
+    # data-source/tushare is not a package; mirror crowding_factor_builder's
+    # sys.path-injection pattern to import api_registry.
+    import api_registry
+    from api_registry import STOCK_SPECIAL_APIS, ChunkStrategy
+
+    cyq = [a for a in STOCK_SPECIAL_APIS if a.api_name == "cyq_perf"]
+    assert cyq, "cyq_perf must remain in STOCK_SPECIAL_APIS"
+    assert cyq[0].enabled is True, "cyq_perf.enabled must flip to True (Plan Task 2)"
+    assert cyq[0].chunk_strategy == ChunkStrategy.STOCK, (
+        "keep STOCK chunk strategy (ts_code+start_date+end_date handling)"
+    )
+
+    # cyq_chips must stay disabled (sibling, NOT in scope).
+    chips = [a for a in STOCK_SPECIAL_APIS if a.api_name == "cyq_chips"]
+    assert chips, "cyq_chips entry must still exist"
+    assert chips[0].enabled is False, "cyq_chips stays disabled (not in scope)"
+
+
+def test_cyq_perf_in_active_download_set():
+    """Plan Task 2: incremental_update.py source contains cyq_perf (per-ts_code
+    iteration set). Mirror how margin_detail (also STOCK) is wired via
+    PER_CODE_RANGE_APIS or an explicit cyq_perf branch."""
+    src = (ROOT / "data-source/tushare/incremental_update.py").read_text()
+    assert "cyq_perf" in src, (
+        "cyq_perf must appear in incremental_update.py active download set"
+    )

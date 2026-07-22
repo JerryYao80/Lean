@@ -54,7 +54,7 @@ TRADE_DATE_BATCH_APIS = {
     "moneyflow",
     "fund_daily",
 }
-PER_CODE_RANGE_APIS = {"index_daily"}
+PER_CODE_RANGE_APIS = {"index_daily", "cyq_perf"}
 DATE_FIELD_OVERRIDES = {
     "fund_daily": "trade_date",
     "index_daily": "trade_date",
