@@ -135,7 +135,7 @@
        ├─ crowding_factor_builder.build_day     [现有, 接入]
        ├─ export_forward_factors.run             [现有, 接入]
        ├─ accruals/grossprof/assetgrowth/.../   [7 新因子, 新 build_day]
-       └─ Barra incremental 模式 (仅重算 t 列)  [给 Barra builder 加增量分支]
+       └─ Barra: 调现有 barra_cne5_pipeline.py --factor-source-mode build [全量重算, 不改 builder]
     每个 builder 写: parquet(result/factor-zoo/t={t}/) + InfluxDB(lean_*)
     │
     ▼
@@ -184,7 +184,15 @@ factors:
   - id: accruals_sloan
     name: Accruals (Sloan)
     category: Quality
-    ...
+    compute_mode: Precomputed
+    storage: {kind: parquet, path: result/factor-zoo/<date>/<ts_code>.parquet, influx: lean_factor_accruals_sloan}
+    tushare_deps: [balancesheet, cashflow, stock_basic]
+    last_date: 2026-07-21
+    status: fresh
+    selection_hint: "应计异象, 高应计=盈余质量差, 通常反向"
+    parameters: {}
+```
+(每个因子一条; 完整 7 因子 + 现有 crowding/Barra/forward/IV/Chip/Value/Quality/Trend/Liquidity 全量在 §5 与现有 §0 盘点中)
 ```
 
 **两类消费**:
@@ -282,7 +290,7 @@ factors:
 3. **FactorCatalog 生成器** + manifest schema — §3.2
 4. **factor_worker** supervisor 程序 (先接入现有 crowding/forward build_day 验证循环) — §3.1
 5. **7 新因子 build_day** + 单测 (逐个接入 worker) — §5
-6. **Barra 增量模式** (给 builder 加 incremental 分支)
+6. **Barra 接入** (factor_worker 调现有 `barra_cne5_pipeline.py --factor-source-mode build`, 不改 builder; 重算成本由 §8 Barra 性能项跟进)
 7. **manifest.factor-include schema** + 优化器接入 — §3.2
 8. **重构 LLM prompt 注入 catalog** (`inspiration/hypothesize.py`) — §3.2
 9. **Grafana 新鲜度面板** — §2
@@ -291,6 +299,6 @@ factors:
 ## 8. 风险
 
 - **适配层性能**: FactorStore 经 4 适配器路由可能增加查询延迟。缓解: 适配器内缓存当日值, 跨截面批量读。
-- **Barra 增量模式风险**: 给成熟 Barra builder 加增量分支可能引入 bug。缓解: 加 `--mode incremental` 开关默认 off, 旧 `reuse`/`build` 路径不动; 增量结果与全量结果对拍 (bit-identical) 才启用。
+- **Barra 全量重算成本**: factor_worker 调 `barra_cne5_pipeline.py --factor-source-mode build` 是全量重算 (builder 现只有 reuse/build 两模式, 不改它即只能全量)。缓解: (a) Barra 接入设为每日单跑一次而非每轮; (b) 若成本不可接受, 在**独立后续 spec** 给 builder 加 `--mode incremental` 开关 (旧路径不动, 增量与全量对拍 bit-identical 才启用) — **本 spec 不做增量模式**, 避免碰成熟 builder。
 - **CSI500 下载分**: 000905.SH index_weight 是否在 15000 档内, 需实现阶段核 (tushare index_weight 通常 2000 积分起, 应可下)。
 - **7 因子实盘有效性**: 本 spec 保证因子可算、新鲜、可选, 不保证 alpha。有效性由后续回测/IC 检验, 非本架构 spec 范围。
