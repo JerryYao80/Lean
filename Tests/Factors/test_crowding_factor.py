@@ -469,3 +469,72 @@ def test_csi300_universe_model_loads_constituents():
     assert "spec_from_file_location" in src
     # Must support monthly rebalance (refresh constituents on schedule).
     assert "GetNextRefreshTimeUtc" in src or "refreshMonths" in src or "_nextRefreshUtc" in src
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Task 4: CrowdingFactorZooAlphaModel — low-crowding 30% long-only, monthly
+# ────────────────────────────────────────────────────────────────────────────
+_CROWDING_ALPHA_PATH = (
+    ROOT / "Algorithm.CSharp" / "Models" / "Alpha" / "CrowdingFactorZooAlphaModel.cs"
+)
+
+
+def test_crowding_alpha_selects_low_30pct():
+    """Plan Task 4: 10 ts_codes with composite 0.1..0.9 → AlphaModel picks
+    lowest 30% (3 names), equal-weight 1/3, direction Up, unselected no insight.
+
+    Source-substring test (mirror test_csi300_universe_model_loads_constituents):
+    C# class is exercised end-to-end in Task 7 backtest; unit test asserts the
+    contract is encoded in source. Runtime behaviour would require a live
+    pythonnet/LEAN algorithm context.
+    """
+    src = _CROWDING_ALPHA_PATH.read_text()
+    assert "class CrowdingFactorZooAlphaModel" in src
+    # Pulls CrowdingFactor from the registry (Precomputed + InjectValue).
+    assert "FactorRegistry.Get(\"crowding\")" in src
+    assert "CrowdingFactor" in src
+    assert "InjectValue" in src
+    assert "ClearInjectedValues" in src
+    # Long-only low-crowding: bottom 30% (= 0.30 quantile).
+    assert "0.30m" in src or "lowQuantile" in src
+    # Emits Price insights, direction Up (long-only).
+    assert "Insight.Price" in src
+    assert "InsightDirection.Up" in src
+    # Equal weight = 1.0 / |selected|.
+    assert "1.0" in src and "selected" in src.lower()
+
+
+def test_crowding_alpha_monthly_rebalance():
+    """Plan Task 4: non-rebalance day returns empty insights (hold); rebalance
+    day reselects the low-crowding basket."""
+    src = _CROWDING_ALPHA_PATH.read_text()
+    # Tracks last rebalance month and only re-emits on a new month.
+    assert ("_lastRebalanceMonth" in src or "_lastRebalance" in src
+            or "lastRebalanceMonth" in src)
+    assert "rebalanceMonths" in src or "RebalanceMonths" in src
+    # Non-rebalance path returns empty (hold current positions).
+    assert "new List<Insight>()" in src or "Array.Empty<Insight>()" in src
+
+
+def test_crowding_parquet_missing_raises():
+    """Plan Task 4 spec §4: parquet missing for a date → InvalidOperationException
+    (loud fail; do not silently return empty)."""
+    src = _CROWDING_ALPHA_PATH.read_text()
+    assert "InvalidOperationException" in src
+    assert "crowding" in src.lower()
+    # Parquet path pattern result/crowding-factor/<yyyy-MM-dd>/<ts_code>.parquet
+    assert "crowding-factor" in src
+    # Builder reference so the error message is actionable.
+    assert "crowding_factor_builder" in src
+
+
+def test_crowding_alpha_uses_pythonnet_for_parquet():
+    """Plan Task 4: parquet read via pythonnet (mirror ChipPeak's pythonnet
+    pattern). C# parquet-DataFrame support in LEAN is limited; pythonnet pandas
+    is the established pattern."""
+    src = _CROWDING_ALPHA_PATH.read_text()
+    assert "Py.GIL" in src
+    assert "spec_from_file_location" in src or "Py.Import" in src
+    # SymbolToTsCode mirrors ChipPeak: 6/51 → .SH else .SZ.
+    assert "SymbolToTsCode" in src
+    assert ".SH" in src and ".SZ" in src
