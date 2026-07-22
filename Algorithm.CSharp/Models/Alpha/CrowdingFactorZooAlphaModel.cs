@@ -103,7 +103,20 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
             var dateFolder = now.ToString("yyyy-MM-dd");
             var dateDir = Path.Combine(_resultRoot, "crowding-factor", dateFolder);
 
+            // Spec §4 row 4: whole date unbuilt → loud fail. If the date
+            // directory itself does not exist, the builder was never run for
+            // this date — abort the rebalance so the operator runs the builder
+            // before retrying. Never silently return empty (would masquerade
+            // as a valid "hold" signal).
+            if (!Directory.Exists(dateDir))
+            {
+                throw new InvalidOperationException(
+                    $"crowding data missing for {dateFolder} (date directory not found at "
+                    + $"{dateDir}); run crowding_factor_builder first (result_root={_resultRoot}).");
+            }
+
             var scores = new Dictionary<Symbol, double>();
+            int skippedMissing = 0;
             using (Py.GIL())
             {
                 foreach (var kv in codeToSymbol)
@@ -111,11 +124,21 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                     var tsCode = kv.Key;
                     var sym = kv.Value;
                     var parquetPath = Path.Combine(dateDir, $"{tsCode}.parquet");
+
+                    // Spec §4 row 3: date dir exists but this ts_code's parquet
+                    // is missing → builder marked it Missing (one of the five
+                    // tables lacked that stock on that day). SKIP it: don't add
+                    // to scores, don't select, don't raise. This matches the
+                    // builder's own behaviour (Missing ts_codes produce no
+                    // parquet). One CSI300 stock missing must NOT abort the
+                    // entire month's rebalance.
                     if (!File.Exists(parquetPath))
                     {
-                        throw new InvalidOperationException(
-                            $"crowding data missing for {dateFolder}/{tsCode}.parquet; "
-                            + $"run crowding_factor_builder first (result_root={_resultRoot}).");
+                        skippedMissing++;
+                        algorithm.Debug(
+                            $"[CrowdingFactorZoo] {tsCode} missing crowding data on "
+                            + $"{dateFolder}, skipped.");
+                        continue;
                     }
 
                     try
@@ -123,9 +146,13 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                         dynamic df = _pandas.read_parquet(parquetPath);
                         if (df == null || df.__bool__().__bool__() == false)
                         {
-                            throw new InvalidOperationException(
-                                $"crowding parquet empty for {dateFolder}/{tsCode}.parquet; "
-                                + "run crowding_factor_builder first.");
+                            // Empty parquet = also a per-stock Missing signal,
+                            // not a whole-date failure. Skip, don't raise.
+                            skippedMissing++;
+                            algorithm.Debug(
+                                $"[CrowdingFactorZoo] {tsCode} empty crowding parquet on "
+                                + $"{dateFolder}, skipped.");
+                            continue;
                         }
 
                         // composite column holds the crowding score ∈ [0,1].
@@ -133,10 +160,6 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                         double composite = (double)compositeVal;
                         scores[sym] = composite;
                         _crowdingFactor?.InjectValue(sym, (decimal)composite);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -147,7 +170,20 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                 }
             }
 
-            if (scores.Count == 0) return new List<Insight>();
+            if (scores.Count == 0)
+            {
+                algorithm.Debug(
+                    $"[CrowdingFactorZoo] {dateFolder}: all {codeToSymbol.Count} ts_codes "
+                    + $"missing/skipped, no insights emitted.");
+                return new List<Insight>();
+            }
+
+            if (skippedMissing > 0)
+            {
+                algorithm.Debug(
+                    $"[CrowdingFactorZoo] {dateFolder}: {skippedMissing} ts_code(s) skipped "
+                    + $"(Missing), {scores.Count} eligible for ranking.");
+            }
 
             // Low-crowding long-only: sort ascending, take bottom lowQuantile.
             var ranked = scores.OrderBy(kv => kv.Value).ToList();

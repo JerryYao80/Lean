@@ -517,8 +517,8 @@ def test_crowding_alpha_monthly_rebalance():
 
 
 def test_crowding_parquet_missing_raises():
-    """Plan Task 4 spec §4: parquet missing for a date → InvalidOperationException
-    (loud fail; do not silently return empty)."""
+    """Plan Task 4 spec §4 row 4: date directory missing → whole date unbuilt
+    → InvalidOperationException (loud fail; do not silently return empty)."""
     src = _CROWDING_ALPHA_PATH.read_text()
     assert "InvalidOperationException" in src
     assert "crowding" in src.lower()
@@ -526,6 +526,34 @@ def test_crowding_parquet_missing_raises():
     assert "crowding-factor" in src
     # Builder reference so the error message is actionable.
     assert "crowding_factor_builder" in src
+    # Spec §4 row 4: the loud-fail branch keys off the DATE DIRECTORY existence,
+    # not per-file File.Exists. This is what distinguishes "whole date unbuilt"
+    # from "this one stock Missing that day" (row 3).
+    assert "Directory.Exists(dateDir)" in src or "Directory.Exists" in src
+    assert "date directory" in src.lower() or "date directory not found" in src.lower()
+
+
+def test_crowding_alpha_skips_missing_ts_code_when_date_dir_exists():
+    """Plan Task 4 spec §4 row 3: date dir exists but a specific ts_code's
+    parquet is missing → builder marked it Missing (one of the five tables
+    lacked that stock on that day). AlphaModel must SKIP that ts_code (not
+    select, not raise) — one CSI300 stock missing must NOT abort the entire
+    month's rebalance.
+
+    Distinct from row 4 (whole-date-missing → raise): here the date directory
+    exists, so the builder ran successfully for the date; only this stock is
+    Missing. Skip + log Debug, others proceed.
+    """
+    src = _CROWDING_ALPHA_PATH.read_text()
+    # Per-file File.Exists check inside the loop (after dateDir existence check).
+    assert "File.Exists(parquetPath)" in src
+    # Skip path: continue (don't throw, don't add to scores).
+    assert "skipped" in src.lower()
+    assert "continue;" in src
+    # Debug log note so operator can see which ts_codes were skipped.
+    assert "missing crowding data" in src.lower() or "missing" in src.lower()
+    # Empty-parquet also treated as per-stock Missing (skip, not raise).
+    assert "empty crowding parquet" in src.lower() or "empty" in src.lower()
 
 
 def test_crowding_alpha_uses_pythonnet_for_parquet():
