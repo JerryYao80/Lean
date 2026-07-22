@@ -153,6 +153,7 @@
 - 单因子 build_day 失败不阻断其他: try/except 隔离, 记 `failed`, 下轮重试 (最多 3 轮后标 `poisoned` 暂停)。
 - 幂等: build_day 对同一交易日重跑覆盖 (parquet upsert keep=last, InfluxDB 同 timestamp 覆写)。
 - 背压: 一轮待补 > N 个交易日 (如假期后积压) 分批补, 每批写一次状态。
+- **轮询降频 (意见2, 非阻塞性)**: 60s 轮询在非交易日/长假期间会空转 (T_raw==T_cal 持续判 "已就绪" 跳过)。用 `trade_cal` 预判下一交易日, 非交易日/长假期间拉长 sleep (如非交易日 600s、长假期间切到下一交易日盘前唤醒), 减少日志噪音与空转。实现时在代码注释与 README 提一句; 不影响正确性。
 
 ### 3.2 FactorCatalog manifest 生成
 
@@ -212,6 +213,7 @@ factors:
 | tushare_data 未下完 (T_raw < T_cal) | factor_worker 跳过本轮, 等下载 daemon; 不空跑因子 |
 | 单因子 build_day 抛错 | try/except 隔离, 记 `failed`+`last_error`, 其他因子继续; 下轮重试 (最多 3 轮后标 `poisoned` 暂停, 写 freshness.json 供人查) |
 | 因子依赖表为空/历史缺 | 适配器 `IsAvailable(sym,date)` 返回 false; `FactorStore.Get` 返回 `Quality=Missing`; 不喂 NaN 进策略 |
+| 依赖表存在但 `ann_date` 晚于 t (财报延迟披露, 最隐蔽的前视偏差源) | 财务类因子 (accruals/GP/asset_growth/roe_change) PIT 锚定 `f_ann_date ≤ t`; 若 t 日当年年报尚未公告, **回退到最近一个 `f_ann_date ≤ t` 的年报** (去年数据), 绝不用未公告的当期数据; 若连去年数据也无 (`<2 期年报`) → `Quality=Stale`, 因子值空。适配器与 builder 共用 `BarraCNE5DataLoader.load_point_in_time` 的 filter+sort+iloc[-1] 实现, 保证单一 PIT 口径 |
 | tushare 接口权限不足 (permission_denied) | 复用现有 `SkipIncrementalAPI` 机制, 标 `permission_denied`; freshness.json 标 `status=blocked` |
 | InfluxDB 写失败 | 不阻断 parquet 写入 (parquet 是回测真源); InfluxDB 仅 dashboard, 失败仅记日志, 下轮重试 |
 | factor_worker 崩溃 | supervisor `autorestart=true`; 状态文件断点续; 单轮积压分批 |
@@ -221,6 +223,7 @@ factors:
 
 **单元测试 (pytest, `Tests/Python/FactorZoo/`)**:
 - 每个 `build_day`: fixture tushare parquet → 断言因子值范围、NaN 处理、ST/新股 edge case
+- **财报延迟披露 PIT 边界 (意见1, 必须覆盖)**: 财务类因子 (accruals/GP/asset_growth/roe_change) fixture 必须显式覆盖"依赖表存在但 `ann_date` 晚于 t"——某只股票当年年报 3 月前未公告, 此时因子值应回退到最近 `f_ann_date ≤ t` 的去年数据, 而非用未公告的当期数据; 连去年数据也无时返回 `Quality=Stale`/空。这是最易埋前视偏差处, 不可省。
 - `FactorCatalog` 生成器: fixture 因子集 → 断言 manifest 结构、`status` 判定 (fresh/stale/blocked)
 - 新鲜度循环: mock T_cal/T_raw/T_f → 断言 "落后才补、已齐跳过"
 
@@ -252,7 +255,7 @@ factors:
 
 **验证方法**: 每因子先设计, 再用独立 agent 对抗验证——读真实 parquet schema 核字段拼写、WebFetch tushare 文档核档位、读 `FactorRegistry.cs`+Barra builder 核重叠、查 PIT 安全。
 
-**标准化口径 (统一)**: 横截面 `winsorize(1%/99%) → zscore`, 宇宙 = CSI300+500 (待 000905.SH 下载后, 见 §6)。财务类年度更新+月度横截面; 价量类每日/月度。PIT 锚定 `f_ann_date` (实际公告日) 而非 `end_date`, 与 `BarraCNE5DataLoader.load_point_in_time` 一致。
+**标准化口径 (统一)**: 横截面 `winsorize(1%/99%) → zscore`, 宇宙 = CSI300+500 (待 000905.SH 下载后, 见 §6)。财务类年度更新+月度横截面; 价量类每日/月度。PIT 锚定 `f_ann_date` (实际公告日) 而非 `end_date`, 与 `BarraCNE5DataLoader.load_point_in_time` 一致。**PIT 口径复用现有 loader 的 filter+sort+iloc[-1] 单一实现, 保证 7 因子与 Barra 共用同一前视边界 (意见: 财报延迟披露是财务因子最隐蔽的前视偏差源, 见 §4.1/§7 STEP 0b)**。
 
 | # | factor_id | 类别 | 公式 | tushare 依赖 (档位) | 验证结论 |
 |---|---|---|---|---|---|
@@ -297,12 +300,16 @@ factors:
 
 ## 7. 落地顺序 (实现计划骨架, 细节交 writing-plans)
 
+**STEP 0 (前置验收, 意见总结的两处隐蔽正确性 — 在 7 因子实现前先过)**:
+- a) **CSI500 宇宙口径一致性**: 下载 000905.SH index_weight 后, 验证新因子横截面宇宙与 crowding/Barra 既有 CSI300 宇宙在 as-of 日成员集一致 (合并去重 + 调入调出处理)。
+- b) **财报延迟披露 PIT 边界**: 财务类因子 builder 先写 fixture 覆盖"年报未公告→回退去年数据", 验证无前视偏差, 再实现公式。
+
 1. **tushare 覆盖审计 + 补齐** (含 enable cyq_perf, 下载 000905.SH index_weight) — §6
 2. **FactorStore + 4 适配器** (C# 纯增量) + 单测 — §2
 3. **FactorCatalog 生成器** + manifest schema — §3.2
 4. **factor_worker** supervisor 程序 (先接入现有 crowding/forward build_day 验证循环) — §3.1
-5. **7 新因子 build_day** + 单测 (逐个接入 worker) — §5
-6. **Barra 接入** (factor_worker 调现有 `barra_cne5_pipeline.py --factor-source-mode build`, 不改 builder; 重算成本由 §8 Barra 性能项跟进)
+5. **7 新因子 build_day** + 单测 (逐个接入 worker; 财务类先过 STEP 0b PIT fixture) — §5
+6. **Barra 接入** (factor_worker 调现有 `barra_cne5_pipeline.py --factor-source-mode build`, 不改 builder; 加 duration_ms 埋点) — §3.1/§8
 7. **manifest.factor-include schema** + 优化器接入 — §3.2
 8. **重构 LLM prompt 注入 catalog** (`inspiration/hypothesize.py`) — §3.2
 9. **Grafana 新鲜度面板** — §2
@@ -311,6 +318,24 @@ factors:
 ## 8. 风险
 
 - **适配层性能**: FactorStore 经 4 适配器路由可能增加查询延迟。缓解: 适配器内缓存当日值, 跨截面批量读。
+- **适配器债务会累积 (意见5, 技术债务标注)**: 方案 A 的只读适配层是**短期债务, 非终局**。四种存储格式 (parquet/CSV/InfluxDB 混用) 短期统一成本高于收益, 先用适配器包一层。但等 7 新因子跑稳、FactorStore 模式验证通过后, 应单开"存储收敛" spec (见 §9), 否则适配器只会越叠越多。本 spec 显式记录此债务, 不在本 spec 内偿还。
+- **Barra 全量重算成本**: factor_worker 调 `barra_cne5_pipeline.py --factor-source-mode build` 是全量重算 (builder 现只有 reuse/build 两模式, 不改它即只能全量)。缓解: (a) Barra 接入设为每日单跑一次而非每轮; (b) 若成本不可接受, 在独立后续 spec 给 builder 加 `--mode incremental` 开关 (见 §9) — 本 spec 不做增量模式, 避免碰成熟 builder。
+- **Barra 耗时无监控 (意见3)**: 现在就给 Barra (及各 build_day) 打 `duration_ms` 日志埋点, 不做告警 (符合"非目标"不做自动告警的约束), 写入 `factor_worker_state.json` 的 `last_duration_ms`。日后判断是否该做增量模式时有历史耗时曲线, 而非凭感觉。
+- **CSI500 宇宙口径一致性 (意见总结点)**: 下载 000905.SH index_weight 后, 必须验证 ivol_20d/roe_change 等的横截面标准化宇宙与 crowding/Barra 既有 CSI300 宇宙在 as-of 日成员集真的一致 (合并去重、处理调入调出)。列为 §7 STEP 0a 前置验收, 不等 7 因子全实现完才发现。
+- **财报延迟披露前视偏差 (意见1, 最隐蔽)**: 财务类因子若用未公告的当期数据会埋前视偏差。缓解: PIT 锚定 `f_ann_date ≤ t`, 未公告回退去年数据; 单测显式覆盖 (§4.2); 列为 §7 STEP 0b 前置验收。
+- **因子间相关性无约束 (意见4, 本 spec 范围外)**: 40 因子动物园 (33 现有 + 7 新) 若重构 LLM 从 catalog 随便挑, 易选高度共线组合。本 spec 不解决, 先以 `selection_hint` 过渡; 后续给 FactorCatalog 加因子间相关性矩阵 (见 §9)。
+- **7 因子实盘有效性**: 本 spec 保证因子可算、新鲜、可选, 不保证 alpha。有效性由后续回测/IC 检验, 非本架构 spec 范围。
+
+## 9. 后续 spec 路线 (本 spec 显式登记的债务与外延, 不在本 spec 实现)
+
+- **每批新因子强制走对抗验证流程 (意见)**: 本批 7 因子的验证方法论 (读真实 parquet schema 核字段 + WebFetch tushare 文档核档位 + 读 FactorRegistry/Barra 核重叠 + 查 PIT 安全) 比因子公式本身更有价值。后续每批新因子 spec 应强制走此流程, 而非只在第一批做。
+- **存储收敛 spec**: §8 债务——逐步把现有因子输出统一到 parquet+InfluxDB 单一格式, 退役累积的只读适配器。
+- **Barra 增量模式 spec**: §8 风险——若 duration_ms 埋点显示全量重算成本不可接受, 给 Barra builder 加 `--mode incremental` 开关。
+- **因子间相关性矩阵 spec**: §8——给 FactorCatalog 加月度滚动相关性矩阵, 供重构 LLM/优化器避免共线组合。
+- **第二批及以后因子路线图**: §1.3 非目标——本 spec 不规定, 另出独立 spec。
+- **适配器债务会累积 (意见5, 技术债务标注)**: 方案 A 的只读适配层是**短期债务, 非终局**。四种存储格式 (parquet/CSV/InfluxDB 混用) 短期统一成本高于收益, 先用适配器包一层。但等 7 新因子跑稳、FactorStore 模式验证通过后, **应单开"存储收敛"spec** (逐步把现有因子输出统一到 parquet+InfluxDB 单一格式), 否则适配器只会越叠越多。本 spec 显式记录此债务, 不在本 spec 内偿还。
+- **因子间相关性无约束 (意见4, 本 spec 范围外, 记录后续)**: 40 因子动物园 (33 现有 + 7 新) 若重构 LLM 从 catalog 随便挑, 易选高度共线组合 (如 crowding 与某流动性因子本就相关)。本 spec 不解决, 但记录后续给 FactorCatalog 加**因子间相关性矩阵** (月度滚动算一次, 供 LLM/优化器参考), 否则"有的放矢"会退化为"什么都放"。先以 `selection_hint` 字段过渡。
 - **Barra 全量重算成本**: factor_worker 调 `barra_cne5_pipeline.py --factor-source-mode build` 是全量重算 (builder 现只有 reuse/build 两模式, 不改它即只能全量)。缓解: (a) Barra 接入设为每日单跑一次而非每轮; (b) 若成本不可接受, 在**独立后续 spec** 给 builder 加 `--mode incremental` 开关 (旧路径不动, 增量与全量对拍 bit-identical 才启用) — **本 spec 不做增量模式**, 避免碰成熟 builder。
-- **CSI500 下载分**: 000905.SH index_weight 是否在 15000 档内, 需实现阶段核 (tushare index_weight 通常 2000 积分起, 应可下)。
+- **Barra 耗时监控埋点 (意见3)**: 现在就给 Barra (及各 build_day) 打 `duration_ms` 日志埋点, 不做告警 (符合"非目标"不做自动告警的约束), 写入 `factor_worker_state.json` 的 `last_duration_ms`。这样日后判断是否该做增量模式时有历史耗时曲线, 而非凭感觉。
+- **CSI500 宇宙口径一致性 (意见总结点)**: 下载 000905.SH index_weight 后, 必须验证 ivol_20d/roe_change 等的横截面标准化宇宙与 crowding/Barra 既有 CSI300 宇宙在 as-of 日的成员集真的一致 (合并去重、处理调入调出)。这是落地第 1-2 步的验收标准之一, 见 §7 STEP 0。
 - **7 因子实盘有效性**: 本 spec 保证因子可算、新鲜、可选, 不保证 alpha。有效性由后续回测/IC 检验, 非本架构 spec 范围。
