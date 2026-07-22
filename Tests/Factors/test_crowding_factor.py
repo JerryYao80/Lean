@@ -443,3 +443,29 @@ def test_cyq_perf_in_active_download_set():
     assert "cyq_perf" in src, (
         "cyq_perf must appear in incremental_update.py active download set"
     )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Task 3: AShareCSI300UniverseSelectionModel — reuses barra_cne5_data_loader.load_index_constituents
+# ────────────────────────────────────────────────────────────────────────────
+def test_csi300_universe_model_loads_constituents():
+    """Plan Task 3: universe model via pythonnet calls barra_cne5_data_loader.
+    Source-substring test mirrors the G3-Real base class tests pattern: the
+    C# file is exercised end-to-end in Task 7 backtest, not via pythonnet
+    runtime instantiation in the unit test (pythonnet init requires a live
+    LEAN algorithm context).
+    """
+    src = (ROOT / "Algorithm.CSharp/Universe/AShareCSI300UniverseSelectionModel.cs").read_text()
+    assert "AShareCSI300UniverseSelectionModel" in src
+    assert "000300.SH" in src  # CSI300 index code
+    assert "load_index_constituents" in src  # reuses barra loader
+    # Must derive from LEAN native UniverseSelectionModel (no LEAN core edits).
+    assert ": UniverseSelectionModel" in src or "ManualUniverseSelectionModel" in src
+    # Must convert ts_code → Symbol with SH/SZ market inference (mirror ChipPeak).
+    assert "Market.SSE" in src
+    assert "Market.SZSE" in src
+    # Must use pythonnet (Py.GIL + importlib spec_from_file_location) mirror ChipPeak.
+    assert "Py.GIL" in src
+    assert "spec_from_file_location" in src
+    # Must support monthly rebalance (refresh constituents on schedule).
+    assert "GetNextRefreshTimeUtc" in src or "refreshMonths" in src or "_nextRefreshUtc" in src
