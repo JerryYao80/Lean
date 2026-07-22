@@ -64,3 +64,26 @@ def test_resolve_universe_missing_index_returns_flag(tmp_path):
     rep = resolve_universe(["000300.SH", "000905.SH"], data_root=str(tmp_path), asof="20260120")
     assert "000905.SH" in rep.unresolved
     assert rep.csi300_count == 1
+
+
+def test_resolve_universe_skips_corrupt_parquet(tmp_path):
+    """A corrupt partition file must be skipped silently, not crash the run.
+
+    Mirrors the Task 1 audit resilience pattern (audit_tushare_coverage.py:85-98):
+    one bad footer among thousands of partitions must not abort universe
+    resolution.
+    """
+    # one good partition with a 000300.SH member
+    _write_index_weight_partition(tmp_path, "20260120", {
+        "index_code": ["000300.SH"],
+        "con_code": ["600519.SH"],
+        "trade_date": ["20260120"],
+        "weight": [0.05],
+    })
+    # one corrupt partition: garbage bytes where a parquet footer should be
+    bad_dir = tmp_path / "index_weight" / "trade_date=20260121"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "data.parquet").write_bytes(b"NOT A PARQUET FILE")
+    # must not raise; must still resolve the good partition's member
+    members = load_index_members("000300.SH", data_root=str(tmp_path), asof="20260121")
+    assert members == ["600519.SH"]

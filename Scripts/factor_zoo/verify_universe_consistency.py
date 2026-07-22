@@ -24,7 +24,6 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -34,8 +33,18 @@ def _table_dir(api_name: str, data_root: str) -> Path:
     return Path(data_root) / api_name
 
 
-def _read_partition_file(f: Path):
-    return pq.ParquetFile(f).read().to_pandas()
+def _read_partition_file(f: Path, columns: list[str] | None = None):
+    """Read one partition to pandas with optional column projection.
+
+    Mirrors the Task 1 audit pattern (audit_tushare_coverage.py:85-98): a
+    single corrupt footer or unreadable body among thousands of partitions
+    must NOT crash the whole run — return an empty DataFrame so callers'
+    `df.empty → continue` skips it silently.
+    """
+    try:
+        return pq.ParquetFile(f).read(columns=columns).to_pandas()
+    except Exception:
+        return pd.DataFrame()
 
 
 def load_index_members(index_code: str, data_root: str, asof: str) -> list[str]:
@@ -49,7 +58,7 @@ def load_index_members(index_code: str, data_root: str, asof: str) -> list[str]:
         return []
     frames = []
     for f in table_dir.rglob("data.parquet"):
-        df = _read_partition_file(f)
+        df = _read_partition_file(f, columns=["index_code", "trade_date", "con_code"])
         if df.empty:
             continue
         if "index_code" not in df.columns:
@@ -128,9 +137,9 @@ def _resolve_latest_trade_date(data_root: str) -> str:
     if cal.exists():
         last = None
         for f in cal.rglob("data.parquet"):
-            df = _read_partition_file(f)
+            df = _read_partition_file(f, columns=["cal_date", "is_open"])
             if "cal_date" in df.columns and "is_open" in df.columns:
-                open_dates = df.loc[df["is_open"].astype(str) == "1", "cal_date"].astype(str)
+                open_dates = df.loc[df["is_open"].astype(str).isin({"1", "True", "true"}), "cal_date"].astype(str)
                 if not open_dates.empty:
                     m = open_dates.max()
                     last = m if (last is None or m > last) else last
@@ -155,10 +164,12 @@ def main(argv=None) -> int:
         print(f"CSI500 members: {rep.csi500_count}")
         print(f"union (deduped): {rep.union_count}")
         print(f"overlap: {rep.overlap_count}")
+        if "000905.SH" in rep.unresolved:
+            print("000905.SH UNRESOLVED → §6 'missing' confirmed, backfill required (§6.1 P0).")
+        else:
+            print("000905.SH resolved → §6 'missing' refuted (was a glob artifact).")
         if rep.unresolved:
             print(f"UNRESOLVED indices: {rep.unresolved}")
-            print("  -> 000905.SH here means §6 'missing' claim stands; backfill required (§6.1 P0).")
-            print("     000905.SH absent means §6 'missing' claim was refuted (glob artifact).")
     return 0
 
 
