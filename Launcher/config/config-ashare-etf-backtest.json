@@ -7,10 +7,15 @@
   "data-folder": "../../../Data",
   "data-directory": "../../../Data",
 
-  "history-provider": "TushareHistoryProvider",
+  "history-provider": "FallbackTushareHistoryProvider",
   "data-provider": "DefaultDataProvider",
 
   "results-destination-folder": "../../../Results",
+  "influxdb-enabled": true,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
 
   "log-handler": "ConsoleLogHandler",
   "messaging-handler": "QuantConnect.Messaging.Messaging",

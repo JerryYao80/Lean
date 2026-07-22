@@ -1,0 +1,28 @@
+{
+  "strategy_id": "2409-06289-automate-strategy-finding-with-llm-in-quant-investment",
+  "class_name": "SoloQuantGeneratedLlmQuantAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedLlmQuantAlgorithm.py.broken",
+  "description": "基于论文 'Automate Strategy Finding with LLM in Quant Investment' 的 A股策略。使用 12 个 alpha 因子（价格/成交量）的加权组合，在 SSE 50 成分股上进行多空交易。策略使用论文表 3 中的固定权重模拟 MLP 优化结果，并在 OnData 中实现风控和执行逻辑。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/2409-06289-automate-strategy-finding-with-llm-in-quant-investment/SoloQuantGeneratedLlmQuantAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-9d28d0b6a3408141.json",
+  "parameters": {
+    "start_date": "20230101",
+    "end_date": "20240101",
+    "initial_capital": "1000000",
+    "universe": "SSE 50 Sample"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (Liquidate all)",
+    "Trailing Stop: 5% per position"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T01:28:53.570483+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

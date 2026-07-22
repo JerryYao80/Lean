@@ -1,0 +1,128 @@
+from AlgorithmImports import *
+import numpy as np
+
+class SoloQuantGeneratedAlphaGptAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency("CNY")
+        self.SetCash(1000000)
+        self.SetStartDate(2015, 1, 1)
+        self.SetEndDate(2024, 6, 25)
+        self.SetBenchmark(lambda x: 0)
+        
+        # 硬编码股票池，模拟 A 股 Universe
+        tickers = ["600519", "000858", "600036", "000001", "601318"]
+        self.symbols = []
+        self.lookback = 20
+        self.entry_prices = {}
+        self.highest_price_since_entry = {}
+        
+        # 风控参数
+        self.max_drawdown_pct = 0.15
+        self.trailing_stop_pct = 0.05
+        self.peak_equity = self.Portfolio.TotalPortfolioValue
+        
+        for ticker in tickers:
+            market = Market.SSE if ticker[0] == '6' else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            
+            # 设置 A 股特定模型
+            equity.FeeModel = AShareStockFeeModel()
+            equity.FillModel = AShareStockFillModel()
+            equity.BuyingPowerModel = AShareStockBuyingPowerModel()
+            equity.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+            
+            self.symbols.append(equity.Symbol)
+            self.entry_prices[equity.Symbol] = 0
+            self.highest_price_since_entry[equity.Symbol] = 0
+        
+        # 数据存储
+        self.history = {}
+        for symbol in self.symbols:
+            self.history[symbol] = RollingWindow[TradeBar](self.lookback)
+            
+        self.SetWarmUp(self.lookback, Resolution.Daily)
+
+    def OnData(self, slice):
+        # 更新历史数据
+        for symbol in self.symbols:
+            if slice.Bars.ContainsKey(symbol):
+                self.history[symbol].Add(slice.Bars[symbol])
+        
+        # 风控：最大回撤检查
+        current_equity = self.Portfolio.TotalPortfolioValue
+        if current_equity > self.peak_equity:
+            self.peak_equity = current_equity
+        
+        if current_equity < self.peak_equity * (1 - self.max_drawdown_pct):
+            self.Liquidate()
+            return
+
+        # 每日调仓逻辑 (开盘后 30 分钟)
+        if not self.IsWarmingUp and self.Time.hour == 9 and self.Time.minute == 31:
+            self.Rebalance()
+            
+        # 风控：Trailing Stop 检查
+        for symbol in self.symbols:
+            if self.Portfolio[symbol].Invested:
+                current_price = self.Securities[symbol].Price
+                if self.entry_prices[symbol] == 0:
+                    self.entry_prices[symbol] = self.Portfolio[symbol].AveragePrice
+                    self.highest_price_since_entry[symbol] = current_price
+                else:
+                    if current_price > self.highest_price_since_entry[symbol]:
+                        self.highest_price_since_entry[symbol] = current_price
+                    
+                    # 如果价格从最高点回撤超过阈值，止损
+                    if current_price < self.highest_price_since_entry[symbol] * (1 - self.trailing_stop_pct):
+                        self.Liquidate(symbol)
+                        self.entry_prices[symbol] = 0
+
+    def Rebalance(self):
+        scores = []
+        
+        for symbol in self.symbols:
+            if self.history[symbol].Count < self.lookback:
+                continue
+            
+            # 提取数据
+            closes = [self.history[symbol][i].Close for i in range(self.lookback)]
+            volumes = [self.history[symbol][i].Volume for i in range(self.lookback)]
+            
+            # 信号：Volume-price Correlation
+            # 公式：zscore_scale(ts_corr(close, volume, 20))
+            try:
+                corr = np.corrcoef(closes, volumes)[0, 1]
+                if np.isnan(corr): corr = 0
+                scores.append((symbol, corr))
+            except:
+                continue
+        
+        # 排序：相关性越高越好
+        scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # 交易逻辑：买入前 1 个，平仓其他的
+        target_symbol = None
+        if scores:
+            target_symbol, score = scores[0]
+            if score < 0.1: # 阈值，避免低相关性买入
+                target_symbol = None
+        
+        for symbol in self.symbols:
+            if symbol == target_symbol:
+                # 计算目标数量（100 股的整数倍）
+                price = self.Securities[symbol].Price
+                if price > 0:
+                    target_value = self.Portfolio.TotalPortfolioValue * 0.95
+                    qty = int(target_value / price / 100) * 100
+                    current_qty = self.Portfolio[symbol].Quantity
+                    
+                    if qty != current_qty:
+                        self.MarketOrder(symbol, qty - current_qty)
+                        # 更新入场价用于风控
+                        if qty > current_qty: # 新买入或加仓
+                            self.entry_prices[symbol] = price
+                            self.highest_price_since_entry[symbol] = price
+            else:
+                if self.Portfolio[symbol].Invested:
+                    self.Liquidate(symbol)
+                    self.entry_prices[symbol] = 0

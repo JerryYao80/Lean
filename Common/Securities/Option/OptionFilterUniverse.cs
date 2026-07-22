@@ -88,11 +88,16 @@ namespace QuantConnect.Securities
         /// <param name="localTime">The current local time</param>
         public void Refresh(IEnumerable<OptionUniverse> allContractsData, BaseData underlying, DateTime localTime)
         {
+            // DEBUG: Log what's being refreshed
+            Console.WriteLine($"[DEBUG] OptionFilterUniverse.Refresh: allContractsData.Count={allContractsData.Count()}, underlying={underlying?.Symbol?.Value ?? "NULL"}, localTime={localTime:yyyyMMdd}");
+
             base.Refresh(allContractsData, localTime);
 
             UnderlyingInternal = underlying;
             _refreshUniqueStrikes = _lastExchangeDate != localTime.Date;
             _lastExchangeDate = localTime.Date;
+
+            Console.WriteLine($"[DEBUG]   After refresh: Count={allContractsData.Count()}");
         }
 
         /// <summary>

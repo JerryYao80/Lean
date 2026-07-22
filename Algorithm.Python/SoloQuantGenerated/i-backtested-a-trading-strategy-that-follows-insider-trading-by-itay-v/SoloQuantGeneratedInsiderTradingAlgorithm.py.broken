@@ -1,0 +1,90 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedInsiderTradingAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # Set Account Currency first
+        self.SetAccountCurrency("CNY")
+        self.SetCash(100000)
+        
+        # Set Dates
+        self.SetStartDate(2019, 1, 1)
+        self.SetEndDate(2022, 12, 31)
+        
+        # Set Benchmark to avoid data dependency
+        self.SetBenchmark(lambda x: 0)
+        
+        # Add Equity (A-Share)
+        # Using a representative A-Share ticker as the universe
+        self.symbol = self.AddEquity("600519.SZSE", Resolution.Daily, Market.SZSE).Symbol
+        
+        # Configure A-Share Specific Models
+        security = self.Securities[self.symbol]
+        security.FeeModel = AShareStockFeeModel()
+        security.FillModel = AShareStockFillModel()
+        security.BuyingPowerModel = AShareStockBuyingPowerModel()
+        security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+        
+        # Indicators
+        # Using RelativeStrengthIndex as a proxy for the 'Insider Buy' signal 
+        # since SEC Form 4 data is not available for A-Shares in this environment.
+        self.rsi = RelativeStrengthIndex(self.symbol, 14)
+        self.SetWarmUp(20)
+        
+        # Strategy Parameters
+        self.holding_period = 180 # days (from summary)
+        self.trailing_stop_pct = 0.10 # 10% trailing stop
+        self.max_drawdown_pct = 0.20 # 20% max drawdown
+        
+        # State tracking
+        self.entry_time = None
+        self.entry_price = None
+        self.highest_price = None
+
+    def OnData(self, slice):
+        if not self.rsi.IsReady: return
+        
+        # Risk Management & Exit Logic
+        if self.Portfolio[self.symbol].Invested:
+            current_price = self.Securities[self.symbol].Price
+            
+            # Update Highest Price for Trailing Stop
+            if current_price > self.highest_price:
+                self.highest_price = current_price
+            
+            # 1. Trailing Stop Check
+            if current_price < self.highest_price * (1 - self.trailing_stop_pct):
+                self.Liquidate(self.symbol, "Trailing Stop Hit")
+                self.ResetState()
+                return
+            
+            # 2. Max Drawdown Check
+            if current_price < self.entry_price * (1 - self.max_drawdown_pct):
+                self.Liquidate(self.symbol, "Max Drawdown Hit")
+                self.ResetState()
+                return
+            
+            # 3. Fixed Holding Period Exit
+            if (self.Time - self.entry_time).days >= self.holding_period:
+                self.Liquidate(self.symbol, "Holding Period Exceeded")
+                self.ResetState()
+                return
+        
+        # Entry Logic (Simulated Signal)
+        # Logic: RSI < 30 (Oversold) acts as the proxy for 'Insider Buy Signal'
+        if not self.Portfolio[self.symbol].Invested:
+            if self.rsi.Current.Value < 30:
+                price = self.Securities[self.symbol].Price
+                
+                # Calculate quantity (Round to 100 shares)
+                qty = int(self.Portfolio.Cash / price / 100) * 100
+                
+                if qty > 0:
+                    self.MarketOrder(self.symbol, qty)
+                    self.entry_time = self.Time
+                    self.entry_price = price
+                    self.highest_price = price
+
+    def ResetState(self):
+        self.entry_time = None
+        self.entry_price = None
+        self.highest_price = None

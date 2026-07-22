@@ -1,0 +1,103 @@
+# Phase 0 is read-only. Edit every path for the machine running the assessment.
+experiment_id: gold2-proof-draft
+
+# Documented only; assess-feasibility never creates this root.
+paths:
+  experiment_root: Results/gold2-closed-loop-proof
+
+session_timezone: Asia/Shanghai
+session_close_time: "15:00:00"
+
+# Must cover every calendar date spanning fixed W1-W4, including closed dates.
+# The current local trade_cal is known to cover only 2025-2026 and will truthfully
+# block earlier windows until replaced by a complete immutable calendar snapshot.
+china_calendar:
+  path: /home/project/hope/tushare_data_v2/trade_cal/data.parquet
+  date_column: cal_date
+  date_format: "%Y%m%d"
+  is_open_column: is_open
+  source_version: tushare_data_v2_trade_cal
+
+data_sources:
+  "518880":
+    source_id: "518880"
+    source_kind: tradable
+    instrument: "518880"
+    # Current local example; replace explicitly when running elsewhere.
+    path: /home/project/hope/tushare_data_v2/fund_daily/ts_code=518880.SH/data.parquet
+    date_column: trade_date
+    date_format: "%Y%m%d"
+    value_columns: [open, high, low, close]
+    timezone: Asia/Shanghai
+    observation_time: "15:00:00"
+    publication_lag: "0 days"
+    maximum_staleness_days: 0
+    maximum_consecutive_gap_sessions: 0
+    adjustment_rule: raw_unadjusted_ohlc
+    source_version: tushare_data_v2_fund_daily
+    calendar_basis: true
+  AU:
+    source_id: AU
+    source_kind: feature
+    instrument: AU
+    path: /path/to/user-editable/au.csv
+    date_column: date
+    date_format: "%Y-%m-%d"
+    value_column: close
+    timezone: Asia/Shanghai
+    observation_time: "15:00:00"
+    publication_lag: "0 days"
+    maximum_staleness_days: 5
+    maximum_consecutive_gap_sessions: 3
+    adjustment_rule: continuous_contract_policy_user_must_specify
+    source_version: user_must_specify
+  VIX:
+    source_id: VIX
+    source_kind: feature
+    instrument: VIX
+    path: /path/to/user-editable/VIX.csv
+    date_column: DATE
+    date_format: "%Y-%m-%d"
+    value_column: VIX
+    timezone: America/New_York
+    observation_time: "16:00:00"
+    publication_lag: "0 days"
+    maximum_staleness_days: 7
+    maximum_consecutive_gap_sessions: 3
+    adjustment_rule: not_applicable
+    source_version: user_must_specify
+  DFII10:
+    source_id: DFII10
+    source_kind: feature
+    instrument: DFII10
+    path: /path/to/user-editable/DFII10.csv
+    date_column: DATE
+    date_format: "%Y-%m-%d"
+    value_column: DFII10
+    timezone: America/New_York
+    observation_time: "16:00:00"
+    publication_lag: "1 day"
+    maximum_staleness_days: 10
+    maximum_consecutive_gap_sessions: 5
+    adjustment_rule: not_applicable
+    source_version: user_must_specify
+
+g3_observability:
+  minimum_required_generation_count: 3
+  per_generation_candidate_budget: 2
+  per_window_candidate_budget: 8
+  review_input: frozen_formal_review_bundle
+  failure_budget_policy: failed_generation_consumes_budget_and_breaks_adjacency
+  required_generation_record_fields:
+    - generation_id
+    - generation_index
+    - parent_generation_id
+    - generation_cutoff
+    - input_evidence_sha256
+    - candidate_set_sha256
+    - attribution_gap
+    - shaping_weight
+    - pending_candidate_count
+    - convergence_status
+    - trigger_observation_valid
+    - terminal_reason

@@ -1,0 +1,38 @@
+{
+  "strategy_id": "exploring-style-herding-by-mutual-funds-sciencedirect-com",
+  "class_name": "SoloQuantGeneratedStyleHerdingAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/exploring-style-herding-by-mutual-funds-sciencedirect-com/SoloQuantGeneratedStyleHerdingAlgorithm.py.broken",
+  "description": "A draft LEAN algorithm based on the inferred concept of 'style herding by mutual funds'. Due to unavailable paper text, this implementation uses A-share specific settings and a placeholder technical signal (RSI) to simulate the strategy structure.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/exploring-style-herding-by-mutual-funds-sciencedirect-com/SoloQuantGeneratedStyleHerdingAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-192d2174b6289c95.json",
+  "parameters": {
+    "start_date": "20200101",
+    "end_date": "20231231",
+    "initial_capital": "100000",
+    "ticker": "600000.SSE",
+    "trailing_stop_pct": "0.05",
+    "max_drawdown_pct": "0.15"
+  },
+  "risk_controls": [
+    "Trailing Stop: Liquidate if price drops 5% from highest price since entry",
+    "Max Drawdown: Liquidate and stop trading if portfolio value drops 15% from peak",
+    "Position Sizing: Limits investment to 95% of available cash",
+    "Lot Size: Rounds orders to nearest 100 shares (A-share requirement)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Price Data",
+      "field": "TradeBar",
+      "ticker": "600000.SSE"
+    },
+    {
+      "dataset": "Technical Indicator",
+      "field": "RelativeStrengthIndex (RSI)",
+      "period": "14"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T04:18:02.018806+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

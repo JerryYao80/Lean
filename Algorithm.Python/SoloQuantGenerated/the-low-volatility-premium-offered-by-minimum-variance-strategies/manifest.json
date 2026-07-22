@@ -1,0 +1,29 @@
+{
+  "strategy_id": "the-low-volatility-premium-offered-by-minimum-variance-strategies",
+  "class_name": "SoloQuantGeneratedMinVarAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/the-low-volatility-premium-offered-by-minimum-variance-strategies/SoloQuantGeneratedMinVarAlgorithm.py",
+  "description": "基于最小方差优化构建低波动率投资组合的 A 股策略。使用历史收益率计算协方差矩阵，通过数学优化求解最小波动权重，实现月度再平衡。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/the-low-volatility-premium-offered-by-minimum-variance-strategies/SoloQuantGeneratedMinVarAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-6d1ad1dfada3e00e.json",
+  "parameters": {
+    "start-date": "20100101",
+    "end-date": "20200101",
+    "initial-capital": "100000",
+    "universe": "600519.SSE,000858.SZSE,600036.SSE,000001.SZSE,601318.SSE"
+  },
+  "risk_controls": [
+    "Max Drawdown: 15% (Portfolio Level)",
+    "Trailing Stop: 5% (Security Level)",
+    "Position Sizing: Rounded to 100 shares",
+    "Settlement: T+1"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Price",
+      "field": "close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T11:52:49.303744+00:00",
+  "data_coverage": 1.0
+}

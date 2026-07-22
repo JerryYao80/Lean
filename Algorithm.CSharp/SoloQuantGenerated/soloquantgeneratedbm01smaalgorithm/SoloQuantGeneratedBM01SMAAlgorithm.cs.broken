@@ -1,0 +1,154 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+    public class SoloQuantGeneratedBM01SMAAlgorithm : QCAlgorithm {
+        private List<Symbol> _symbols = new List<Symbol>();
+        private Dictionary<Symbol, SoloQuantSymbolData> _symbolDataDict = new Dictionary<Symbol, SoloQuantSymbolData>();
+        private DateTime _lastRebalanceTime = DateTime.MinValue;
+        private decimal _maxPortfolioValue = decimal.MaxValue;
+        private decimal _maxDrawdownLimit = 0.10m;
+        private decimal _trailingStopPercent = 0.05m;
+
+        public override void Initialize() {
+            // 1. Set Account Currency before Cash
+            SetAccountCurrency(Currencies.CNY);
+            
+            // 2. Parse Dates
+            string startDateStr = Parameters.ContainsKey("start-date") ? Parameters["start-date"].ToString() : "20200101";
+            string endDateStr = Parameters.ContainsKey("end-date") ? Parameters["end-date"].ToString() : "20241231";
+            
+            SetStartDate(DateTime.ParseExact(startDateStr, "yyyyMMdd", null));
+            SetEndDate(DateTime.ParseExact(endDateStr, "yyyyMMdd", null));
+            
+            // 3. Set Cash
+            string capitalStr = Parameters.ContainsKey("initial-capital") ? Parameters["initial-capital"].ToString() : "1000000";
+            SetCash(decimal.Parse(capitalStr));
+            
+            // 4. Benchmark
+            SetBenchmark(_ => 0m);
+            
+            // 5. Add Equities (Using default universe if parameter not found)
+            string universeTickers = Parameters.ContainsKey("universe") ? Parameters["universe"].ToString() : "000001.SSE,600000.SSE,600036.SSE";
+            
+            foreach (var ticker in universeTickers.Split(',')) {
+                string cleanTicker = ticker.Trim();
+                if (string.IsNullOrEmpty(cleanTicker)) continue;
+                
+                var security = AddEquity(cleanTicker, Resolution.Daily, Market.SSE);
+                _symbols.Add(security.Symbol);
+                
+                // 6. Set A-share Models
+                security.FeeModel = new AShareStockFeeModel();
+                security.FillModel = new AShareStockFillModel();
+                security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+                security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+                
+                // Initialize Symbol Data (SMA 200)
+                _symbolDataDict[security.Symbol] = new SoloQuantSymbolData(security.Symbol, this, 200);
+            }
+        }
+
+        public override void OnData(Slice data) {
+            // 7. Risk Control: Max Drawdown
+            if (Portfolio.TotalPortfolioValue > _maxPortfolioValue) {
+                _maxPortfolioValue = Portfolio.TotalPortfolioValue;
+            }
+            
+            if (Portfolio.TotalPortfolioValue < _maxPortfolioValue * (1 - _maxDrawdownLimit)) {
+                Liquidate();
+                Log("Max Drawdown Limit Reached. Liquidating Portfolio.");
+                return;
+            }
+
+            // 7. Risk Control: Individual Trailing Stop & Rebalance Logic
+            // Paper: Monthly Rebalance (BM01). We check if month changed and we are past a certain day to ensure data availability.
+            if (Time.Month == _lastRebalanceTime.Month) {
+                // Check trailing stop for existing positions even if not rebalancing
+                foreach (var kvp in _symbolDataDict) {
+                    if (Portfolio[kvp.Key].Invested) {
+                        var holding = Portfolio[kvp.Key];
+                        // Simple logic: if unrealized profit drops below -5%, liquidate
+                        if (holding.UnrealizedProfitPercent < -_trailingStopPercent) {
+                            Liquidate(kvp.Key);
+                        }
+                    }
+                }
+                return;
+            }
+            
+            // Rebalance on first trading day of month (or approx) after warming up
+            if (Time.Day < 20) return; 
+            _lastRebalanceTime = Time;
+
+            var longSymbols = new List<Symbol>();
+            
+            // 8. Calculate Signals (Close > SMA200)
+            foreach (var kvp in _symbolDataDict) {
+                if (!kvp.Value.SMA.IsReady) continue;
+                
+                if (Securities[kvp.Key].Price > kvp.Value.SMA) {
+                    longSymbols.Add(kvp.Key);
+                }
+            }
+
+            if (!longSymbols.Any()) {
+                Liquidate();
+                return;
+            }
+
+            // 9. Portfolio Construction: Equal Weight (Long Only)
+            decimal targetWeight = 1.0m / longSymbols.Count;
+
+            foreach (var symbol in _symbols) {
+                var security = Securities[symbol];
+                decimal currentWeight = security.Holdings.AbsoluteQuantity * security.Price / Portfolio.TotalPortfolioValue;
+                
+                bool isLong = longSymbols.Contains(symbol);
+                decimal newWeight = isLong ? targetWeight : 0m;
+
+                // 10. Execute
+                // Calculate Target Quantity rounded to 100 shares
+                decimal targetValue = Portfolio.TotalPortfolioValue * newWeight;
+                int targetQuantity = 0;
+                
+                if (isLong) {
+                    targetQuantity = (int)(targetValue / security.Price / 100) * 100;
+                }
+
+                int currentQuantity = (int)security.Holdings.Quantity;
+                int delta = targetQuantity - currentQuantity;
+
+                if (delta != 0) {
+                    MarketOrder(symbol, delta);
+                }
+            }
+        }
+    }
+
+    public class SoloQuantSymbolData {
+        public Symbol Symbol { get; set; }
+        public SimpleMovingAverage SMA { get; set; }
+
+        public SoloQuantSymbolData(Symbol symbol, QCAlgorithm algorithm, int period) {
+            Symbol = symbol;
+            SMA = algorithm.SMA(symbol, period, Resolution.Daily);
+        }
+    }
+}

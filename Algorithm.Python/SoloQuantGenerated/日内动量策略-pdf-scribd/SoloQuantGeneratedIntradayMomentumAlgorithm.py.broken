@@ -1,0 +1,88 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedIntradayMomentumAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency('CNY')
+        self.SetCash(100000)
+        self.SetBenchmark(lambda x: 0)
+        
+        # A股标的：沪深300ETF
+        self.symbol = self.AddEquity("510300.SS", Resolution.Minute, Market.SSE).Symbol
+        
+        # 设置A股模型
+        security = self.Securities[self.symbol]
+        security.FeeModel = AShareStockFeeModel()
+        security.FillModel = AShareStockFillModel()
+        security.BuyingPowerModel = AShareStockBuyingPowerModel()
+        security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+        
+        # 指标
+        self.atr = self.ATR(self.symbol, 14, MovingAverageType.Simple, Resolution.Minute)
+        
+        # 状态变量
+        self.open_range_high = 0
+        self.open_range_low = 0
+        self.entry_price = 0
+        self.entry_time = datetime.min
+        self.orb_duration = 30 # 开盘区间30分钟
+        self.stop_loss_pct = 0.02 # 2% 止损
+        
+        # 收盘前平仓
+        self.Schedule.On(self.DateRules.EveryDay(self.symbol), self.TimeRules.BeforeMarketClose(self.symbol, 10), self.ClosePositions)
+
+    def OnData(self, slice):
+        if not self.symbol in slice.Bars:
+            return
+            
+        bar = slice.Bars[self.symbol]
+        current_time = self.Time.time()
+        
+        # 定义交易时间段
+        market_open = self.Securities[self.symbol].Exchange.Hours.Open
+        market_close = self.Securities[self.symbol].Exchange.Hours.Close
+        
+        # 1. 计算开盘区间 (9:30 - 10:00)
+        if current_time < market_open + timedelta(minutes=self.orb_duration):
+            if self.open_range_high == 0: # 初始化
+                self.open_range_high = bar.High
+                self.open_range_low = bar.Low
+            else:
+                self.open_range_high = max(self.open_range_high, bar.High)
+                self.open_range_low = min(self.open_range_low, bar.Low)
+            return
+            
+        # 2. 交易逻辑 (10:00 - 14:50)
+        if current_time >= market_close - timedelta(minutes=10):
+            return
+            
+        holdings = self.Portfolio[self.symbol]
+        price = bar.Close
+        
+        # 开仓逻辑
+        if not holdings.Invested:
+            if price > self.open_range_high:
+                # 突破高点做多
+                self.SetHoldings(self.symbol, 0.95)
+                self.entry_price = price
+                self.entry_time = self.Time
+            elif price < self.open_range_low:
+                # 跌破低点做空
+                self.SetHoldings(self.symbol, -0.95)
+                self.entry_price = price
+                self.entry_time = self.Time
+        else:
+            # 风控逻辑
+            if self.atr.Current.Value > 0:
+                atr_stop = self.atr.Current.Value * 2
+            else:
+                atr_stop = self.entry_price * self.stop_loss_pct
+                
+            if holdings.IsLong:
+                if price < self.entry_price - atr_stop:
+                    self.Liquidate(self.symbol)
+            elif holdings.IsShort:
+                if price > self.entry_price + atr_stop:
+                    self.Liquidate(self.symbol)
+
+    def ClosePositions(self):
+        self.Liquidate()

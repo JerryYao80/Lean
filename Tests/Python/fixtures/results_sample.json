@@ -1,0 +1,10 @@
+{
+  "Statistics": {
+    "Sharpe Ratio": 1.23,
+    "Sortino Ratio": 1.5,
+    "Total Orders": 150,
+    "Drawdown": 0.05,
+    "TradingDays": 252,
+    "Net Profit": 0.027
+  }
+}

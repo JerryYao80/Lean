@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gold2.example/Scripts/gold2_closed_loop/schema/preregistration.schema.json",
+  "title": "Gold2 closed-loop proof preregistration",
+  "description": "Draft-2020-12 schema for the proof preregistration. Enforces every numeric threshold listed in design section 13 and every structure listed in section 5/7. Non-finite values (NaN/Infinity) are rejected by a python post-check in validate_preregistration because jsonschema alone cannot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "experiment_id",
+    "session_timezone",
+    "session_close_time",
+    "windows",
+    "random_seed_set",
+    "candidate_budget",
+    "retry_policy",
+    "metric_paths",
+    "as_of_utc",
+    "maximum_staleness_days",
+    "equivalence_tolerances",
+    "success_thresholds",
+    "candidate_gates",
+    "selection",
+    "g3"
+  ],
+  "properties": {
+    "experiment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_timezone": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_close_time": {
+      "type": "string",
+      "pattern": "^[0-2][0-9]:[0-5][0-9]:[0-5][0-9]$"
+    },
+    "windows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["W1", "W2", "W3", "W4"],
+      "properties": {
+        "W1": {"$ref": "#/$defs/window"},
+        "W2": {"$ref": "#/$defs/window"},
+        "W3": {"$ref": "#/$defs/window"},
+        "W4": {"$ref": "#/$defs/window"}
+      }
+    },
+    "random_seed_set": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "integer"}
+    },
+    "candidate_budget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "retry_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_infrastructure_retries", "retry_only_when_results_unobserved"],
+      "properties": {
+        "max_infrastructure_retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retry_only_when_results_unobserved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "metric_paths": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string"}
+    },
+    "as_of_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "maximum_staleness_days": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "equivalence_tolerances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decimal", "double"],
+      "properties": {
+        "decimal": {
+          "type": "number",
+          "minimum": 0
+        },
+        "double": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "success_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_single_trade_contribution_fraction",
+        "max_single_month_contribution_fraction",
+        "leave_one_window_out_min_delta",
+        "paired_bootstrap_min_probability",
+        "paired_bootstrap_ci_level",
+        "max_drawdown_degradation"
+      ],
+      "properties": {
+        "max_single_trade_contribution_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "max_single_month_contribution_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "leave_one_window_out_min_delta": {
+          "type": "number"
+        },
+        "paired_bootstrap_min_probability": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "paired_bootstrap_ci_level": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "max_drawdown_degradation": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "candidate_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_trades", "max_mdd", "min_dsr"],
+      "properties": {
+        "min_trades": {"type": "integer", "minimum": 0},
+        "max_mdd": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_dsr": {"type": "number"},
+        "subwindow_spread_max": {"type": "number", "minimum": 0}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ranking_metric", "tie_break"],
+      "properties": {
+        "ranking_metric": {
+          "type": "string",
+          "enum": ["sharpe", "net_profit", "cagr", "sortino", "calmar"]
+        },
+        "tie_break": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "direction"],
+            "properties": {
+              "metric": {"type": "string"},
+              "direction": {"type": "string", "enum": ["asc", "desc"]}
+            }
+          }
+        }
+      }
+    },
+    "g3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attribution_gap_threshold",
+        "non_convergence_threshold",
+        "float_tolerance",
+        "generation_continuity_rule",
+        "min_generations_for_trigger",
+        "per_generation_candidate_budget",
+        "shaping_weight_cap",
+        "min_generations_per_window",
+        "max_generations_per_window",
+        "generation_budget_counts_in_candidate_budget",
+        "allow_post_trigger_generations"
+      ],
+      "properties": {
+        "attribution_gap_threshold": {
+          "type": "number"
+        },
+        "non_convergence_threshold": {
+          "type": "number",
+          "minimum": 0
+        },
+        "float_tolerance": {
+          "type": "number",
+          "minimum": 0
+        },
+        "generation_continuity_rule": {
+          "type": "string",
+          "enum": ["BREAK_ON_FAILURE", "BREAK_ON_HASH_CHANGE", "CONTINUE"]
+        },
+        "min_generations_for_trigger": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "per_generation_candidate_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "shaping_weight_cap": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "min_generations_per_window": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_generations_per_window": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "generation_budget_counts_in_candidate_budget": {
+          "type": "boolean"
+        },
+        "allow_post_trigger_generations": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["train", "review", "blind"],
+      "properties": {
+        "train": {"$ref": "#/$defs/date_pair"},
+        "review": {"$ref": "#/$defs/date_pair"},
+        "blind": {"$ref": "#/$defs/date_pair"}
+      }
+    },
+    "date_pair": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

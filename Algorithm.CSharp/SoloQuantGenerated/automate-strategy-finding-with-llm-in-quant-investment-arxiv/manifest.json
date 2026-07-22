@@ -1,0 +1,51 @@
+{
+  "strategy_id": "automate-strategy-finding-with-llm-in-quant-investment-arxiv",
+  "class_name": "SoloQuantGeneratedLlmAlphaAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/automate-strategy-finding-with-llm-in-quant-investment-arxiv/SoloQuantGeneratedLlmAlphaAlgorithm.cs",
+  "description": "基于大语言模型挖掘的12个种子Alpha因子，结合多智能体筛选与3层MLP权重优化的自适应量化投资策略。通过动量、反转、波动率、价量及基本面因子综合打分，构建多头组合，并严格执行A股T+1约束、手续费及风险管理。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/automate-strategy-finding-with-llm-in-quant-investment-arxiv/SoloQuantGeneratedLlmAlphaAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/arxiv-q-fin-9b5280834f37f46f.json",
+  "parameters": {
+    "universe": "50",
+    "start-date": "2021-01-01",
+    "end-date": "2024-01-01",
+    "initial-capital": "1000000",
+    "max-drawdown": "10",
+    "stop-loss": "5"
+  },
+  "risk_controls": [
+    "最大回撤控制（默认10%清仓）",
+    "个股止损（默认5%平仓）",
+    "A股T+1约束（禁止当日买入当日卖出）",
+    "A股最小交易手数100股限制"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Tushare: daily",
+      "field": "open, high, low, close, vol",
+      "reason": "计算价量相关的动量、反转、波动率等基础Alpha因子"
+    },
+    {
+      "dataset": "Tushare: daily_basic",
+      "field": "vwap, total_mv",
+      "reason": "计算VWAP相关因子及VOLUME/MARKET_CAP因子"
+    },
+    {
+      "dataset": "Tushare: fina_indicator",
+      "field": "eps",
+      "reason": "计算EPS增长率因子 (EPS / DELAY(EPS, 1) - 1)"
+    },
+    {
+      "dataset": "Tushare: income",
+      "field": "revenue, operate_profit, total_profit",
+      "reason": "计算毛利率及营业收入相关基本面因子"
+    },
+    {
+      "dataset": "Tushare: index_weight",
+      "field": "con_code",
+      "reason": "获取上证50、沪深300等指数成分股动态列表"
+    }
+  ],
+  "generated_at_utc": "2026-05-16T23:18:45.417288+00:00"
+}

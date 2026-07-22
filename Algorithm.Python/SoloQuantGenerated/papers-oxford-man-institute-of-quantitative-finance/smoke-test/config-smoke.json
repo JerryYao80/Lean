@@ -1,0 +1,28 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "SoloQuantGeneratedDeepLearningStraddleAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/SoloQuantGeneratedDeepLearningStraddleAlgorithm.py.broken",
+  "data-folder": "/home/project/hope/Lean/Data",
+  "data-directory": "/home/project/hope/Lean/Data",
+  "history-provider": "TushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "/home/project/hope/Lean/Results",
+  "influxdb-enabled": false,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "parameters": {
+    "start-date": "20250102",
+    "end-date": "20250103",
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+    "universe": "000001.SZ,600000.SH",
+    "initial-capital": "100000",
+    "summary-file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/smoke-test/summary.json"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "strategy_id": "reading-arxiv-q-fin-to-alpha-what-algorithmic-token-is-and-why-now",
+  "class_name": "SoloQuantGeneratedMomentumVolatilityAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/reading-arxiv-q-fin-to-alpha-what-algorithmic-token-is-and-why-now/SoloQuantGeneratedMomentumVolatilityAlgorithm.py.broken",
+  "description": "基于摘要中提到的动量与波动率目标控制概念实现的A股策略草案。使用贵州茅台(600519.SSE)作为示例标的，当动量为正时根据目标波动率调整仓位，并包含追踪止损风控。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/reading-arxiv-q-fin-to-alpha-what-algorithmic-token-is-and-why-now/SoloQuantGeneratedMomentumVolatilityAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-bac2487b61f77836.json",
+  "parameters": {
+    "start_date": "20200101",
+    "end_date": "20230101",
+    "initial_capital": "100000",
+    "symbol": "600519.SSE",
+    "lookback_period": "252",
+    "volatility_window": "20",
+    "target_volatility": "0.15",
+    "trailing_stop_pct": "0.1"
+  },
+  "risk_controls": [
+    "Trailing Stop: 10% drawdown from highest price since entry",
+    "Volatility Targeting: Scales position size based on realized volatility vs target volatility"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Price Data",
+      "field": "OHLCV (Daily)"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T02:28:57.142519+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

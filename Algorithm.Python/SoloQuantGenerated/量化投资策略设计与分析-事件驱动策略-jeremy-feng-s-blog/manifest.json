@@ -1,0 +1,35 @@
+{
+  "strategy_id": "量化投资策略设计与分析-事件驱动策略-jeremy-feng-s-blog",
+  "class_name": "SoloQuantGeneratedEventDrivenAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/量化投资策略设计与分析-事件驱动策略-jeremy-feng-s-blog/SoloQuantGeneratedEventDrivenAlgorithm.py.broken",
+  "description": "Event-driven strategy based on A-share earnings forecasts (业绩预告). Buys stocks with '略增', '扭亏', or '续盈' forecasts, excludes '预增'. Uses equal weight allocation, holds for 30 trading days, and implements trailing stop and max drawdown risk controls.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/量化投资策略设计与分析-事件驱动策略-jeremy-feng-s-blog/SoloQuantGeneratedEventDrivenAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-4192ab10c30a78c1.json",
+  "parameters": {
+    "start-date": "20070101",
+    "end-date": "20231231",
+    "initial-capital": "1000000",
+    "holding-period": "30",
+    "trailing-stop-pct": "0.05",
+    "max-drawdown-pct": "0.15"
+  },
+  "risk_controls": [
+    "Trailing Stop: Sell if price drops 5% from peak since entry",
+    "Max Drawdown: Liquidate all positions if portfolio drops 15% from starting cash",
+    "Holding Period Limit: Sell after 30 trading days"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Earnings Forecast (Custom Data)",
+      "field": "Symbol, Time, Type (略增/扭亏/续盈)"
+    },
+    {
+      "dataset": "A-Share Equity Daily Data",
+      "field": "Open, Close, Volume, Price"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T08:11:00.792305+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

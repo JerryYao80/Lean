@@ -1,0 +1,151 @@
+sk-cfhy5sy640e02yvoebv9aci03crav0pn5ybot85bwetvbjia	
+协作交接摘要
+更新时间：2026-03-22（Asia/Shanghai）
+
+一、我们长期在做什么
+本项目是在 LEAN 上落地 A 股量化策略，重点有三类：
+1. Barra CNE5 策略
+2. A 股 LLM 选股策略
+3. T+0 ETF 策略
+4. 行业轮动策略
+
+核心目标不是做研究原型，而是把下面这条链路真正打通并长期稳定：
+实时日线接入 -> 策略调度/特征或计划文件刷新 -> 标准 LEAN backtest/live-paper -> 结果可追踪 -> 风险可管控
+
+二、用户的明确偏好和硬约束
+1. 必须优先走标准 LEAN 流程，不要自定义替代回测/模拟框架。
+2. live paper 需要尽量透明，不能黑盒。
+3. 后来用户要求暂时关闭自定义的 account summary / trade executions / portfolio allocation 三张表，改回原生无券商 LEAN live-paper 输出。
+4. 实时日线来自 Tushare 的 rt_k / rt_etf_k，不是历史 parquet。
+5. 现在各策略 live-paper 的共同流程应固定为：
+   全市场实时日线接入 -> 各策略按自己的 universe 过滤 -> 生成策略输入（特征/因子/计划）-> 标准 LEAN live-paper 输出
+6. dotnet 路径不是系统默认，必须按：
+   /usr/local/dotnet/dotnet
+7. Python 最稳环境是：
+   /root/miniconda3/envs/quant311/bin/python
+
+三、已经完成的主线改造
+1. 建了全市场实时日线缓存模块：
+   Scripts/ashare_live_market_cache.py
+   作用：
+   - 交易时段用 rt_k + rt_etf_k 抓取全市场股票和 ETF
+   - 非交易时段自动切换到 GBM 模拟实时日线
+   - 落共享 snapshot/report/archive
+   - 其他策略只从这里取自己需要的 universe
+
+2. Barra / LLM / ETF T0 / T1 的 live-paper 启动链已统一到共享 runner：
+   Scripts/live_paper_runner.py
+   统一逻辑：
+   - bridge 可选
+   - 等 bridge ready
+   - 启动标准 LEAN live-paper
+   - 原生 stdout 透传
+
+3. 之前新增的自定义 live-paper 三张表已默认关闭。
+   当前默认是 native 输出。
+   相关文件：
+   - Scripts/barra_cne5_live_paper.py
+   - Scripts/ashare_llm_quant_live_paper.py
+
+4. 行业轮动策略已补齐到 live-paper 链路：
+   - Scripts/ashare_industry_rotation_pipeline.py
+   - Scripts/ashare_industry_rotation_live_bridge.py
+   - Scripts/ashare_industry_rotation_live_paper.py
+   - Launcher/config/config-ashare-industry-rotation-live-paper.json
+
+5. 行业轮动 LEAN 算法已支持 live 期间热加载 plan-file / benchmark-file：
+   Algorithm.CSharp/AShareIndustryRotationPlanAlgorithm.cs
+   改动点：
+   - Initialize 后注册初始 symbols
+   - 每次执行前检查 plan/benchmark 文件是否更新
+   - 如更新则重载计划并补充新增证券
+
+6. 所有主要 live-paper wrapper 的 LEAN 启动命令都已改成显式 dotnet 形式，避免 apphost 找不到 runtime：
+   /usr/local/dotnet/dotnet QuantConnect.Lean.Launcher.dll --config ...
+
+四、近期刚修过的坑
+1. 行业轮动 live-paper session 配置里，pipeline-config / dataset-catalog 路径曾被错误解析到 Results/Launcher/...。
+   已修复：
+   - Scripts/ashare_industry_rotation_live_paper.py
+   - Scripts/ashare_industry_rotation_live_bridge.py
+
+2. 行业轮动 pipeline 处理 hk_hold 时，某些 ts_code 有重复记录，resolve_foreign_ratio() 会拿到 pandas Series 并报：
+   ValueError: The truth value of a Series is ambiguous
+   已修复：
+   - 先对最新 snapshot 按 ts_code 去重
+   - resolve_foreign_ratio() 对 Series 结果兜底取最后一个非空值
+   文件：
+   Scripts/ashare_industry_rotation_pipeline.py
+
+3. 行业轮动 live-paper 曾因 LEAN apphost 找不到 .NET 运行时报：
+   You must install .NET to run this application.
+   已改为固定使用 /usr/local/dotnet/dotnet。
+
+五、当前 live-paper 统一架构
+共享层：
+1. Scripts/ashare_live_market_cache.py
+2. Scripts/live_paper_runner.py
+
+策略层：
+1. Barra
+   - bridge: Scripts/barra_cne5_live_bridge.py
+   - live paper: Scripts/barra_cne5_live_paper.py
+2. LLM
+   - bridge: Scripts/ashare_llm_quant_live_bridge.py
+   - live paper: Scripts/ashare_llm_quant_live_paper.py
+3. ETF T0
+   - bridge: Scripts/ashare_etf_t0_feature_live_bridge.py
+   - live paper: Scripts/ashare_etf_t0_feature_live_paper.py
+4. T1
+   - live paper: Scripts/ashare_t1_live_paper.py
+   - 当前默认直接 native LEAN 输出，不再自动起 TUI
+5. 行业轮动
+   - bridge: Scripts/ashare_industry_rotation_live_bridge.py
+   - live paper: Scripts/ashare_industry_rotation_live_paper.py
+
+六、重要命令
+1. Barra CNE5 live paper
+   /root/miniconda3/envs/quant311/bin/python Scripts/barra_cne5_live_paper.py --config Launcher/config/config-barra-cne5-live-paper.json
+
+2. 行业轮动 live paper
+   /root/miniconda3/envs/quant311/bin/python Scripts/ashare_industry_rotation_live_paper.py --config Launcher/config/config-ashare-industry-rotation-live-paper.json
+
+3. 行业轮动 bridge only
+   /root/miniconda3/envs/quant311/bin/python Scripts/ashare_industry_rotation_live_bridge.py --config Launcher/config/config-ashare-industry-rotation-live-paper.json --once
+
+4. 标准 LEAN 启动格式（现在 wrapper 内部就是这样拼）
+   /usr/local/dotnet/dotnet /home/project/hope/Lean/Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll --config <config>
+
+七、和用户沟通时必须记住的关注点
+1. 用户非常在意交易信号、持仓变化、资产配置、风险控制细节。
+2. 用户反复强调：
+   - 不能黑盒
+   - 输出要有流程感
+   - 但当前阶段 live-paper 终端输出先回归原生 LEAN
+3. 用户希望所有策略都复用同一套 live-paper 流程，不要每个策略各写一套。
+4. 用户经常要求把答复写入 docs/*.txt 或 docs/*.log。
+5. 用户要求很多修改最终要能提交到其 GitHub，但当前这份文档只记录协作状态，不代表已推送。
+
+八、当前代码状态和验证
+1. 近期验证通过过的内容：
+   - 多个 Python 单测（Barra / ETF T0 / T1 / 行业轮动 live-paper 相关）
+   - /usr/local/dotnet/dotnet build Algorithm.CSharp/QuantConnect.Algorithm.CSharp.csproj
+2. 仍需注意：
+   - 仓库当前是 dirty worktree，存在不少未提交变更
+   - 不要随意回滚用户已有改动
+
+九、如果终端退出，下一次最优续接方式
+可以直接说：
+“继续接着处理 docs/past-done.txt 里记录的 A 股 LEAN 项目。先检查行业轮动 live-paper 最新运行结果，再决定是否继续修 bridge / pipeline / LEAN 输出。”
+
+或者更具体：
+“按 docs/past-done.txt 的上下文继续，优先检查行业轮动 live-paper 是否已经能从 rt_k/rt_etf_k -> bridge -> plan reload -> 原生 LEAN live-paper 全链路跑通。”
+
+十、当前最后状态
+到这次交接为止：
+1. 行业轮动 live-paper 的路径解析问题已修
+2. hk_hold 重复记录导致的 foreign_ratio 报错已修
+3. LEAN 启动方式已切换为 /usr/local/dotnet/dotnet + Launcher.dll
+4. 尚未再次看到用户提供“修复后最新完整运行成功日志”
+因此下一步最合理动作是：
+重新执行行业轮动 live-paper，若还有新错误，继续沿 debug/rotation_lpsim*.err 排查

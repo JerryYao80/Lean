@@ -1,0 +1,13 @@
+{
+  "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+  "dataset-catalog": "config-ashare-dataset-catalog.json",
+  "lean-data-path": "../../Data",
+  "start-date": "20180101",
+  "end-date": "20251231",
+  "included-markets": [
+    "主板",
+    "创业板",
+    "科创板"
+  ],
+  "report-file": "../../Results/ashare-stock-export-report.json"
+}

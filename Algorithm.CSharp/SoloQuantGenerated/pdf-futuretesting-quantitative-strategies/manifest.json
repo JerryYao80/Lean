@@ -1,0 +1,34 @@
+{
+  "strategy_id": "pdf-futuretesting-quantitative-strategies",
+  "class_name": "SoloQuantGeneratedFutureTestFrameworkAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-futuretesting-quantitative-strategies/SoloQuantGeneratedFutureTestFrameworkAlgorithm.cs",
+  "description": "A LEAN algorithmic framework that implements a basic 'future-testing' quantitative strategy scaffold for A-shares. It uses a coarse and fine universe selection to pick top 10 stocks by market cap with positive EPS, generates alpha signals via 10/30 SMA crossovers, constructs an equal-weighted portfolio with T+1 sell constraint, applies a 10% maximum loss risk control, and simulates execution with Chinese stock market fees (0.03% commission + 0.1% stamp duty on sells, lot size 100).",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-futuretesting-quantitative-strategies/SoloQuantGeneratedFutureTestFrameworkAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/ssrn-01a30393e9b9c7ed.json",
+  "parameters": {
+    "start-date": "2020-01-01",
+    "end-date": "2021-12-31",
+    "initial-capital": "1000000",
+    "universe": "Coarse + Fine fundamental selection, top 100 by market cap, price > 10, EPS > 0"
+  },
+  "risk_controls": [
+    "Maximum loss per position: 10% (sell when loss exceeds 10% of average cost)",
+    "T+1 constraint: stocks bought today cannot be sold on the same day (enforced in portfolio construction)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A-share daily bars",
+      "field": "OHLCV, price"
+    },
+    {
+      "dataset": "Coarse fundamental data",
+      "field": "HasFundamentalData, Price, MarketCap"
+    },
+    {
+      "dataset": "Fine fundamental data",
+      "field": "EarningRatios.BasicEPS.Value, MarketCap"
+    }
+  ],
+  "generated_at_utc": "2026-05-19T08:15:02.683153+00:00"
+}

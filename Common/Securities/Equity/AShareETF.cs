@@ -13,6 +13,7 @@
  * limitations under the License.
 */
 
+using System;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
 using QuantConnect.Orders.Slippage;
@@ -25,9 +26,19 @@ namespace QuantConnect.Securities.Equity
     public class AShareETF : Equity
     {
         /// <summary>
-        /// Price limit percentage (10% up/down from previous close)
+        /// Default price limit percentage (10% up/down from previous close)
         /// </summary>
-        public const decimal PriceLimitPercentage = 0.10m;
+        public const decimal DefaultPriceLimitPercentage = 0.10m;
+
+        /// <summary>
+        /// Price limit percentage for growth-board ETFs such as 创业板ETF/创业板50
+        /// </summary>
+        public const decimal GrowthBoardPriceLimitPercentage = 0.20m;
+
+        /// <summary>
+        /// Default minimum price variation for CNY ETFs
+        /// </summary>
+        public const decimal DefaultMinimumPriceVariation = 0.001m;
 
         /// <summary>
         /// Minimum lot size (100 shares)
@@ -55,7 +66,7 @@ namespace QuantConnect.Securities.Equity
         /// </summary>
         public decimal GetUpperPriceLimit(decimal previousClose)
         {
-            return previousClose * (1 + PriceLimitPercentage);
+            return previousClose * (1 + DefaultPriceLimitPercentage);
         }
 
         /// <summary>
@@ -63,7 +74,54 @@ namespace QuantConnect.Securities.Equity
         /// </summary>
         public decimal GetLowerPriceLimit(decimal previousClose)
         {
-            return previousClose * (1 - PriceLimitPercentage);
+            return previousClose * (1 - DefaultPriceLimitPercentage);
+        }
+
+        /// <summary>
+        /// Gets the configured daily price limit percentage for an ETF symbol
+        /// </summary>
+        public static decimal GetPriceLimitPercentage(Symbol symbol)
+        {
+            return AShareETFRegistry.GetPriceLimitPercentage(symbol?.Value);
+        }
+
+        /// <summary>
+        /// Gets the upper price limit rounded to the minimum price variation
+        /// </summary>
+        public static decimal GetUpperPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation)
+        {
+            return RoundToPriceVariation(previousClose * (1 + GetPriceLimitPercentage(symbol)), GetMinimumPriceVariation(minimumPriceVariation));
+        }
+
+        /// <summary>
+        /// Gets the lower price limit rounded to the minimum price variation
+        /// </summary>
+        public static decimal GetLowerPriceLimit(Symbol symbol, decimal previousClose, decimal minimumPriceVariation)
+        {
+            return RoundToPriceVariation(previousClose * (1 - GetPriceLimitPercentage(symbol)), GetMinimumPriceVariation(minimumPriceVariation));
+        }
+
+        /// <summary>
+        /// Gets the effective minimum price variation for A-share ETFs.
+        /// Some generic equity symbol properties use a coarser tick size, but ETFs trade in 0.001 CNY increments.
+        /// </summary>
+        public static decimal GetMinimumPriceVariation(decimal minimumPriceVariation)
+        {
+            if (minimumPriceVariation <= 0 || minimumPriceVariation > DefaultMinimumPriceVariation)
+            {
+                return DefaultMinimumPriceVariation;
+            }
+
+            return minimumPriceVariation;
+        }
+
+        /// <summary>
+        /// Rounds a price to the nearest valid price variation
+        /// </summary>
+        public static decimal RoundToPriceVariation(decimal price, decimal minimumPriceVariation)
+        {
+            var priceVariation = GetMinimumPriceVariation(minimumPriceVariation);
+            return Math.Round(price / priceVariation, 0, MidpointRounding.AwayFromZero) * priceVariation;
         }
 
         /// <summary>

@@ -1,0 +1,132 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedOxfordManStraddleAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # Set Account Currency before Cash
+        self.SetAccountCurrency('CNY')
+        
+        # Parameters
+        self.start_date = DateTime.ParseExact(self.GetParameter('start-date', '20100101'), 'yyyyMMdd', None)
+        self.end_date = DateTime.ParseExact(self.GetParameter('end-date', '20231231'), 'yyyyMMdd', None)
+        self.initial_capital = float(self.GetParameter('initial-capital', 1000000))
+        self.universe_tickers = self.GetParameter('universe', '600519,000001,600036').split(',')
+        self.lookback = int(self.GetParameter('lookback', 20))
+        self.vol_target = float(self.GetParameter('vol-target', 0.15))
+        self.max_drawdown = float(self.GetParameter('max-drawdown', 0.20))
+        self.trailing_stop_pct = float(self.GetParameter('trailing-stop-pct', 0.10))
+        
+        # Set Dates and Cash
+        self.SetStartDate(self.start_date)
+        self.SetEndDate(self.end_date)
+        self.SetCash(self.initial_capital)
+        
+        # Benchmark
+        self.SetBenchmark(lambda x: 0)
+        
+        # Schedule Rebalancing (Daily at 9:31)
+        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.At(9, 31), self.Rebalance)
+        
+        # Initialize Symbols and A-share Models
+        self.symbols = []
+        self.highest_price_since_entry = {} # For trailing stop
+        self.portfolio_peak = self.initial_capital
+        
+        for ticker in self.universe_tickers:
+            market = Market.SSE if ticker[0] == '6' else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            self.symbols.append(equity.Symbol)
+            
+            # Set A-share specific models
+            security = self.Securities[equity.Symbol]
+            security.FeeModel = AShareStockFeeModel()
+            security.FillModel = AShareStockFillModel()
+            security.BuyingPowerModel = AShareStockBuyingPowerModel()
+            security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9)))
+            
+            self.highest_price_since_entry[equity.Symbol] = 0
+            
+        # Warm up
+        self.SetWarmUp(timedelta(days=self.lookback + 10))
+
+    def OnData(self, slice):
+        # Update Portfolio Peak for Max Drawdown Check
+        if self.Portfolio.TotalPortfolioValue > self.portfolio_peak:
+            self.portfolio_peak = self.Portfolio.TotalPortfolioValue
+            
+        # Max Drawdown Risk Management
+        current_drawdown = (self.portfolio_peak - self.Portfolio.TotalPortfolioValue) / self.portfolio_peak
+        if current_drawdown > self.max_drawdown:
+            self.Liquidate()
+            self.Log(f"Max Drawdown {current_drawdown:.2%} exceeded. Liquidating all positions.")
+            return
+
+        # Trailing Stop Risk Management
+        for symbol in self.symbols:
+            if not self.Portfolio[symbol].Invested:
+                self.highest_price_since_entry[symbol] = 0
+                continue
+                
+            current_price = self.Securities[symbol].Price
+            if current_price > self.highest_price_since_entry[symbol]:
+                self.highest_price_since_entry[symbol] = current_price
+                
+            if self.highest_price_since_entry[symbol] > 0:
+                drawdown_from_peak = (self.highest_price_since_entry[symbol] - current_price) / self.highest_price_since_entry[symbol]
+                if drawdown_from_peak > self.trailing_stop_pct:
+                    self.Liquidate(symbol)
+                    self.Log(f"Trailing Stop hit for {symbol}. Liquidating.")
+
+    def Rebalance(self):
+        # Only trade if we have data
+        if not self.Securities[self.symbols[0]].Price: return
+
+        for symbol in self.symbols:
+            # Get History
+            history = self.History(symbol, self.lookback, Resolution.Daily)
+            if history.empty or 'close' not in history.columns:
+                continue
+                
+            closes = history['close']
+            if len(closes) < self.lookback:
+                continue
+                
+            # Calculate TSMOM Signal (Sign of return over lookback period)
+            # Paper: X_t = sign(r_{t-20, t})
+            current_price = closes[-1]
+            past_price = closes[0]
+            
+            if past_price == 0: continue
+            
+            total_return = (current_price - past_price) / past_price
+            signal = 1 if total_return > 0 else -1
+            
+            # Calculate Volatility (20-day EWMA approximated by std dev for simplicity)
+            returns = closes.pct_change().dropna()
+            if len(returns) == 0: continue
+            
+            daily_vol = returns.std()
+            annualized_vol = daily_vol * np.sqrt(252)
+            
+            # Volatility Targeting
+            # Scale position = Signal * (Vol_Target / Current_Vol)
+            if annualized_vol < 0.01: annualized_vol = 0.01 # Avoid division by zero
+            vol_scale = self.vol_target / annualized_vol
+            
+            # Determine Target Quantity
+            # Simple equal weight allocation logic adjusted by vol scale
+            # Using a fraction of portfolio per symbol to manage total exposure
+            portfolio_value = self.Portfolio.TotalPortfolioValue
+            target_value_per_symbol = (portfolio_value / len(self.symbols)) * vol_scale
+            
+            raw_quantity = (target_value_per_symbol * signal) / current_price
+            
+            # Round to nearest 100 (A-share lot size)
+            target_quantity = int(round(raw_quantity / 100)) * 100
+            
+            # Execute
+            if target_quantity != 0:
+                self.MarketOrder(symbol, target_quantity)
+            else:
+                # If signal is neutral or vol scaling makes it tiny, liquidate existing
+                if self.Portfolio[symbol].Invested:
+                    self.Liquidate(symbol)

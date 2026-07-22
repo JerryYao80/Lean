@@ -1,0 +1,31 @@
+{
+  "strategy_id": "i-backtested-a-trading-strategy-that-follows-insider-trading-by-itay-v",
+  "class_name": "SoloQuantGeneratedInsiderTradingAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/i-backtested-a-trading-strategy-that-follows-insider-trading-by-itay-v/SoloQuantGeneratedInsiderTradingAlgorithm.py.broken",
+  "description": "A-share strategy implementation based on the logic of following insider buying (simulated via technical proxy due to data constraints). It uses A-share specific models (Fee, Settlement, BuyingPower) and implements direct OnData logic for entry, fixed holding period exit, and risk controls (trailing stop, max drawdown).",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/i-backtested-a-trading-strategy-that-follows-insider-trading-by-itay-v/SoloQuantGeneratedInsiderTradingAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-1e3c1c9183b2c49c.json",
+  "parameters": {
+    "start_date": "20190101",
+    "end_date": "20221231",
+    "initial_capital": "100000",
+    "holding_period": "180",
+    "trailing_stop_pct": "0.10",
+    "max_drawdown_pct": "0.20"
+  },
+  "risk_controls": [
+    "Trailing Stop: 10% drop from highest price since entry",
+    "Max Drawdown: 20% drop from entry price",
+    "Time-based Exit: Liquidate after fixed holding period (180 days)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A-Share Equity Data",
+      "field": "Daily OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T04:38:59.890470+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

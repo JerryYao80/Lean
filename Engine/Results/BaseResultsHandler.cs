@@ -306,6 +306,11 @@ namespace QuantConnect.Lean.Engine.Results
         protected IMapFileProvider MapFileProvider { get; set; }
 
         /// <summary>
+        /// Optional InfluxDB exporter for Grafana/InfluxDB observability.
+        /// </summary>
+        private protected InfluxDbResultExporter InfluxDbExporter { get; private set; }
+
+        /// <summary>
         /// Creates a new instance
         /// </summary>
         protected BaseResultsHandler()
@@ -353,6 +358,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// </summary>
         public virtual void Exit()
         {
+            InfluxDbExporter?.Dispose();
             // reset standard out/error
             Console.SetOut(StandardOut);
             Console.SetError(StandardError);
@@ -497,6 +503,7 @@ namespace QuantConnect.Lean.Engine.Results
             _updateRunner.Start();
             State["Hostname"] = _hostName;
             MapFileProvider = parameters.MapFileProvider;
+            InfluxDbExporter = new InfluxDbResultExporter(parameters.Job, _hostName, ResultsDestinationFolder);
 
             SerializerSettings = new()
             {
@@ -529,6 +536,7 @@ namespace QuantConnect.Lean.Engine.Results
             _portfolioValue = new ReferenceWrapper<decimal>(startingPortfolioValue);
 
             SecurityType(Algorithm.Securities.Select(x => x.Key.SecurityType).Distinct().ToList());
+            InfluxDbExporter?.SetAlgorithm(algorithm);
 
             // Wire algorithm name and tags updates
             algorithm.NameUpdated += (sender, name) => AlgorithmNameUpdated(name);
@@ -553,6 +561,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// <param name="name">The new name</param>
         public virtual void AlgorithmNameUpdated(string name)
         {
+            InfluxDbExporter?.UpdateAlgorithmName(name);
             Messages.Enqueue(new AlgorithmNameUpdatePacket(AlgorithmId, name));
         }
 

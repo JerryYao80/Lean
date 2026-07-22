@@ -1,0 +1,85 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedStyleHerdingAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # 1. Account Settings (A-Share specific)
+        self.SetAccountCurrency("CNY")
+        self.SetCash(100000)
+
+        # 2. Time Settings
+        self.SetStartDate(2020, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+
+        # 3. Benchmark (Zero benchmark to avoid external data dependency)
+        self.SetBenchmark(lambda x: 0)
+
+        # 4. Add Equity (A-Share)
+        # Using 600000.SSE (Pudong Development Bank) as a representative stock
+        self.symbol = self.AddEquity("600000.SSE", Resolution.Daily, Market.SSE).Symbol
+
+        # 5. Set A-Share Specific Models
+        security = self.Securities[self.symbol]
+        security.FeeModel = AShareStockFeeModel()
+        security.FillModel = AShareStockFillModel()
+        security.BuyingPowerModel = AShareStockBuyingPowerModel()
+        security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+
+        # 6. Indicators (Placeholder for Style Herding Signal)
+        # Using RSI as a proxy for style/momentum strength due to lack of specific formula
+        self.rsi = self.RSI(self.symbol, 14, MovingAverageType.Simple, Resolution.Daily)
+        self.warm_up_indicator = self.RSI(self.symbol, 14)
+        
+        # 7. State for Risk Management
+        self.highest_price = 0
+        self.highest_portfolio_value = self.Portfolio.TotalPortfolioValue
+
+    def OnData(self, data):
+        # Warmup check
+        if not self.warm_up_indicator.IsReady:
+            return
+
+        # Ensure data exists for the symbol
+        if not data.ContainsKey(self.symbol) or data[self.symbol] is None:
+            return
+
+        holdings = self.Portfolio[self.symbol].Quantity
+        current_price = self.Securities[self.symbol].Price
+        rsi_val = self.rsi.Current.Value
+        portfolio_value = self.Portfolio.TotalPortfolioValue
+
+        # Update high watermark
+        if portfolio_value > self.highest_portfolio_value:
+            self.highest_portfolio_value = portfolio_value
+
+        # --- Risk Management: Trailing Stop ---
+        if holdings > 0:
+            if current_price > self.highest_price:
+                self.highest_price = current_price
+            
+            # 5% Trailing Stop
+            if current_price < self.highest_price * 0.95:
+                self.Liquidate(self.symbol)
+                self.highest_price = 0
+                return
+
+        # --- Risk Management: Max Drawdown (Portfolio Level) ---
+        # Stop trading if drawdown exceeds 15%
+        if portfolio_value < self.highest_portfolio_value * 0.85:
+            self.Liquidate(self.symbol)
+            return
+
+        # --- Trading Logic (Placeholder for Style Herding) ---
+        # Simulating a contrarian approach to herding: Buy when oversold (RSI < 30), Sell when overbought (RSI > 70)
+        
+        if holdings == 0 and rsi_val < 30:
+            # Buy 100 shares lots
+            available_cash = self.Portfolio.Cash
+            # Calculate quantity rounded to nearest 100
+            qty = int((available_cash * 0.95) / current_price / 100) * 100
+            if qty > 0:
+                self.MarketOrder(self.symbol, qty)
+                self.highest_price = current_price
+
+        elif holdings > 0 and rsi_val > 70:
+            self.Liquidate(self.symbol)
+            self.highest_price = 0

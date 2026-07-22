@@ -1,0 +1,31 @@
+{
+  "strategy_id": "selling-volatility-the-most-seductive-backtest-in-finance-quantt",
+  "class_name": "SoloQuantGeneratedSellingVolatilityAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/selling-volatility-the-most-seductive-backtest-in-finance-quantt/SoloQuantGeneratedSellingVolatilityAlgorithm.py.broken",
+  "description": "Systematically harvest the volatility risk premium (VRP) by selling one-month at-the-money put options on the S&P 500, fully collateralised by cash.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/selling-volatility-the-most-seductive-backtest-in-finance-quantt/SoloQuantGeneratedSellingVolatilityAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-224b0b2891175fb0.json",
+  "parameters": {
+    "start-date": "20100101",
+    "end-date": "20181231",
+    "initial-capital": "100000"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (Liquidate all positions if triggered)",
+    "Full Collateralization: Position size limited by available cash (Strike * 100 * Qty <= Portfolio Value)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "SPX Index Options",
+      "field": "Option Chain (Strike, Expiry, Right, Bid/Ask, Implied Volatility)"
+    },
+    {
+      "dataset": "SPX Index",
+      "field": "Underlying Price"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T05:00:10.183072+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

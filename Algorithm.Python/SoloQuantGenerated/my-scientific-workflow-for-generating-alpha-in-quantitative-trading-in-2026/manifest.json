@@ -1,0 +1,29 @@
+{
+  "strategy_id": "my-scientific-workflow-for-generating-alpha-in-quantitative-trading-in-2026",
+  "class_name": "SoloQuantGeneratedScientificWorkflowAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/my-scientific-workflow-for-generating-alpha-in-quantitative-trading-in-2026/SoloQuantGeneratedScientificWorkflowAlgorithm.py.broken",
+  "description": "基于科学工作流方法论（IC、WFO、风控）的 A 股策略草案。由于原文未提供具体因子，本草案使用动量因子作为占位符演示架构。策略包含严格的风控（最大回撤、移动止损）和 A 股特定的交易模型（T+1、费率、涨跌停）。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/my-scientific-workflow-for-generating-alpha-in-quantitative-trading-in-2026/SoloQuantGeneratedScientificWorkflowAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-6198287560185493.json",
+  "parameters": {
+    "start-date": "20000101",
+    "end-date": "20260118",
+    "initial-capital": "100000",
+    "universe": "600519.SSE"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (账户净值回撤达到阈值时清仓)",
+    "Trailing Stop: 5% (持仓价格从最高点回落达到阈值时清仓)",
+    "Position Sizing: 100股整数倍 (A股最小交易单位)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Data",
+      "field": "Open, High, Low, Close, Volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T10:35:01.995543+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

@@ -1,0 +1,32 @@
+strategy_name: GoldOvernightPremiumAlgorithm
+lifecycle: deprecated   # 已除役:Gate 2 IC kill switch 判定 EFFECTIVENESS_FAIL(OOS IC=-0.065,日频 AU 代理信号无预测力);ft_mins 分钟数据无升级路径(权限不可得)。保留可回测,不进实盘轮换。详见 docs/superpowers/specs/2026-07-08-gold-overnight-premium-design.md §7.2。黄金 ETF 实盘改用 Gold2BetaVolTargetStrategy(EFFECTIVE,回撤改善 42.2%)。
+rl_state_completeness: partial
+lean_config: Launcher/config/config-gold-overnight-premium-backtest.json
+risk_model_target: NoOvernightPositionRiskModel
+parameter_space:
+  - {name: position-size, type: float, range: [0.10, 0.40], default: 0.30, layer: L3_Portfolio}
+  - {name: target-vol, type: float, range: [0.05, 0.25], default: 0.12, layer: L3_Portfolio}
+  - {name: vol-lookback-days, type: int, range: [20, 120], default: 60, layer: L3_Portfolio}
+  - {name: z-threshold, type: float, range: [1.0, 2.5], default: 1.5, layer: L2_Alpha}
+  - {name: atr-multiple, type: float, range: [0.3, 1.0], default: 0.5, layer: L4_Risk}
+  - {name: tp-fraction, type: float, range: [0.4, 0.8], default: 0.6, layer: L2_Alpha}
+state_schema:
+  fields:
+    - {name: ts, type: string}
+    - {name: strategy, type: string}
+    - {name: tpv, type: float}
+    - {name: cash_pct, type: float}
+    - {name: positions, type: array, item_schema: [sym, w, pnl_1d, days_held]}
+    - {name: drawdown, type: float}
+    - {name: n_open_positions, type: int}
+    - {name: z_signal, type: float}
+    - {name: regime, type: string}
+  dim_hint: 12
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+universe:
+  symbols: ["518880"]
+  timezone: Asia/Shanghai

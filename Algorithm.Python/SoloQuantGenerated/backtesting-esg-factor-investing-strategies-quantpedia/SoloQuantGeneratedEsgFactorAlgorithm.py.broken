@@ -1,0 +1,138 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedEsgFactorAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # 1. 设置账户和现金
+        self.SetAccountCurrency("CNY")
+        self.SetCash(1000000)
+        
+        # 2. 解析参数
+        start_date_str = self.GetParameter("start-date") or "20150101"
+        end_date_str = self.GetParameter("end-date") or "20231231"
+        
+        self.SetStartDate(DateTime.ParseExact(start_date_str, "yyyyMMdd", None))
+        self.SetEndDate(DateTime.ParseExact(end_date_str, "yyyyMMdd", None))
+        
+        # 3. 设置基准 (避免数据依赖)
+        self.SetBenchmark(lambda x: 0)
+        
+        # 4. 股票池选择 (A股代表性标的)
+        # 由于不能使用 AddUniverse + FineFundamental，这里使用固定列表模拟
+        self.tickers = ["600519.SS", "000858.SZ", "600036.SS", "000001.SZ", "601318.SS", "000002.SZ", "600276.SS", "300750.SZ"]
+        self.symbols = []
+        self.esg_proxy = {} # 使用ROC作为ESG动量的代理指标
+        
+        for ticker in self.tickers:
+            market = Market.SSE if ticker.endswith(".SS") else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            
+            # 5. 应用A股特定模型
+            equity.FeeModel = AShareStockFeeModel()
+            equity.FillModel = AShareStockFillModel()
+            equity.BuyingPowerModel = AShareStockBuyingPowerModel()
+            equity.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+            
+            self.symbols.append(equity.Symbol)
+            
+            # 6. 初始化指标 (12个月ROC作为ESG动量代理)
+            self.esg_proxy[equity.Symbol] = self.ROC(equity.Symbol, 252, Resolution.Daily)
+        
+        # 7. 预热数据
+        self.SetWarmUp(252, Resolution.Daily)
+        
+        # 8. 调仓计划 (每月第一个交易日开盘后30分钟)
+        self.Schedule.On(self.DateRules.MonthStart(self.symbols[0]), self.TimeRules.AfterMarketOpen(self.symbols[0], 30), self.Rebalance)
+        
+        # 9. 风控参数
+        self.trailing_stop_pct = 0.05 # 5% 移动止损
+        self.max_drawdown_pct = 0.20 # 20% 最大回撤
+        self.portfolio_high = self.Portfolio.TotalPortfolioValue
+        self.invested_highs = {} # 记录持仓最高价
+
+    def OnData(self, slice):
+        # 风控：最大回撤检查
+        if self.Portfolio.TotalPortfolioValue > self.portfolio_high:
+            self.portfolio_high = self.Portfolio.TotalPortfolioValue
+            
+        drawdown = (self.portfolio_high - self.Portfolio.TotalPortfolioValue) / self.portfolio_high
+        if drawdown > self.max_drawdown_pct:
+            self.Liquidate()
+            return
+
+        # 风控：移动止损
+        for symbol in self.Portfolio.Keys:
+            if self.Portfolio[symbol].Invested and slice.ContainsKey(symbol) and slice[symbol] is not None:
+                current_price = slice[symbol].Price
+                
+                # 更新持仓最高价
+                if symbol not in self.invested_highs:
+                    self.invested_highs[symbol] = current_price
+                elif current_price > self.invested_highs[symbol]:
+                    self.invested_highs[symbol] = current_price
+                
+                # 检查止损
+                if current_price < self.invested_highs[symbol] * (1 - self.trailing_stop_pct):
+                    self.Liquidate(symbol)
+                    if symbol in self.invested_highs:
+                        del self.invested_highs[symbol]
+
+    def Rebalance(self):
+        if self.IsWarmingUp: return
+
+        # 1. 计算信号 (ESG动量代理: 12个月ROC)
+        insights = []
+        for symbol in self.symbols:
+            roc_indicator = self.esg_proxy[symbol]
+            if roc_indicator.Current.Value is not None:
+                insights.append({'symbol': symbol, 'score': roc_indicator.Current.Value})
+        
+        if not insights: return
+
+        # 2. 排序 (按动量从高到低)
+        insights.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 3. 分组 (做多前25%，做空后25%)
+        n = len(insights)
+        long_leg = insights[:max(1, int(n * 0.25))]
+        short_leg = insights[-max(1, int(n * 0.25)):]
+        
+        # 4. 清理不在新组合中的持仓
+        targets = [x['symbol'] for x in long_leg + short_leg]
+        for symbol in self.Portfolio.Keys:
+            if symbol in self.symbols and self.Portfolio[symbol].Invested and symbol not in targets:
+                self.Liquidate(symbol)
+                if symbol in self.invested_highs:
+                    del self.invested_highs[symbol]
+
+        # 5. 执行交易 (市值加权)
+        # 使用成交额作为市值代理
+        total_value_long = sum([self.Securities[x['symbol']].Price * self.Securities[x['symbol']].Volume for x in long_leg])
+        total_value_short = sum([self.Securities[x['symbol']].Price * self.Securities[x['symbol']].Volume for x in short_leg])
+        
+        for item in long_leg:
+            symbol = item['symbol']
+            price = self.Securities[symbol].Price
+            volume = self.Securities[symbol].Volume
+            weight = (price * volume) / total_value_long if total_value_long > 0 else 0
+            
+            target_value = self.Portfolio.TotalPortfolioValue * weight
+            quantity = int(target_value / price / 100) * 100 # A股100股取整
+            
+            if quantity > 0:
+                self.MarketOrder(symbol, quantity - self.Portfolio[symbol].Quantity)
+                if symbol not in self.invested_highs:
+                    self.invested_highs[symbol] = price
+
+        for item in short_leg:
+            symbol = item['symbol']
+            price = self.Securities[symbol].Price
+            volume = self.Securities[symbol].Volume
+            weight = (price * volume) / total_value_short if total_value_short > 0 else 0
+            
+            target_value = self.Portfolio.TotalPortfolioValue * weight
+            quantity = int(target_value / price / 100) * 100
+            
+            if quantity > 0:
+                self.MarketOrder(symbol, -quantity - self.Portfolio[symbol].Quantity)
+                if symbol not in self.invested_highs:
+                    self.invested_highs[symbol] = price

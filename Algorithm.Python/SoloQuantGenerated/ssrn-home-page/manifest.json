@@ -1,0 +1,27 @@
+{
+  "strategy_id": "ssrn-home-page",
+  "class_name": "SoloQuantGeneratedSSRNAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/ssrn-home-page/SoloQuantGeneratedSSRNAlgorithm.py.broken",
+  "description": "基于 SSRN 主页的骨架策略（未发现逻辑）。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/ssrn-home-page/SoloQuantGeneratedSSRNAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-f49faee730678772.json",
+  "parameters": {
+    "start_date": "20230101",
+    "end_date": "20231231",
+    "initial_capital": "100000",
+    "universe": "600519.SSE"
+  },
+  "risk_controls": [
+    "未提供"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "未提供",
+      "field": "未提供"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T03:05:09.357621+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

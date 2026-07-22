@@ -1,0 +1,117 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedSmaMomentumAlgorithm : QCAlgorithm {
+    private List<Symbol> _symbols = new List<Symbol>();
+    private Dictionary<Symbol, SoloQuantSymbolData> _symbolData = new Dictionary<Symbol, SoloQuantSymbolData>();
+    private int _lastRebalanceMonth = -1;
+
+    public override void Initialize() {
+      SetAccountCurrency(Currencies.CNY);
+      SetCash(1000000);
+      SetStartDate(DateTime.ParseExact("20200101", "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact("20241231", "yyyyMMdd", null));
+      SetBenchmark(_ => 0m);
+
+      string[] tickers = { "600519.SSE", "000858.SZSE", "600036.SSE", "000001.SZSE", "601318.SSE" };
+
+      foreach (var ticker in tickers) {
+        var market = ticker.EndsWith(".SSE") ? Market.SSE : Market.SZSE;
+        var security = AddEquity(ticker, Resolution.Daily, market);
+        var symbol = security.Symbol;
+
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+
+        _symbols.Add(symbol);
+        _symbolData[symbol] = new SoloQuantSymbolData(symbol, this);
+      }
+    }
+
+    public override void OnData(Slice data) {
+      // Update indicators
+      foreach (var symbolData in _symbolData.Values) {
+        symbolData.Update(data);
+      }
+
+      // Rebalance monthly
+      if (Time.Month != _lastRebalanceMonth) {
+        Rebalance();
+        _lastRebalanceMonth = Time.Month;
+      }
+
+      // Risk Control: Trailing Stop / Max Drawdown
+      foreach (var kvp in Portfolio) {
+        if (kvp.Value.Invested) {
+          if (kvp.Value.UnrealizedProfitPercent < -0.10m) { // 10% Stop Loss
+            Liquidate(kvp.Key);
+          }
+        }
+      }
+    }
+
+    private void Rebalance() {
+      var longSymbols = _symbols.Where(s => _symbolData[s].IsReady && _symbolData[s].Price > _symbolData[s].SMA).ToList();
+
+      if (longSymbols.Count == 0) {
+        Liquidate();
+        return;
+      }
+
+      decimal weight = 1m / longSymbols.Count;
+
+      foreach (var symbol in _symbols) {
+        var security = Securities[symbol];
+        if (!security.Price.Equals(0)) {
+          int targetQuantity = 0;
+          if (longSymbols.Contains(symbol)) {
+            targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / security.Price / 100) * 100;
+          }
+
+          int delta = targetQuantity - Portfolio[symbol].Quantity;
+          if (delta != 0) {
+            MarketOrder(symbol, delta);
+          }
+        }
+      }
+    }
+  }
+
+  public class SoloQuantSymbolData {
+    public Symbol Symbol { get; private set; }
+    public SimpleMovingAverage SMA { get; private set; }
+    public decimal Price { get; private set; }
+
+    public SoloQuantSymbolData(Symbol symbol, QCAlgorithm algorithm) {
+      Symbol = symbol;
+      SMA = algorithm.SMA(symbol, 200, Resolution.Daily, Field.Close);
+    }
+
+    public bool IsReady => SMA.IsReady;
+
+    public void Update(Slice data) {
+      if (data.ContainsKey(Symbol)) {
+        Price = data[Symbol].Price;
+      }
+    }
+  }
+}

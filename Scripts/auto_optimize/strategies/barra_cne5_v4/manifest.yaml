@@ -1,0 +1,27 @@
+strategy_name: AShareBarraCNE5V4Algorithm
+rl_state_completeness: partial
+lean_config: Launcher/config/config-barra-cne5v4-backtest.json
+risk_model_target: CompositeRiskManagementModel
+parameter_space:
+  - {name: top-n, type: int, range: [10, 50], default: 25, layer: L2_Alpha}
+  - {name: target-portfolio-exposure, type: float, range: [0.5, 1.0], default: 0.90, layer: L3_Portfolio}
+  - {name: max-single-weight, type: float, range: [0.05, 0.20], default: 0.10, layer: L4_Risk}
+  - {name: trailing-stop-pct, type: float, range: [0.05, 0.15], default: 0.08, layer: L4_Risk}
+state_schema:
+  fields:
+    - {name: ts, type: string}
+    - {name: strategy, type: string}
+    - {name: tpv, type: float}
+    - {name: cash_pct, type: float}
+    - {name: positions, type: array, item_schema: [sym, w, pnl_1d, days_held]}
+    - {name: drawdown, type: float}
+    - {name: n_open_positions, type: int}
+  dim_hint: 12
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+universe:
+  symbols: ["CSI300"]
+  timezone: Asia/Shanghai

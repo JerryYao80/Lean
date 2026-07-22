@@ -218,6 +218,13 @@ csx/
 AppPackages/
 
 # Others
+
+# Local scratch/generated files
+.dotnet_home/
+*.bak
+log.txt
+Launcher/log.txt
+good_data_etfs.json
 *.Cache
 ClientBin/
 [Ss]tyle[Cc]op.*
@@ -281,3 +288,7 @@ Research/Notebooks
 #Docker result files
 Results/
 QuantConnect.Lean.sln.DotSettings
+
+# Local notes and reports
+/1
+/backtest_*.md

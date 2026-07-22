@@ -1,0 +1,28 @@
+{
+  "strategy_id": "pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment",
+  "class_name": "SoloQuantGeneratedAlphaGPTAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment/SoloQuantGeneratedAlphaGPTAlgorithm.py.broken",
+  "description": "Reproduction of Alpha-GPT strategy using volume-price correlation alpha on A-shares. Implements daily rebalancing based on ts_corr(close, volume, 20), selecting top 20% for long and bottom 20% for short. Includes A-share specific fee, fill, and settlement models.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment/SoloQuantGeneratedAlphaGPTAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-7f6f8de050e9dfca.json",
+  "parameters": {
+    "start_date": "2019-01-01",
+    "end_date": "2023-12-31",
+    "initial_capital": "1000000",
+    "universe": "000300.SSE, 000001.SZSE, 600000.SSE, 000002.SZSE, 600519.SSE, 000858.SZSE, 601318.SSE, 002594.SZSE"
+  },
+  "risk_controls": [
+    "Max Drawdown: 10% (Liquidate All)",
+    "Trailing Stop: 5% per position"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T00:55:18.065650+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

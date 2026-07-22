@@ -1,0 +1,63 @@
+{
+  "artifact_set_sha256": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "eligible_blind_window_count": 0,
+  "evaluation_status": "NOT_EVALUATED",
+  "generation_id": "2d396748ba41f03678fd0c2627967e1af2680f40d1b3b98aeedfe0affe5d5f46",
+  "overall_status": "BLOCKED",
+  "proof_conclusion": "UNPROVEN",
+  "verdict": "BLOCKED_INSUFFICIENT_TEST_WINDOWS",
+  "windows": [
+    {
+      "eligible": false,
+      "evaluated_range": [
+        "2018-01-02",
+        "2022-12-31"
+      ],
+      "reasons": [
+        "NO_SESSIONS_IN_FIXED_WINDOW",
+        "INCOMPLETE_CALENDAR_START:2018-01-02",
+        "INCOMPLETE_CALENDAR_INTERNAL:2018-01-02"
+      ],
+      "window_id": "W1"
+    },
+    {
+      "eligible": false,
+      "evaluated_range": [
+        "2019-01-01",
+        "2023-12-31"
+      ],
+      "reasons": [
+        "NO_SESSIONS_IN_FIXED_WINDOW",
+        "INCOMPLETE_CALENDAR_START:2019-01-01",
+        "INCOMPLETE_CALENDAR_INTERNAL:2019-01-01"
+      ],
+      "window_id": "W2"
+    },
+    {
+      "eligible": false,
+      "evaluated_range": [
+        "2020-01-01",
+        "2024-12-31"
+      ],
+      "reasons": [
+        "NO_SESSIONS_IN_FIXED_WINDOW",
+        "INCOMPLETE_CALENDAR_START:2020-01-01",
+        "INCOMPLETE_CALENDAR_INTERNAL:2020-01-01"
+      ],
+      "window_id": "W3"
+    },
+    {
+      "eligible": false,
+      "evaluated_range": [
+        "2021-01-01",
+        "2025-12-31"
+      ],
+      "reasons": [
+        "INCOMPLETE_CALENDAR_START:2021-01-01",
+        "INCOMPLETE_CALENDAR_INTERNAL:2021-01-01",
+        "INCOMPLETE_FIXED_WINDOW_START:2025-01-02"
+      ],
+      "window_id": "W4"
+    }
+  ]
+}

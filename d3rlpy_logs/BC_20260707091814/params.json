@@ -1,0 +1,87 @@
+{
+  "observation_shape": [
+    8
+  ],
+  "action_size": 1,
+  "config": {
+    "type": "bc",
+    "params": {
+      "batch_size": 100,
+      "gamma": 0.99,
+      "observation_scaler": {
+        "type": "standard",
+        "params": {
+          "mean": [
+            0.5053624926554039,
+            0.5003589067142457,
+            0.530098775960505,
+            0.5039285126538016,
+            0.5479216615995393,
+            0.4837335305058514,
+            0.563290839381516,
+            0.5032971102930606
+          ],
+          "std": [
+            0.2861838375442204,
+            0.27844338990394646,
+            0.2939583062738318,
+            0.2846020486119773,
+            0.2880764658094984,
+            0.29198116898495385,
+            0.2920836962966936,
+            0.27611703796342735
+          ],
+          "eps": 0.001
+        }
+      },
+      "action_scaler": {
+        "type": "min_max",
+        "params": {
+          "minimum": [
+            0.8999999761581421
+          ],
+          "maximum": [
+            0.8999999761581421
+          ]
+        }
+      },
+      "reward_scaler": {
+        "type": "standard",
+        "params": {
+          "mean": 0.0,
+          "std": 0.0,
+          "eps": 0.001,
+          "multiplier": 1.0
+        }
+      },
+      "compile_graph": false,
+      "learning_rate": 0.01,
+      "policy_type": "deterministic",
+      "optim_factory": {
+        "type": "adam",
+        "params": {
+          "clip_grad_norm": null,
+          "lr_scheduler_factory": {
+            "type": "none",
+            "params": {}
+          },
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0,
+          "amsgrad": false
+        }
+      },
+      "encoder_factory": {
+        "type": "default",
+        "params": {
+          "activation": "relu",
+          "use_batch_norm": false,
+          "dropout_rate": null
+        }
+      }
+    }
+  }
+}

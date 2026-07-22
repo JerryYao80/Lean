@@ -1,0 +1,30 @@
+{
+  "strategy_id": "machine-learning-for-algorithm-trading-part-12-boosting-your",
+  "class_name": "SoloQuantGeneratedGradientBoostingAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/machine-learning-for-algorithm-trading-part-12-boosting-your/SoloQuantGeneratedGradientBoostingAlgorithm.py.broken",
+  "description": "基于梯度提升树逻辑的A股多空策略草案，使用技术指标模拟ML预测，实现T+1交易机制和A股特定风控。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/machine-learning-for-algorithm-trading-part-12-boosting-your/SoloQuantGeneratedGradientBoostingAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-675e94515612451b.json",
+  "parameters": {
+    "start_date": "20200101",
+    "end_date": "20231231",
+    "initial_capital": "100000",
+    "universe": "600519.SS,000858.SZ,600036.SS,000001.SZ,601318.SS"
+  },
+  "risk_controls": [
+    "Max Drawdown Control (10%)",
+    "Trailing Stop Loss (5%)",
+    "Position Sizing (Min 100 shares)",
+    "T+1 Settlement Constraint"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Price",
+      "field": "Open, High, Low, Close, Volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T11:15:04.047615+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

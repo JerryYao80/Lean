@@ -1,0 +1,29 @@
+{
+  "strategy_id": "2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha",
+  "class_name": "SoloQuantGeneratedTimingExcessReturnsAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.py",
+  "description": "A-share Time Series Momentum strategy based on 'Timing Excess Returns A cross-universe approach to alpha'. Implements monthly rebalancing based on 12-month momentum, with A-share specific transaction models and risk controls.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/2002-04304-timing-excess-returns-a-cross-universe-approach-to-alpha/SoloQuantGeneratedTimingExcessReturnsAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-3bcafaf496440dd4.json",
+  "parameters": {
+    "lookback": "252",
+    "universe": "600519.SSE,000858.SZSE,600036.SSE,000001.SZSE,601318.SSE",
+    "rebalance_frequency": "Monthly",
+    "max_drawdown": "0.20",
+    "trailing_stop_pct": "0.05"
+  },
+  "risk_controls": [
+    "Max Drawdown Stop: Liquidate all if portfolio drawdown exceeds 20%",
+    "Trailing Stop: Liquidate individual position if price drops 5% from highest price since entry"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "Close",
+      "tickers": "600519.SSE,000858.SZSE,600036.SSE,000001.SZSE,601318.SSE"
+    }
+  ],
+  "generated_at_utc": "2026-05-20T22:46:52.994082+00:00",
+  "data_coverage": 1.0
+}

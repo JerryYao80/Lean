@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'QuantConnect LEAN'
+    orgId: 1
+    folder: 'LEAN'
+    folderUid: 'lean'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

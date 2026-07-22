@@ -1,0 +1,441 @@
+Barra CNE5 因子计算到 Tushare 字段的实际映射
+==================================================
+
+范围
+----
+本文档描述当前项目里 Barra CNE5 因子生成代码，实际从
+`/home/project/tushare-downloader/tushare_data`
+读取了哪些数据集、哪些字段，以及这些字段如何映射到最终输出的 10 个风格因子。
+
+本文档对应的实际实现代码主要在：
+
+- `data-source/tushare/barra_cne5_factor_builder.py`
+- `data-source/tushare/barra_cne5_data_loader.py`
+- `Scripts/barra_cne5_factor_bridge.py`
+
+
+一、真实使用到的 Tushare 数据集
+------------------------------
+
+1. `daily/ts_code={symbol}/data.parquet`
+   实际使用字段：
+   - `trade_date`
+   - `pct_chg`
+   - `pre_close`
+   - `close`
+   - `vol`
+
+2. `daily_basic/ts_code={symbol}/data.parquet`
+   实际使用字段：
+   - `trade_date`
+   - `total_mv`
+   - `turnover_rate_f`
+   - `turnover_rate`
+   - `float_share`
+
+3. `income/ts_code={symbol}/data.parquet`
+   实际使用字段：
+   - `end_date`
+   - `f_ann_date`
+   - `ann_date`
+   - `revenue`
+   - `n_income_attr_p`
+
+4. `cashflow/ts_code={symbol}/data.parquet`
+   实际使用字段：
+   - `end_date`
+   - `f_ann_date`
+   - `ann_date`
+   - `depr_fa_coga_dpba`
+   - `amort_intang_assets`
+
+5. `balancesheet/ts_code={symbol}/data.parquet`
+   实际使用字段：
+   - `end_date`
+   - `f_ann_date`
+   - `ann_date`
+   - `lt_borr`
+   - `st_borr`
+   - `total_assets`
+   - `total_liab`
+   - `total_hldr_eqy_exc_min_int`
+
+6. `stock_basic/data.parquet`
+   实际使用字段：
+   - `ts_code`
+   - `name`
+   - `list_date`
+   - `market`
+   - `list_status`
+
+7. `index_daily/ts_code=000300.SH/data.parquet`
+   实际使用字段：
+   - `trade_date`
+   - `pct_chg`
+   - `pre_close`
+   - `close`
+
+8. `index_weight/date=*/data.parquet` 或 `index_weight/year=*/data.parquet`
+   实际使用字段：
+   - `index_code`
+   - `con_code`
+   - `trade_date`
+
+9. `shibor/year=*/data.parquet`
+   实际使用字段：
+   - `date`
+   - `1y`
+   兼容候选字段：
+   - `1Y`
+   - `shibor_1y`
+   - `rate`
+
+10. `trade_cal/data.parquet`
+    实际使用字段：
+    - `cal_date`
+    - `is_open`
+
+
+二、没有实际用到的 Tushare 数据集或字段
+--------------------------------------
+
+当前 Barra CNE5 因子生成代码没有直接使用下列常见表：
+
+- `adj_factor`
+- `fina_indicator`
+- `bak_daily`
+- `bak_basic`
+- `forecast`
+- `express`
+- `dividend`
+
+也没有使用分析师一致预期类字段，所以当前实现不是完整教科书版 CNE5，
+而是当前项目的可运行简化版 CNE5。
+
+
+三、基础流程映射
+----------------
+
+1. 交易日获取
+   - 优先使用 `trade_cal.cal_date` + `trade_cal.is_open`
+   - 如果 `trade_cal` 不可用，退化为 `index_daily.trade_date`
+
+2. 股票池获取
+   - 如果 universe 配置为 `csi300`：
+     使用 `index_weight.index_code=000300.SH`、`index_weight.trade_date`、`index_weight.con_code`
+   - 否则使用 `stock_basic.ts_code`
+   - 同时用 `stock_basic.list_status`、`stock_basic.market`、`stock_basic.list_date` 做过滤
+
+3. 财务数据可见性规则
+   - `income`、`cashflow`、`balancesheet` 都不是直接按 `end_date <= trade_date` 取值
+   - 先按 `f_ann_date <= trade_date` 过滤
+   - 如果没有 `f_ann_date`，则按 `ann_date <= trade_date`
+   - 如果还没有，则按 `end_date <= trade_date`
+   - 这意味着当前实现是“点时可见”的财报口径，不会偷看未来财报
+
+4. 截面标准化
+   - 各个原始描述子先做 winsorize + zscore
+   - 再按组合权重汇总成 10 个风格因子
+   - `resvol` 最终还会对 `beta` 做一次截面正交化
+   - `nlsize` 不是直接来自原始字段，而是由 `size` 的非线性形式截面残差化得到
+
+
+四、最终 10 个风格因子的字段映射
+--------------------------------
+
+1. `beta`
+   最终因子：
+   - `beta = 1.00 * BETA`
+
+   中间描述子 `BETA` 使用字段：
+   - `daily.pct_chg`，若缺失则退化到 `daily.close / daily.pre_close - 1`
+   - `index_daily.pct_chg`，若缺失则退化到 `index_daily.close / index_daily.pre_close - 1`
+   - `shibor.1y`（年化后除以 252，转成日无风险收益）
+
+   计算过程：
+   - 股票超额收益 = 股票日收益 - 无风险日收益
+   - 市场超额收益 = 沪深300日收益 - 无风险日收益
+   - 对 252 日窗口做半衰期 63 的加权回归
+   - 回归斜率就是 `BETA`
+
+
+2. `momentum`
+   最终因子：
+   - `momentum = 1.00 * RSTR`
+
+   中间描述子 `RSTR` 使用字段：
+   - `daily.pct_chg` 或 `daily.close/pre_close`
+   - `shibor.1y`
+
+   计算过程：
+   - 先算股票日对数超额收益
+   - 使用最长 525 个交易日
+   - 剔除最近 21 个交易日
+   - 剩余窗口按半衰期 126 做加权平均
+
+
+3. `size`
+   最终因子：
+   - `size = 1.00 * LNCAP`
+
+   中间描述子 `LNCAP` 使用字段：
+   - `daily_basic.total_mv`
+
+   计算过程：
+   - `LNCAP = ln(total_mv)`
+
+
+4. `earnyld`
+   最终因子：
+   - `earnyld = 0.34 * ETOP + 0.66 * CETOP`
+
+   中间描述子 `ETOP` 使用字段：
+   - `income.n_income_attr_p`
+   - `income.end_date`
+   - `income.f_ann_date`
+   - `income.ann_date`
+   - `daily_basic.total_mv`
+
+   中间描述子 `CETOP` 使用字段：
+   - `income.n_income_attr_p`
+   - `cashflow.depr_fa_coga_dpba`
+   - `cashflow.amort_intang_assets`
+   - 各自对应的 `end_date/f_ann_date/ann_date`
+   - `daily_basic.total_mv`
+
+   计算过程：
+   - `ETOP = TTM(n_income_attr_p) / total_mv`
+   - `CETOP = (TTM(n_income_attr_p) + TTM(depr_fa_coga_dpba) + TTM(amort_intang_assets)) / total_mv`
+   - 当前 TTM 逻辑：
+     - 如果最新报告期是年报 `1231`，直接取最新值
+     - 否则取 `最新累计值 + 上年年报值 - 上年同期累计值`
+
+
+5. `resvol`
+   最终因子：
+   - `resvol = 0.74 * DASTD + 0.16 * CMRA + 0.10 * HSIGMA`
+   - 然后再对 `beta` 做一次截面残差化
+
+   中间描述子字段来源：
+   - `DASTD`
+     - `daily.pct_chg` 或 `daily.close/pre_close`
+     - `shibor.1y`
+   - `CMRA`
+     - `daily.pct_chg` 或 `daily.close/pre_close`
+     - `shibor.1y`
+   - `HSIGMA`
+     - `daily.pct_chg` 或 `daily.close/pre_close`
+     - `index_daily.pct_chg` 或 `index_daily.close/pre_close`
+     - `shibor.1y`
+
+   计算过程：
+   - `DASTD`：252 日窗口中超额收益的加权标准差，半衰期 42
+   - `CMRA`：252 日窗口中按 21 日划分月度，对数超额收益累积区间
+   - `HSIGMA`：Beta 回归残差标准差，半衰期 63
+   - 合成后再做一次 `resvol ~ beta` 的截面正交化
+
+
+6. `growth`
+   最终因子：
+   - `growth = 0.43 * SGRO + 0.57 * EGRO`
+
+   中间描述子 `SGRO` 使用字段：
+   - `income.revenue`
+   - `income.end_date`
+   - `income.f_ann_date`
+   - `income.ann_date`
+
+   中间描述子 `EGRO` 使用字段：
+   - `income.n_income_attr_p`
+   - `income.end_date`
+   - `income.f_ann_date`
+   - `income.ann_date`
+
+   计算过程：
+   - 先只保留每年年报，即 `end_date` 以 `1231` 结尾
+   - 去重后最多取最近 5 个年度点
+   - 对 `sign(x) * log1p(abs(x))` 后的序列做线性回归
+   - 回归斜率分别得到 `SGRO` 和 `EGRO`
+
+
+7. `btop`
+   最终因子：
+   - `btop = 1.00 * BTOP`
+
+   中间描述子 `BTOP` 使用字段：
+   - `balancesheet.total_hldr_eqy_exc_min_int`
+   - `balancesheet.end_date`
+   - `balancesheet.f_ann_date`
+   - `balancesheet.ann_date`
+   - `daily_basic.total_mv`
+
+   计算过程：
+   - 取交易日时点可见的最新资产负债表
+   - `BTOP = total_hldr_eqy_exc_min_int / total_mv`
+
+
+8. `leverage`
+   最终因子：
+   - `leverage = 0.38 * MLEV + 0.35 * DTOA + 0.27 * BLEV`
+
+   中间描述子字段：
+   - `MLEV`
+     - `balancesheet.lt_borr`
+     - `balancesheet.st_borr`
+     - `daily_basic.total_mv`
+   - `DTOA`
+     - `balancesheet.total_liab`
+     - `balancesheet.total_assets`
+   - `BLEV`
+     - `balancesheet.total_hldr_eqy_exc_min_int`
+     - `balancesheet.lt_borr`
+     - `balancesheet.st_borr`
+
+   共同的可见性字段：
+   - `balancesheet.end_date`
+   - `balancesheet.f_ann_date`
+   - `balancesheet.ann_date`
+
+   计算过程：
+   - `MLEV = (total_mv + lt_borr + st_borr) / total_mv`
+   - `DTOA = total_liab / total_assets`
+   - `BLEV = (book_equity + lt_borr + st_borr) / book_equity`
+
+
+9. `liquidity`
+   最终因子：
+   - `liquidity = 0.35 * STOM + 0.35 * STOQ + 0.30 * STOA`
+
+   中间描述子字段：
+   - `daily.vol`
+   - `daily_basic.float_share`
+
+   计算过程：
+   - `STOM = ln(sum(vol 最近21日) / float_share)`
+   - `STOQ = ln(sum(vol 最近63日) / float_share)`
+   - `STOA = ln(sum(vol 最近252日) / float_share)`
+
+   注意：
+   - 这里用的是成交量 `vol`
+   - 不是直接使用 `daily_basic.turnover_rate`
+
+
+10. `nlsize`
+    最终因子：
+    - `nlsize = 1.00 * NLSIZE`
+
+    中间描述子 `NLSIZE` 使用字段：
+    - `daily_basic.total_mv`
+
+    计算过程：
+    - 先算 `LNCAP = ln(total_mv)`
+    - 再算 `LNCAP^3`
+    - 对 `LNCAP^3` 相对 `LNCAP` 做截面残差化
+    - 该残差再 winsorize + zscore 后得到 `NLSIZE`
+
+
+五、最终输出字段与 Tushare 映射
+------------------------------
+
+最终写入 `Data/alternative/barra-cne5-factors/.../*.csv` 的列中，除 10 个因子外，还有以下字段：
+
+1. `trade_date`
+   - 直接来自当前计算截面的交易日
+   - 来源通常是 `trade_cal.cal_date`
+   - 若无 `trade_cal`，则退化为 `index_daily.trade_date`
+
+2. `total_mv`
+   - 来源：`daily_basic.total_mv`
+
+3. `turnover_rate`
+   - 优先来源：`daily_basic.turnover_rate_f`
+   - 备选来源：`daily_basic.turnover_rate`
+
+4. `listed_days`
+   - 来源：`stock_basic.list_date`
+   - 计算：`trade_date - list_date`
+
+5. `is_st`
+   - 来源：`stock_basic.name`
+   - 规则：名称中包含 `ST` 则记为 1，否则记为 0
+
+6. `missing_factor_count`
+   - 不是来自 Tushare 原始字段
+   - 是在最终 10 个因子列形成以后，统计该股票当日有多少个因子为缺失值
+
+
+六、当前实现与经典 Barra CNE5 的差异
+-----------------------------------
+
+1. 当前实现没有使用分析师预期数据，所以没有：
+   - `EPIBS`
+   - `EGIBS`
+   - `EGIBS_s`
+
+2. 因此当前项目里实际采用的是：
+   - `earnyld = 0.34 * ETOP + 0.66 * CETOP`
+   - `growth = 0.43 * SGRO + 0.57 * EGRO`
+
+3. 当前实现没有使用 `fina_indicator`、`adj_factor` 等表。
+
+
+七、最简映射总表
+---------------
+
+`beta`
+-> `daily[pct_chg/pre_close/close]` + `index_daily[pct_chg/pre_close/close]` + `shibor[1y]`
+
+`momentum`
+-> `daily[pct_chg/pre_close/close]` + `shibor[1y]`
+
+`size`
+-> `daily_basic[total_mv]`
+
+`earnyld`
+-> `income[n_income_attr_p]` + `cashflow[depr_fa_coga_dpba, amort_intang_assets]` + `daily_basic[total_mv]`
+
+`resvol`
+-> `daily[pct_chg/pre_close/close]` + `index_daily[pct_chg/pre_close/close]` + `shibor[1y]`
+
+`growth`
+-> `income[revenue, n_income_attr_p]`
+
+`btop`
+-> `balancesheet[total_hldr_eqy_exc_min_int]` + `daily_basic[total_mv]`
+
+`leverage`
+-> `balancesheet[lt_borr, st_borr, total_assets, total_liab, total_hldr_eqy_exc_min_int]` + `daily_basic[total_mv]`
+
+`liquidity`
+-> `daily[vol]` + `daily_basic[float_share]`
+
+`nlsize`
+-> `daily_basic[total_mv]`
+
+
+八、结论
+--------
+
+当前项目 Barra CNE5 因子计算真正依赖的 Tushare 原始表，只有：
+
+- `daily`
+- `daily_basic`
+- `income`
+- `cashflow`
+- `balancesheet`
+- `stock_basic`
+- `index_daily`
+- `index_weight`
+- `shibor`
+- `trade_cal`
+
+其中真正进入 10 个风格因子数值计算核心的字段，主要是：
+
+- 行情类：`pct_chg`, `pre_close`, `close`, `vol`
+- 市值流动性类：`total_mv`, `turnover_rate_f`, `turnover_rate`, `float_share`
+- 利润类：`n_income_attr_p`, `revenue`
+- 现金流类：`depr_fa_coga_dpba`, `amort_intang_assets`
+- 资产负债表类：`lt_borr`, `st_borr`, `total_assets`, `total_liab`, `total_hldr_eqy_exc_min_int`
+- 时间可见性类：`trade_date`, `end_date`, `f_ann_date`, `ann_date`, `date`
+- 股票状态类：`name`, `list_date`, `market`, `list_status`
+- 指数/日历类：`index_code`, `con_code`, `cal_date`, `is_open`

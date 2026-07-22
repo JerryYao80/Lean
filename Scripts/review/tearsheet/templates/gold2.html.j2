@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>Review: {{ run_meta.strategy_name }}</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:20px}
+.bar{height:20px;display:inline-block;vertical-align:bottom}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:4px}
+</style></head><body>
+<h1>{{ run_meta.strategy_name }} — Review (复盘)</h1>
+<p>Period: {{ run_meta.period_start }} → {{ run_meta.period_end }} | Generated: {{ run_meta.generated_at }}</p>
+<p>Total closed-trade PnL (gross): {{ run_meta.total_closed_trade_pnl }}</p>
+
+<h2>Layer Attribution</h2>
+{% for ln, v in layer_attribution.items() %}
+<div>{{ ln }}: {{ v.pnl_abs }} ({{ (v.pnl_pct_of_total*100)|round(1) }}%)
+<span class="bar" style="width:{{ (v.pnl_pct_of_total*200)|round(0) }}px;background:{% if v.pnl_abs|float > 0 %}green{% else %}red{% endif %}"></span>
+</div>
+{% endfor %}
+
+<h2>Per-Trade Narrative ({{ per_trade_narrative|length }} trades)</h2>
+<table><tr><th>ID</th><th>Symbol</th><th>Entry</th><th>Exit</th><th>Dir</th><th>PnL</th><th>Fees</th></tr>
+{% for t in per_trade_narrative %}
+<tr><td>{{ t.trade_id }}</td><td>{{ t.symbol }}</td><td>{{ t.entry_time }}</td><td>{{ t.exit_time }}</td>
+<td>{{ t.direction }}</td><td>{{ t.pnl }}</td><td>{{ t.fees }}</td></tr>
+{% endfor %}
+</table>
+
+{% if tca %}
+<h2>TCA</h2>
+<p>avg_slippage_bps={{ tca.avg_slippage_bps }} | fill_quality_score={{ tca.fill_quality_score }} | n_fills={{ tca.n_fills }} | source={{ tca.source }}</p>
+{% endif %}
+
+{% if drawdown_attribution %}
+<h2>Drawdown Attribution (top {{ drawdown_attribution|length }})</h2>
+<table><tr><th>Peak</th><th>Trough</th><th>Recovery</th><th>Depth</th></tr>
+{% for d in drawdown_attribution %}
+<tr><td>{{ d.peak_time }}</td><td>{{ d.trough_time }}</td><td>{{ d.recovery_time }}</td>
+<td>{{ (d.depth_pct*100)|round(2) }}%</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+</body></html>

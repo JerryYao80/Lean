@@ -1,0 +1,109 @@
+"""Gold2FeedbackAdapter — trigger + min_trades gate + shaping_overrides. Spec §3.2, §3.3.
+
+per-bar 下采样 (§3.3) 在 Task 5 实现;本 task 做触发器 + shaping_overrides + observation_fields 透传。
+"""
+from .base import StrategyFeedbackAdapter, FeedbackAction
+
+
+class Gold2FeedbackAdapter(StrategyFeedbackAdapter):
+    LAYERS = ["trend", "vol_target", "extreme_risk", "realrate_cap"]
+
+    def feedback_signal(self, manifest, review_doc, state_trace, layer_states=None):
+        fb = (manifest.raw if manifest else {}).get("feedback", {})
+        thresholds = fb.get("trigger_thresholds", {})
+        term_map = fb.get("shaping_term_map", {})
+        obs_fields = fb.get("observation_fields", [])
+
+        trigger, reasons = self._check_triggers(review_doc, thresholds, layer_states)
+        shaping = self._compute_shaping_overrides(review_doc, thresholds, term_map, layer_states)
+        per_bar = self._downsample_per_bar(state_trace) if state_trace else []
+
+        return FeedbackAction(
+            trigger=trigger,
+            trigger_reason="; ".join(reasons),
+            shaping_overrides=shaping,
+            observation_fields=obs_fields,
+            attribution_method=review_doc.get("run_meta", {}).get("attribution_method", "residual"),
+            per_bar_layer_contrib=per_bar,
+        )
+
+    def _check_triggers(self, review_doc, thresholds, layer_states=None):
+        """Spec §3.2 + §1.4: review_status=fail (hard) + layer_gap (gated by min_trades + per-layer mutex)."""
+        trigger = False
+        reasons = []
+        if review_doc.get("review_status") == "fail" and thresholds.get("review_status_fail", True):
+            trigger = True
+            reasons.append("review_status=fail")
+        n_trades = len(review_doc.get("per_trade_narrative", []))
+        min_trades = thresholds.get("min_narrative_trades", 20)
+        if n_trades < min_trades:
+            reasons.append(f"warn: n_trades={n_trades}<{min_trades}, layer_gap skipped (small-sample)")
+        else:
+            gap_thresh = thresholds.get("max_layer_attribution_gap", 0.15)
+            for layer, agg in review_doc.get("layer_attribution", {}).items():
+                # per-layer mutex: skip non-optimizing layers (§1.4)
+                ls = layer_states.get(layer) if layer_states else None
+                if ls and getattr(ls, "status", "optimizing") != "optimizing":
+                    continue
+                pct = abs(agg.get("pnl_pct_of_total", 0))
+                if pct > gap_thresh:
+                    trigger = True
+                    reasons.append(f"layer_gap {layer}={agg.get('pnl_pct_of_total')}>{gap_thresh}")
+        return trigger, reasons
+
+    def _compute_shaping_overrides(self, review_doc, thresholds, term_map, layer_states=None):
+        """Spec §3.3: weight = clamp(gap/threshold, 0.5, 3.0) for layers exceeding gap (skip non-optimizing)."""
+        shaping = {}
+        gap_thresh = thresholds.get("max_layer_attribution_gap", 0.15)
+        for layer, term in term_map.items():
+            # per-layer mutex: skip non-optimizing layers (§1.4)
+            ls = layer_states.get(layer) if layer_states else None
+            if ls and getattr(ls, "status", "optimizing") != "optimizing":
+                continue
+            agg = review_doc.get("layer_attribution", {}).get(layer, {})
+            gap = abs(agg.get("pnl_pct_of_total", 0))
+            if gap > gap_thresh:
+                weight = gap / gap_thresh
+                shaping[term] = max(0.5, min(weight, 3.0))
+        return shaping
+
+    def _downsample_per_bar(self, state_trace):
+        """Spec §3.3: per-bar telescoping layer contributions from state_trace.
+        For each bar transition t-1→t:
+          scale = tpv_t / close_{t-1}; dp = close_t - close_{t-1}
+          C_trend = w_trend * scale * dp
+          C_vol_target = (w_vol - w_trend) * scale * dp
+          C_extreme_risk = (w_ext - w_vol) * scale * dp
+          C_realrate = (w_real - w_ext) * scale * dp
+        """
+        if not state_trace or len(state_trace) < 2:
+            return []
+        per_bar = []
+        for i in range(1, len(state_trace)):
+            prev = state_trace[i - 1]
+            curr = state_trace[i]
+            try:
+                close_prev = float(prev["close"])
+                close_curr = float(curr["close"])
+                tpv = float(curr["tpv"])
+                if close_prev <= 0:
+                    continue
+                scale = tpv / close_prev
+                dp = close_curr - close_prev
+                dir_coef = float(curr.get("dir_coef", 1.0))
+                w_vol = float(curr.get("w_after_vol", 0.0))
+                extreme_triggered = bool(curr.get("extreme_triggered", False))
+                extreme_cap = float(curr.get("extreme_cap", 0.3))
+                realrate_cap = float(curr.get("realrate_cap", 0.6))
+                w_trend = dir_coef
+                w_ext = min(w_vol, extreme_cap) if extreme_triggered else w_vol
+                w_real = min(w_ext, realrate_cap)
+                per_bar.append({
+                    "trend": w_trend * scale * dp,
+                    "vol_target": (w_vol - w_trend) * scale * dp,
+                    "extreme_risk": (w_ext - w_vol) * scale * dp,
+                    "realrate_cap": (w_real - w_ext) * scale * dp,
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return per_bar

@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "review.json",
+  "type": "object",
+  "required": ["run_meta", "layer_attribution", "per_trade_narrative", "drawdown_attribution", "tca"],
+  "properties": {
+    "run_meta": {
+      "type": "object",
+      "required": ["strategy_name", "backtest_id", "period_start", "period_end", "total_closed_trade_pnl", "generated_at", "adapter_version", "schema_version"],
+      "properties": {
+        "strategy_name": {"type": "string"},
+        "backtest_id": {"type": "string"},
+        "period_start": {"type": "string"},
+        "period_end": {"type": "string"},
+        "total_closed_trade_pnl": {"type": "string"},
+        "generated_at": {"type": "string"},
+        "adapter_version": {"type": "string"},
+        "schema_version": {"type": "string"}
+      }
+    },
+    "layer_attribution": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["pnl_abs", "pnl_pct_of_total", "n_trades", "n_wins", "contribution_to_total_return"],
+        "properties": {
+          "pnl_abs": {"type": ["string", "number"]},
+          "pnl_pct_of_total": {"type": "number"},
+          "n_trades": {"type": "integer"},
+          "n_wins": {"type": "integer"},
+          "contribution_to_total_return": {"type": "number"}
+        }
+      }
+    },
+    "per_trade_narrative": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["trade_id", "symbol", "entry_time", "exit_time", "entry_price", "exit_price", "direction", "quantity", "pnl", "fees", "mae", "mfe", "end_trade_drawdown", "days_held", "layer_contributions"],
+        "properties": {
+          "trade_id": {"type": ["integer", "string"]},
+          "symbol": {"type": "string"},
+          "entry_time": {"type": "string"},
+          "exit_time": {"type": "string"},
+          "entry_price": {"type": ["string", "number"]},
+          "exit_price": {"type": ["string", "number"]},
+          "direction": {"type": "string", "enum": ["long", "short"]},
+          "quantity": {"type": ["string", "number"]},
+          "pnl": {"type": ["string", "number"]},
+          "fees": {"type": ["string", "number"]},
+          "mae": {"type": ["string", "number"]},
+          "mfe": {"type": ["string", "number"]},
+          "end_trade_drawdown": {"type": ["string", "number"]},
+          "days_held": {"type": "integer"},
+          "layer_contributions": {"type": "object"},
+          "entry_signal": {"type": "object"},
+          "regime_at_entry": {"type": "object"},
+          "insight_realized_vs_predicted": {"type": "object"}
+        }
+      }
+    },
+    "drawdown_attribution": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["peak_time", "trough_time", "depth_pct", "top_contributing_layers", "top_contributing_trades"],
+        "properties": {
+          "peak_time": {"type": "string"},
+          "trough_time": {"type": "string"},
+          "recovery_time": {"type": ["string", "null"]},
+          "depth_pct": {"type": "number"},
+          "top_contributing_layers": {"type": "array"},
+          "top_contributing_trades": {"type": "array"},
+          "regime_during": {"type": ["string", "null"]},
+          "regime_source": {"type": "string"}
+        }
+      }
+    },
+    "tca": {
+      "type": ["object", "null"],
+      "properties": {
+        "avg_slippage_bps": {"type": ["number", "null"]},
+        "fill_quality_score": {"type": ["number", "null"]},
+        "n_fills": {"type": "integer"},
+        "source": {"type": "string"}
+      }
+    }
+  }
+}
