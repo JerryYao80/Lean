@@ -182,9 +182,18 @@ def test_builder_join_five_tables_and_composite(tmp_path, monkeypatch):
             return sub
         return _reader
     def _make_adj_reader(frame):
+        # Mirror real read_adj_factor forward-fill semantics so the builder's
+        # adj_factor lookup behaves the same as production.
         def _reader(data_root, ts_code, trade_date):
-            sub = frame[(frame["ts_code"] == ts_code) & (frame["trade_date"].astype(str) == str(trade_date))]
-            return sub.copy()
+            sub = frame[frame["ts_code"] == ts_code] if "ts_code" in frame.columns else frame
+            if "trade_date" not in sub.columns:
+                return sub.copy()
+            target = str(trade_date)
+            exact = sub[sub["trade_date"].astype(str) == target]
+            if not exact.empty:
+                return exact.tail(1).copy()
+            prior = sub[sub["trade_date"].astype(str) <= target]
+            return prior.sort_values("trade_date").tail(1).copy() if not prior.empty else pd.DataFrame()
         return _reader
 
     monkeypatch.setattr(b, "read_daily_basic", _make_reader(synth["daily_basic"]))
@@ -249,8 +258,15 @@ def test_builder_cyq_missing_degrades_to_two_axes(tmp_path, monkeypatch):
         return _reader
     def _make_adj_reader(frame):
         def _reader(data_root, ts_code, trade_date):
-            sub = frame[(frame["ts_code"] == ts_code) & (frame["trade_date"].astype(str) == str(trade_date))]
-            return sub.copy()
+            sub = frame[frame["ts_code"] == ts_code] if "ts_code" in frame.columns else frame
+            if "trade_date" not in sub.columns:
+                return sub.copy()
+            target = str(trade_date)
+            exact = sub[sub["trade_date"].astype(str) == target]
+            if not exact.empty:
+                return exact.tail(1).copy()
+            prior = sub[sub["trade_date"].astype(str) <= target]
+            return prior.sort_values("trade_date").tail(1).copy() if not prior.empty else pd.DataFrame()
         return _reader
 
     monkeypatch.setattr(b, "read_daily_basic", _make_reader(synth["daily_basic"]))
@@ -271,3 +287,126 @@ def test_builder_cyq_missing_degrades_to_two_axes(tmp_path, monkeypatch):
     # 600519.SH still has all 3 axes
     high_row = out[out["ts_code"] == "600519.SH"].iloc[0]
     assert bool(high_row["degraded"]) is False
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Test 5: adj_factor forward-fills across date gaps (mirror ChipDataLoader)
+# ────────────────────────────────────────────────────────────────────────────
+def test_adj_factor_forward_fills_across_date_gap(tmp_path, monkeypatch):
+    """read_adj_factor returns latest row with trade_date <= target (not exact match).
+
+    Synthetic adj_factor has a date GAP: rows for 2024-01-01 (=1.0) and
+    2024-01-10 (=0.5). Querying 2024-01-05 (between the two) must return
+    factor 1.0 (prior), not 1.0 default or 0.5. Querying 2024-01-12 (after
+    the gap) must return 0.5. Asserts `cost_5pct_adj == cost_5pct * <prior>`.
+    """
+    import crowding_factor_builder as b
+
+    ts_code = "600519.SH"
+    # Two adj_factor rows with a gap (no row on the query date 2024-01-05)
+    adj_factor = pd.DataFrame([
+        {"ts_code": ts_code, "trade_date": "20240101", "adj_factor": 1.0},
+        {"ts_code": ts_code, "trade_date": "20240110", "adj_factor": 0.5},
+    ])
+
+    # cyq row on the query date with known cost_5pct so we can verify the
+    # applied factor = prior factor (1.0 for 2024-01-05, 0.5 for 2024-01-12)
+    cyq_20240105 = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240105",
+        "cost_5pct": 10.0, "cost_15pct": 10.5, "cost_50pct": 11.0,
+        "cost_85pct": 11.5, "cost_95pct": 12.0,
+        "weight_avg": 11.0, "winner_rate": 80.0,
+    }])
+    cyq_20240112 = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240112",
+        "cost_5pct": 10.0, "cost_15pct": 10.5, "cost_50pct": 11.0,
+        "cost_85pct": 11.5, "cost_95pct": 12.0,
+        "weight_avg": 11.0, "winner_rate": 80.0,
+    }])
+
+    daily_basic = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240105",
+        "turnover_rate": 0.05, "volume_ratio": 1.5, "close": 100.0,
+        "circ_mv": 1_000_000.0, "total_mv": 2_000_000.0,
+    }])
+    daily_basic_12 = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240112",
+        "turnover_rate": 0.05, "volume_ratio": 1.5, "close": 100.0,
+        "circ_mv": 1_000_000.0, "total_mv": 2_000_000.0,
+    }])
+    moneyflow = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240105",
+        "net_mf_amount": 1000.0, "buy_lg_amount": 0.0, "sell_lg_amount": 0.0,
+        "buy_elg_amount": 0.0, "sell_elg_amount": 0.0,
+    }])
+    moneyflow_12 = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240112",
+        "net_mf_amount": 1000.0, "buy_lg_amount": 0.0, "sell_lg_amount": 0.0,
+        "buy_elg_amount": 0.0, "sell_elg_amount": 0.0,
+    }])
+    margin = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240105",
+        "rzye": 1_000_000.0, "rqye": 0.0, "rzmre": 0.0,
+    }])
+    margin_12 = pd.DataFrame([{
+        "ts_code": ts_code, "trade_date": "20240112",
+        "rzye": 1_000_000.0, "rqye": 0.0, "rzmre": 0.0,
+    }])
+    hsgt = pd.DataFrame([{
+        "trade_date": "20240105", "ts_code": ts_code, "name": "x",
+        "vol": 0, "ratio": 5.0, "amount": 0.0, "net_amount": 0.0,
+    }])
+    hsgt_12 = pd.DataFrame([{
+        "trade_date": "20240112", "ts_code": ts_code, "name": "x",
+        "vol": 0, "ratio": 5.0, "amount": 0.0, "net_amount": 0.0,
+    }])
+
+    # First query: 2024-01-05 sits in the gap; expect adj_factor=1.0 (prior)
+    monkeypatch.setattr(b, "read_daily_basic", lambda dr, tc, td: daily_basic.copy())
+    monkeypatch.setattr(b, "read_moneyflow", lambda dr, tc, td: moneyflow.copy())
+    monkeypatch.setattr(b, "read_margin_detail", lambda dr, tc, td: margin.copy())
+    monkeypatch.setattr(b, "read_hsgt_top10", lambda dr, tc, td: hsgt.copy())
+    monkeypatch.setattr(b, "read_cyq_perf", lambda dr, tc, td: cyq_20240105.copy())
+    monkeypatch.setattr(b, "read_adj_factor", b.read_adj_factor)  # real forward-fill impl
+    monkeypatch.setattr(b, "write_influx", lambda lines, **kw: 0)
+    monkeypatch.setattr(b, "DEFAULT_RESULT_ROOT", str(tmp_path))
+    monkeypatch.setattr(b, "DEFAULT_TS_PATH", str(tmp_path))
+
+    # Write the synthetic adj_factor parquet so the real read_adj_factor can find it
+    adj_dir = tmp_path / "adj_factor" / f"ts_code={ts_code}"
+    adj_dir.mkdir(parents=True, exist_ok=True)
+    adj_factor.to_parquet(adj_dir / "data.parquet", index=False)
+
+    out_5 = b.build_day("2024-01-05", [ts_code])
+    assert len(out_5) == 1
+    row_5 = out_5.iloc[0]
+    # cost_5pct=10.0 * adj_factor=1.0 → cost_5pct_adj=10.0 (NOT 1.0 default)
+    # The builder does not emit raw cost_5pct_adj in the parquet, so verify
+    # indirectly: chip axis is non-NaN and composite computed using factor 1.0.
+    # To make the assertion direct, we re-derive via the row builder.
+    crowding_row = b._build_crowding_row(str(tmp_path), ts_code, "20240105")
+    assert crowding_row is not None
+    assert crowding_row["cost_5pct_adj"] == pytest.approx(10.0 * 1.0), (
+        f"2024-01-05 (gap): expected cost_5pct_adj=10.0 (factor=1.0 prior), "
+        f"got {crowding_row['cost_5pct_adj']}"
+    )
+    assert crowding_row["cost_95pct_adj"] == pytest.approx(12.0 * 1.0)
+    assert crowding_row["weight_avg_adj"] == pytest.approx(11.0 * 1.0)
+
+    # Second query: 2024-01-12 is after the second adj row; expect factor=0.5
+    monkeypatch.setattr(b, "read_daily_basic", lambda dr, tc, td: daily_basic_12.copy())
+    monkeypatch.setattr(b, "read_moneyflow", lambda dr, tc, td: moneyflow_12.copy())
+    monkeypatch.setattr(b, "read_margin_detail", lambda dr, tc, td: margin_12.copy())
+    monkeypatch.setattr(b, "read_hsgt_top10", lambda dr, tc, td: hsgt_12.copy())
+    monkeypatch.setattr(b, "read_cyq_perf", lambda dr, tc, td: cyq_20240112.copy())
+
+    out_12 = b.build_day("2024-01-12", [ts_code])
+    assert len(out_12) == 1
+    crowding_row_12 = b._build_crowding_row(str(tmp_path), ts_code, "20240112")
+    assert crowding_row_12 is not None
+    assert crowding_row_12["cost_5pct_adj"] == pytest.approx(10.0 * 0.5), (
+        f"2024-01-12 (after gap): expected cost_5pct_adj=5.0 (factor=0.5), "
+        f"got {crowding_row_12['cost_5pct_adj']}"
+    )
+    assert crowding_row_12["cost_95pct_adj"] == pytest.approx(12.0 * 0.5)
+    assert crowding_row_12["weight_avg_adj"] == pytest.approx(11.0 * 0.5)

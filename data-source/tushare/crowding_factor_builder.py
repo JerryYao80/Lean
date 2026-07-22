@@ -154,11 +154,25 @@ def read_cyq_perf(data_root: str, ts_code: str, trade_date: str) -> pd.DataFrame
 
 
 def read_adj_factor(data_root: str, ts_code: str, trade_date: str) -> pd.DataFrame:
-    """Adj_factor parquet for ts_code, filtered to trade_date (single-row)."""
+    """Adj_factor parquet for ts_code, forward-filled to the latest row with
+    `trade_date <= target` (single-row result).
+
+    Mirrors `ToolBox/ChipDataLoader.py:140-151._adj_factor_for` semantics:
+    exact match preferred; if no exact match, take the most recent row with
+    `trade_date <= target` (forward-fill across date gaps caused by splits /
+    dividends). Returns an empty DataFrame only if no prior row exists.
+    """
     df = _read_ts_code_parquet(data_root, "adj_factor", ts_code)
     if df.empty or "trade_date" not in df.columns:
         return df
-    return df[df["trade_date"].astype(str) == str(trade_date)].copy()
+    target = str(trade_date)
+    exact = df[df["trade_date"].astype(str) == target]
+    if not exact.empty:
+        return exact.tail(1).copy()
+    prior = df[df["trade_date"].astype(str) <= target]
+    if prior.empty:
+        return pd.DataFrame()
+    return prior.sort_values("trade_date").tail(1).copy()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -204,7 +218,12 @@ def _compute_davol20(daily_basic_full: pd.DataFrame, trade_date: str,
 
 def _compute_margin_growth(margin_full: pd.DataFrame, trade_date: str,
                             window: int = 5) -> float:
-    """5-day log change of margin_detail.rzye tail ending at trade_date."""
+    """5-day log change of margin_detail.rzye tail ending at trade_date.
+
+    NOTE: this is the *mean of daily log-returns* over the trailing window
+    (smoother than a single 5d log-change `log(rzye_t / rzye_{t-5})`),
+    chosen for stability. Returns 0.0 when there are fewer than 2 valid points.
+    """
     if margin_full.empty or "rzye" not in margin_full.columns:
         return 0.0
     df = margin_full.copy()
@@ -272,14 +291,16 @@ def _build_crowding_row(data_root: str, ts_code: str, trade_date_compact: str) -
     else:
         cyq_row = cyq_df.iloc[0]
 
-    # adj_factor for cyq cost 复权
+    # adj_factor for cyq cost 复权 — forward-filled to latest <= trade_date
+    # (mirror ToolBox/ChipDataLoader._adj_factor_for). read_adj_factor returns
+    # the prior row when an exact-match date is missing (e.g. split gap).
     adj_factor = 1.0
     if cyq_row is not None:
         adj_df = read_adj_factor(data_root, ts_code, trade_date_compact)
         if not adj_df.empty and "adj_factor" in adj_df.columns:
             adj_factor = _to_float(adj_df.iloc[0]["adj_factor"], default=1.0)
-        elif adj_df.empty:
-            # adj_factor parquet missing — assume 1.0 (no adjustment) but mark stale? No.
+        else:
+            # No adj_factor row on or before trade_date → assume 1.0 (no adjustment).
             adj_factor = 1.0
 
     # Assemble 9 expected fields for composite_crowding
