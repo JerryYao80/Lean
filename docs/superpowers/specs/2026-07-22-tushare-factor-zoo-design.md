@@ -268,20 +268,32 @@ factors:
 
 ## 6. 数据补齐清单 (诉求 1 核心产出)
 
-### 6.1 关键缺口 (验证中发现, 直接阻塞因子)
+### 6.1 关键缺口 (工作流审计确认 — 2026-07-22 实测)
+
+**审计方法**: pyarrow ParquetFile 元数据 + 定向日期列读取 (非全扫), 对照 `tushare-downloader/status.py` 与 `incremental_state.json`; 档位对照 tushare 文档 doc_id=290 主权限表。基准日 = 最新 `trade_cal is_open=1 ≤ 20260722`。
 
 | 缺口 | 影响 | 补齐动作 | 优先级 |
 |---|---|---|---|
-| `index_weight` 的 000905.SH (CSI500) 缺失 | ivol_20d/roe_change 等的横截面标准化宇宙、"CSI300+500" 约定本身 | tushare_worker 调度或 backfill 脚本增 000905.SH (+000852.SH 中证1000 备用) index_weight 下载 | P0 (前置) |
-| `cyq_perf`/`cyq_chips` 默认 disabled | crowding 因子筹码轴降级 | 迁 `tushare_cyq_worker` 到 supervisor (已有 `install_cyq_supervisor.sh`) 或保持 17:00 cron backfill | P1 |
-| `stock_basic` 缺 `list_status` 列 | accruals/gross_profitability 设计引用 | 重下载 stock_basic 含 list_status, 或弃用 (非必需, ST 用 name 过滤) — **采弃用** | P2 |
-| `namechange` 仅 ~10000 行 | 历史 ST 重建可能不全 | 全量分页回补 namechange | P2 |
+| `index_weight` 000905.SH (CSI500) 缺失 | ivol_20d/roe_change 横截面宇宙、"CSI300+500" 约定本身 | backfill 脚本增 000905.SH (+000852.SH 中证1000 备用) index_weight (2000 积分, 可下) | P0 (前置) |
+| **`index_daily` 全 CSI 基准卡在 20260616, 25 天缺口** | ivol_20d 市场模型回归无近期基准 → 因子动物园阻塞 | 强制 backfill index_daily (000300.SH/000905.SH 等) | P0 (前置) |
+| `margin_detail` 每标的 staleness 不均 (部分流动性名 2026-02) | crowding 筹码轴 margin_growth 子项 | 强制 backfill margin_detail 落后标的 | P0 |
+| 4 基本面 (income/balancesheet/cashflow/fina_indicator) `ann_date` 拉取停在 20260515 | accruals/gross_profitability/asset_growth/roe_change 的 PIT 锚点滞后 | backfill ann_date 增量 (end_date 已到 Q1-2026, 仅公告日未拉) | P0 |
+| `forecast`/`express`/`dividend`/`stk_holdertrade`/`pledge_stat` ~116-119 交易日 ann_date 缺口 | forward 因子族 (earnings_surprise/disclosure_timing/insider_trade/pledge_risk) 滞后 | backfill ann_date 增量 | P1 |
+| `cyq_perf`/`cyq_chips` registry disabled | crowding 筹码轴; 记忆要求用 cyq_perf 5 档非 cyq_chips | cyq_perf 现走 17:00 cron 旁路 (fresh 0721); cyq_chips 滞后 0702。**迁 `tushare_cyq_worker` 到 supervisor (已有 `install_cyq_supervisor.sh`), 主用 cyq_perf** | P1 |
+| 6 表轻度 STALE (3-4 交易日滞后): daily_basic/moneyflow/moneyflow_hsgt/hsgt_top10/hk_hold/limit_list_d | 因子输入略滞后 | incremental_scheduler 正在跑 (19:29 当日步完成), 隔夜自愈, 无需手动 | P3 (自愈) |
+| `stock_basic` 缺 `list_status` 列 | accruals/gross_profitability 设计引用 | **采弃用** (非必需, ST 用 `stock_basic.name` 过滤; 新上市用 `list_date`) | P2 |
+| `namechange` 仅 ~10000 行 (单页) | 历史 ST 重建不全 | 全量分页回补 namechange | P2 |
 
-### 6.2 全面覆盖审计 (待 workflow 审计 agent 收尾确认)
+### 6.2 15000 积分档核对结论 (工作流确认)
 
-完整审计 (173 接口的 NOT_DOWNLOADED/EMPTY/INCOMPLETE/STALE/DISABLED 清单 + 15000 档逐接口核对) 由 `Scripts/factor_zoo/audit_tushare_coverage.py` 在实现阶段产出。本 spec 确认的核心事实:
-- 15000 积分档下, §5 的 7 因子所需接口 (daily/daily_basic/adj_factor/income/balancesheet/cashflow/fina_indicator/index_daily/index_weight/namechange/stock_basic) 均 ≤2000 积分, 全部可下。
-- 超 15000 档的接口 (若有, 如 stk_mins/ft_mins 分钟线需 10000+) 已 disabled, 不在本批因子依赖内。
+- **15000 是 tushare 顶档** ("15000+ = special-data unlimited")。**没有任何按积分计费的接口需要 >15000 积分**。§5 的 7 因子所需接口均 ≤2000 积分, 全部可下。
+- **不能下的不是积分问题, 是独立付费权限 (与积分无关)**: HK 股 (hk_daily ¥1000/yr 等)、US 股 (us_daily ¥2000/yr 等)、stk_auction_o/c (集合竞价 ¥500/yr)、stk_premarket (盘前股本 ¥500/yr)。这些 120 分试用仅 ~2 次调用, 不可用于历史回补。**本批 7 因子不依赖任何独立付费接口**。
+- **超 15000 档的 disabled 接口**: stk_mins/ft_mins (分钟线, 需 10000+ 且独立权限), 不在本批因子依赖内。
+- **registry 命名 bug**: registry 的 `index_member` 应为 `index_member_all` (2000 积分, doc_id=335), 下载器会失败直到改名 — 实现阶段修正。
+
+### 6.3 完整审计产出 (实现阶段)
+
+173 接口的逐表 NOT_DOWNLOADED/EMPTY/INCOMPLETE/STALE/DISABLED 清单由 `Scripts/factor_zoo/audit_tushare_coverage.py` 复跑产出 (本 spec 已含上述实测结论的子集)。
 
 ## 7. 落地顺序 (实现计划骨架, 细节交 writing-plans)
 
