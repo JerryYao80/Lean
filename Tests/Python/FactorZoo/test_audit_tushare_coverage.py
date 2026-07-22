@@ -37,3 +37,42 @@ def test_audit_table_stale_returns_stale(tmp_path):
     assert report.status == CoverageStatus.STALE
     assert report.last_date == "20260101"
     assert report.rows == 1
+
+
+def test_audit_table_recent_returns_ok(tmp_path):
+    """A table whose last trade_date is within 10 calendar days of latest -> OK.
+
+    Locks the `> 10` threshold direction: 10 days back is OK, >10 is STALE.
+    20260712 is exactly 10 days before 20260722 -> OK.
+    """
+    import pyarrow as pa, pyarrow.parquet as pq
+    d = tmp_path / "daily" / "ts_code=600519.SH"
+    d.mkdir(parents=True)
+    tbl = pa.table({"ts_code": ["600519.SH"], "trade_date": ["20260712"], "close": [100.0]})
+    pq.write_table(tbl, d / "data.parquet")
+    report = audit_table("daily", data_root=str(tmp_path), latest_trade_date="20260722")
+    assert report.status == CoverageStatus.OK
+    assert report.last_date == "20260712"
+    assert report.rows == 1
+
+
+def test_audit_table_skips_corrupt_parquet_without_crashing(tmp_path):
+    """A non-parquet file named data.parquet must be skipped, not crash the run."""
+    import pyarrow as pa, pyarrow.parquet as pq
+    # one good file
+    good = tmp_path / "daily" / "ts_code=600519.SH"
+    good.mkdir(parents=True)
+    pq.write_table(
+        pa.table({"ts_code": ["600519.SH"], "trade_date": ["20260720"], "close": [100.0]}),
+        good / "data.parquet",
+    )
+    # one corrupt file (garbage bytes, but named data.parquet)
+    bad = tmp_path / "daily" / "ts_code=000001.SZ"
+    bad.mkdir(parents=True)
+    (bad / "data.parquet").write_bytes(b"not a parquet file at all")
+    # must not raise
+    report = audit_table("daily", data_root=str(tmp_path), latest_trade_date="20260722")
+    assert report.status == CoverageStatus.OK
+    assert report.last_date == "20260720"
+    assert report.rows == 1  # only the good file counted
+    assert report.partition_files == 1  # corrupt file skipped, not counted

@@ -24,6 +24,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 
@@ -64,34 +65,51 @@ def _iter_parquet_files(table_dir: Path):
         yield p
 
 
-def _extract_last_trade_date(table_dir: Path) -> Optional[str]:
-    """Scan parquet metadata + read only the date column to find the max date.
+# Date columns tried in order of preference.
+_DATE_COLS = ("trade_date", "cal_date", "ann_date", "f_ann_date", "end_date")
 
-    Tries common date columns: trade_date, cal_date, ann_date, f_ann_date, end_date.
-    Returns None if no rows or no date column.
+
+def _scan_table(table_dir: Path) -> tuple[int, Optional[str], int]:
+    """Single pass over parquet files: returns (total_rows, last_date, file_count).
+
+    Reads only metadata + the matched date column (never a full scan).
+    Corrupt/unreadable files are skipped silently — a single bad footer across
+    5000+ partition files will NOT abort the run.
     """
-    date_cols = ("trade_date", "cal_date", "ann_date", "f_ann_date", "end_date")
+    total_rows = 0
     last: Optional[str] = None
+    file_count = 0
     for f in _iter_parquet_files(table_dir):
-        pf = pq.ParquetFile(f)
-        if pf.metadata.num_rows == 0:
-            continue
-        schema_names = set(pf.schema_arrow.names)
-        col = next((c for c in date_cols if c in schema_names), None)
-        if col is None:
-            continue
+        # Open footer + read metadata/schema/date column in ONE try so a corrupt
+        # footer (pq.ParquetFile) or corrupt body (pf.read) skips just this file.
         try:
-            col_data = pf.read(columns=[col]).column(0).to_pylist()
+            pf = pq.ParquetFile(f)
+            n = pf.metadata.num_rows
+            total_rows += n
+            file_count += 1
+            if n == 0:
+                continue
+            schema_names = set(pf.schema_arrow.names)
+            col = next((c for c in _DATE_COLS if c in schema_names), None)
+            if col is None:
+                continue
+            col_data = pf.read(columns=[col]).column(0)
+        except Exception:
+            # corrupt footer / unreadable body — skip, keep the run alive
+            continue
+        # pc.max avoids materializing the full Python list; returns None on
+        # empty/all-null (we then leave `last` unchanged for this file).
+        try:
+            m = pc.max(col_data)
         except Exception:
             continue
-        for v in col_data:
-            if v is None:
-                continue
-            s = str(v)
-            if len(s) == 8 and s.isdigit():
-                if last is None or s > last:
-                    last = s
-    return last
+        if m is None:
+            continue
+        s = str(m.as_py())
+        if len(s) == 8 and s.isdigit():
+            if last is None or s > last:
+                last = s
+    return total_rows, last, file_count
 
 
 def audit_table(api_name: str, data_root: str, latest_trade_date: str) -> TableReport:
@@ -100,19 +118,13 @@ def audit_table(api_name: str, data_root: str, latest_trade_date: str) -> TableR
     if not table_dir.exists():
         return TableReport(api_name, CoverageStatus.NOT_DOWNLOADED)
 
-    files = list(_iter_parquet_files(table_dir))
-    if not files:
+    total_rows, last, file_count = _scan_table(table_dir)
+    if file_count == 0:
         return TableReport(api_name, CoverageStatus.EMPTY)
-
-    total_rows = 0
-    for f in files:
-        total_rows += pq.ParquetFile(f).metadata.num_rows
     if total_rows == 0:
         return TableReport(api_name, CoverageStatus.EMPTY, rows=0,
-                           last_date=_extract_last_trade_date(table_dir),
-                           partition_files=len(files))
+                           last_date=last, partition_files=file_count)
 
-    last = _extract_last_trade_date(table_dir)
     stale = False
     if last is not None:
         try:
@@ -123,7 +135,7 @@ def audit_table(api_name: str, data_root: str, latest_trade_date: str) -> TableR
 
     status = CoverageStatus.STALE if stale else CoverageStatus.OK
     return TableReport(api_name, status, rows=total_rows, last_date=last,
-                       partition_files=len(files))
+                       partition_files=file_count)
 
 
 # Tables the factor zoo depends on (spec §5 deps + §6 critical gaps).
@@ -147,10 +159,12 @@ def _resolve_latest_trade_date(data_root: str) -> str:
     """Use trade_cal max is_open=1 date <= today; fall back to today."""
     cal = _table_dir("trade_cal", data_root)
     if cal.exists():
-        import pandas as pd
         last: Optional[str] = None
         for f in _iter_parquet_files(cal):
-            df = pq.ParquetFile(f).read().to_pandas()
+            try:
+                df = pq.ParquetFile(f).read(columns=["cal_date", "is_open"]).to_pandas()
+            except Exception:
+                continue
             if "cal_date" in df.columns and "is_open" in df.columns:
                 open_dates = df.loc[df["is_open"].astype(str) == "1", "cal_date"].astype(str)
                 if not open_dates.empty:
