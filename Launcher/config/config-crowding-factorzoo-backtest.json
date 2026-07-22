@@ -1,0 +1,25 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "AShareCrowdingFactorZooStrategy",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+  "history-provider": "FallbackTushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": false,
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "parameters": {
+    "start-date": "2024-01-01",
+    "end-date": "2024-06-28",
+    "initial-cash": 1000000,
+    "dataRoot": "/home/project/tushare-downloader/tushare_data_v2",
+    "rootPath": "/home/project/hope/Lean",
+    "resultRoot": "/home/project/hope/Lean/result",
+    "lowQuantile": 0.30
+  }
+}

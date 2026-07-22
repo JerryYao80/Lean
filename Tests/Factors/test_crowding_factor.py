@@ -566,3 +566,69 @@ def test_crowding_alpha_uses_pythonnet_for_parquet():
     # SymbolToTsCode mirrors ChipPeak: 6/51 → .SH else .SZ.
     assert "SymbolToTsCode" in src
     assert ".SH" in src and ".SZ" in src
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Task 5: AShareCrowdingFactorZooStrategy + config
+# ────────────────────────────────────────────────────────────────────────────
+_STRATEGY_PATH = ROOT / "Algorithm.CSharp" / "AShareCrowdingFactorZooStrategy.cs"
+_CONFIG_PATH = ROOT / "Launcher" / "config" / "config-crowding-factorzoo-backtest.json"
+
+
+def test_strategy_wires_alpha_universe_execution():
+    """Plan Task 5: strategy wires CSI300 universe + Crowding AlphaModel + A-share
+    security initializer (BEFORE universe) + EqualWeightPortfolioModel.
+
+    Handoff from C-Task 3 review: AShareCSI300UniverseSelectionModel adds equities
+    as plain Equity (NOT AShareStock) → gets LEAN-default Fee/Fill/BuyingPower/
+    Settlement which is WRONG for A-shares. Strategy MUST call SetSecurityInitializer
+    BEFORE SetUniverseSelection to install A-share models on every universe-added
+    equity (mirror OptionVolArb5LayerStrategy AShareETFSecurityInitializer pattern
+    but for STOCKS: AShareStockFeeModel + AShareStockFillModel +
+    AShareStockBuyingPowerModel + DelayedSettlementModel(1, 09:00) for T+1).
+    """
+    src = _STRATEGY_PATH.read_text()
+    # Wires CSI300 universe (from C-Task 3).
+    assert "AShareCSI300UniverseSelectionModel" in src
+    # Wires Crowding AlphaModel (from C-Task 4).
+    assert "CrowdingFactorZooAlphaModel" in src
+    # A-share security initializer MUST be set BEFORE universe selection
+    # (handoff: AShareCSI300UniverseSelectionModel adds plain Equity, so the
+    # initializer is the only place to install A-share stock models).
+    assert "SetSecurityInitializer" in src
+    # Must come BEFORE SetUniverseSelection in source order.
+    init_idx = src.find("SetSecurityInitializer")
+    uni_idx = src.find("SetUniverseSelection")
+    assert init_idx != -1 and uni_idx != -1, "both SetSecurityInitializer and SetUniverseSelection must appear"
+    assert init_idx < uni_idx, (
+        "SetSecurityInitializer MUST appear before SetUniverseSelection so A-share "
+        "stock models are installed on every universe-added equity"
+    )
+    # A-share stock models for stocks (NOT ETF) — mirror AShareBarraCNE5Algorithm:201-204.
+    assert "AShareStockFeeModel" in src
+    assert "AShareStockFillModel" in src
+    assert "AShareStockBuyingPowerModel" in src
+    # T+1 settlement for stocks (1 day, 09:00) — mirror AShareBarraCNE5Algorithm:204.
+    assert "DelayedSettlementModel" in src
+    assert "TimeSpan.FromHours(9)" in src
+    # Equal weight portfolio construction (mirror OptionVolArbFactorZooStrategy).
+    assert "EqualWeightPortfolioModel" in src
+
+
+def test_config_points_to_strategy():
+    """Plan Task 5: config algorithm-type-name=AShareCrowdingFactorZooStrategy,
+    algorithm-language=CSharp, history-provider=FallbackTushareHistoryProvider,
+    parameters include dataRoot/resultRoot/lowQuantile (mirror option-vol-arb config)."""
+    import json
+
+    cfg = json.loads(_CONFIG_PATH.read_text())
+    assert cfg["algorithm-type-name"] == "AShareCrowdingFactorZooStrategy"
+    assert cfg["algorithm-language"] == "CSharp"
+    # Mirror option-vol-arb-factorzoo config: history provider.
+    assert cfg.get("history-provider") == "FallbackTushareHistoryProvider"
+    # Parameters must include the crowding-specific knobs (dataRoot, resultRoot,
+    # lowQuantile) so the strategy can pick them up via GetParameter.
+    params = cfg.get("parameters", {})
+    assert "dataRoot" in params or "data-root" in params or "dataRoot".lower() in {k.lower() for k in params}
+    assert "resultRoot" in params or "result-root" in params or "resultRoot".lower() in {k.lower() for k in params}
+    assert "lowQuantile" in params or "low-quantile" in params or "lowquantile".lower() in {k.lower() for k in params}
