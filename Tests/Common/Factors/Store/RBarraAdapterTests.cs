@@ -40,7 +40,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
         }
 
         [Test]
-        public void TryGet_MissingDate_ReturnsMissingNotThrow()
+        public void TryGet_PreDataDate_ReturnsMissingNotThrow()
         {
             var dir = Path.Combine(Path.GetTempPath(), "fz_barra_test2");
             if (Directory.Exists(dir)) Directory.Delete(dir, true);
@@ -49,9 +49,29 @@ namespace QuantConnect.Tests.Common.Factors.Store
             {
                 var adapter = new RBarraAdapter("beta", dataRoot: dir);
                 var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
-                var ok = adapter.TryGet(sym, new DateTime(2099, 1, 1), null, out var result);
+                // query a date BEFORE the first available row (20260721): forward-fill has no row <= this -> Missing
+                var ok = adapter.TryGet(sym, new DateTime(2025, 12, 31), null, out var result);
                 Assert.IsFalse(ok);
                 Assert.AreEqual(FactorDataQuality.Missing, result.Quality);
+            }
+            finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+        }
+
+        [Test]
+        public void TryGet_NonTradingDay_ForwardFillsToMostRecentPriorBar()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "fz_barra_test4");
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            WriteBarraCsv(dir, "600519", "sse");  // rows 20260721 (-0.04), 20260722 (-0.05)
+            try
+            {
+                var adapter = new RBarraAdapter("beta", dataRoot: dir);
+                var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+                // 2026-07-23 has no row; forward-fill must return 20260722's -0.05
+                var ok = adapter.TryGet(sym, new DateTime(2026, 7, 23), null, out var result);
+                Assert.IsTrue(ok);
+                Assert.AreEqual(-0.05m, result.Value);
+                Assert.AreEqual(FactorDataQuality.Valid, result.Quality);
             }
             finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
         }

@@ -57,7 +57,7 @@ namespace QuantConnect.Factors.Store
                 var parts = lines[i].Split(',');
                 if (parts.Length <= Math.Max(idxDate, idxCol)) continue;
                 var d = parts[idxDate].Trim();
-                if (string.CompareOrdinal(d, want) == 0) { bestValue = parts[idxCol].Trim(); break; }
+                if (string.CompareOrdinal(d, want) <= 0) { bestValue = parts[idxCol].Trim(); break; }
             }
             if (bestValue == null) return false;
             if (!decimal.TryParse(bestValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return false;
