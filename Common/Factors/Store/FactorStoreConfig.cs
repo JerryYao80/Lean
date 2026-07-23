@@ -24,6 +24,11 @@ namespace QuantConnect.Factors.Store
                 store.Register(fid, new RRegistryAdapter(fid));
             }
             // Task 3: Barra factors -> RBarraAdapter
+            var barraRoot = System.IO.Path.Combine(Globals.DataFolder, "alternative", "barra-cne5v2-factors");
+            foreach (var col in new[] { "beta","momentum","size","earnyld","resvol","growth","btop","leverage","liquidity","nlsize","moneyflow","quality","northbound","margin","chipcost" })
+            {
+                store.Register($"barra_{col}", new RBarraAdapter(col, barraRoot));
+            }
             // Task 4: parquet factors -> RParquetAdapter
         }
     }
