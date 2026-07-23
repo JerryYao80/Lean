@@ -2,6 +2,7 @@ using System;
 using NUnit.Framework;
 using QuantConnect.Algorithm.CSharp;
 using QuantConnect.Algorithm.CSharp.Models.Gold2;
+using QuantConnect.Factors.Forward;
 using QuantConnect.Tests.Engine.DataFeeds;
 
 namespace QuantConnect.Tests.Algorithm.Gold2
