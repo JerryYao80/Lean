@@ -93,7 +93,8 @@ def select_gaps(reports: list[TableReport],
     return BackfillPlan(latest_trade_date=latest_trade_date, targets=targets)
 
 
-def _run_incremental(targets: list[BackfillTarget], dry_run: bool) -> list[dict]:
+def _run_incremental(targets: list[BackfillTarget], dry_run: bool,
+                     timeout: int = 3600) -> list[dict]:
     """Invoke the existing IncrementalUpdater per-api for the incremental-refreshable set."""
     results = []
     apis = [t.api_name for t in targets if t.via == "incremental"]
@@ -109,14 +110,20 @@ def _run_incremental(targets: list[BackfillTarget], dry_run: bool) -> list[dict]
     if dry_run:
         print("[dry-run] would run:", " ".join(cmd))
         return [{"api": a, "dry_run": True} for a in apis]
-    proc = subprocess.run(cmd, cwd=DOWNLOADER_DIR, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, cwd=DOWNLOADER_DIR, capture_output=True, text=True,
+                              timeout=timeout or None)
+    except subprocess.TimeoutExpired:
+        return [{"api": a, "ok": False,
+                 "stderr_tail": f"TIMEOUT after {timeout}s"} for a in apis]
     ok = proc.returncode == 0
     for a in apis:
         results.append({"api": a, "ok": ok, "stderr_tail": (proc.stderr or "")[-300:]})
     return results
 
 
-def _run_cyq(targets: list[BackfillTarget], dry_run: bool) -> list[dict]:
+def _run_cyq(targets: list[BackfillTarget], dry_run: bool,
+             timeout: int = 3600) -> list[dict]:
     """Invoke the existing backfill_cyq.py for cyq_perf/cyq_chips."""
     results = []
     apis = [t.api_name for t in targets if t.via == "cyq"]
@@ -131,7 +138,12 @@ def _run_cyq(targets: list[BackfillTarget], dry_run: bool) -> list[dict]:
     if dry_run:
         print("[dry-run] would run:", " ".join(cmd))
         return [{"api": a, "dry_run": True} for a in apis]
-    proc = subprocess.run(cmd, cwd=DOWNLOADER_DIR, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, cwd=DOWNLOADER_DIR, capture_output=True, text=True,
+                              timeout=timeout or None)
+    except subprocess.TimeoutExpired:
+        return [{"api": a, "ok": False,
+                 "stderr_tail": f"TIMEOUT after {timeout}s"} for a in apis]
     ok = proc.returncode == 0
     for a in apis:
         results.append({"api": a, "ok": ok, "stderr_tail": (proc.stderr or "")[-300:]})
@@ -145,6 +157,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print plan + commands, don't run")
     ap.add_argument("--api", default=None, help="comma list; default = all STALE/EMPTY from audit")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--timeout", type=int, default=3600,
+                    help="seconds per subprocess call; 0 = no timeout")
     args = ap.parse_args(argv)
 
     latest = args.latest_trade_date or _resolve_latest_trade_date(args.data_root)
@@ -161,8 +175,8 @@ def main(argv=None) -> int:
         _run_cyq(plan.targets, dry_run=True)
         return 0
 
-    inc_results = _run_incremental(plan.targets, dry_run=False)
-    cyq_results = _run_cyq(plan.targets, dry_run=False)
+    inc_results = _run_incremental(plan.targets, dry_run=False, timeout=args.timeout)
+    cyq_results = _run_cyq(plan.targets, dry_run=False, timeout=args.timeout)
     if args.json:
         print(json.dumps({"incremental": inc_results, "cyq": cyq_results},
                           ensure_ascii=False, indent=2))

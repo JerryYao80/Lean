@@ -1,13 +1,15 @@
 """Tests for backfill_gaps.py gap selection (spec §6 remediation)."""
+import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 # test file lives at Tests/Python/FactorZoo/test_*.py so parents[3] is repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "Scripts"))
 
 from factor_zoo.audit_tushare_coverage import TableReport, CoverageStatus
-from factor_zoo.backfill_gaps import select_gaps, BackfillPlan, BackfillTarget
+from factor_zoo.backfill_gaps import select_gaps, BackfillPlan, BackfillTarget, _run_incremental
 
 
 def _report(api, status, last_date=None):
@@ -50,3 +52,23 @@ def test_select_gaps_empty_table_uses_bootstrap_window():
     t = plan.targets[0]
     assert t.start_date is not None  # bootstrap window computed
     assert t.end_date == "20260722"
+
+
+def test_run_incremental_timeout_marks_batch_failed():
+    """If subprocess.run raises TimeoutExpired, every API in the batch is marked failed."""
+    targets = [
+        BackfillTarget(api_name="income", start_date="20260515",
+                       end_date="20260722", via="incremental"),
+        BackfillTarget(api_name="balancesheet", start_date="20260515",
+                       end_date="20260722", via="incremental"),
+    ]
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=kwargs.get("cmd") or args[0],
+                                        timeout=kwargs.get("timeout", 3600))
+    with patch("factor_zoo.backfill_gaps.subprocess.run",
+               side_effect=_raise_timeout):
+        results = _run_incremental(targets, dry_run=False, timeout=3600)
+    assert len(results) == 2
+    for r in results:
+        assert r["ok"] is False
+        assert "TIMEOUT" in r["stderr_tail"]
