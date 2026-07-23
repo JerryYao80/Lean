@@ -19,6 +19,10 @@ namespace QuantConnect.Factors.Store
         {
             FactorRegistry.Initialize();
             // Task 2: Runtime factors -> RRegistryAdapter
+            foreach (var fid in new[] { "hv_20d", "momentum_20d", "ma_cross_5_20", "rsi_14d", "amihud_20d", "iv_hv_spread" })
+            {
+                store.Register(fid, new RRegistryAdapter(fid));
+            }
             // Task 3: Barra factors -> RBarraAdapter
             // Task 4: parquet factors -> RParquetAdapter
         }
