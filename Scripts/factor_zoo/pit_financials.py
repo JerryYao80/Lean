@@ -25,16 +25,34 @@ _ANNOUNCE_FIELDS = ("f_ann_date", "ann_date")
 _END_DATE_FIELD = "end_date"
 _REPORT_TYPE_FIELD = "report_type"
 _END_TYPE_FIELD = "end_type"
+# Columns always needed for PIT filtering/selection, alongside the caller's
+# value_col. Used for parquet column projection (Minor #3) so we don't read
+# all ~90 balancesheet columns per stock.
+_BASE_COLS = ("ts_code", "end_date", "f_ann_date", "ann_date",
+             "report_type", "end_type")
 
 
 def _table_dir(api_name: str, data_root: str) -> Path:
     return Path(data_root) / api_name
 
 
-def _read_all_partitions(table_dir: Path) -> pd.DataFrame:
+def _read_all_partitions(table_dir: Path, value_col: str) -> pd.DataFrame:
+    """Read all data.parquet partitions under table_dir.
+
+    Robust to a single corrupt partition (try/except -> skip), mirroring the
+    Task 1/2 corrupt-file resilience pattern. Uses column projection so only
+    the value_col + PIT-filter columns are materialized (not all ~90).
+    """
     frames = []
     for f in table_dir.rglob("data.parquet"):
-        df = pq.ParquetFile(f).read().to_pandas()
+        try:
+            pf = pq.ParquetFile(f)
+            cols = [c for c in (value_col, *_BASE_COLS)
+                    if c in pf.schema_arrow.names]
+            df = pf.read(columns=cols).to_pandas()
+        except Exception:
+            # Skip corrupt/unreadable partition (mirrors Task 1/2 fix).
+            continue
         if not df.empty:
             frames.append(df)
     if not frames:
@@ -58,7 +76,7 @@ def load_pit_annual(api_name: str, ts_code: str, asof: str,
     table_dir = _table_dir(api_name, data_root) / f"ts_code={ts_code}"
     if not table_dir.exists():
         table_dir = _table_dir(api_name, data_root)
-    df = _read_all_partitions(table_dir)
+    df = _read_all_partitions(table_dir, value_col)
     if df.empty:
         return None
     if "ts_code" in df.columns:
@@ -80,8 +98,14 @@ def load_pit_annual(api_name: str, ts_code: str, asof: str,
     row = df.sort_values(_END_DATE_FIELD).iloc[-1]
     if value_col not in row.index:
         return None
-    out = {c: row[c] for c in row.index if c == value_col or c in
-           (_END_DATE_FIELD, ann_col, _REPORT_TYPE_FIELD, _END_TYPE_FIELD)}
+    out = {}
+    for c in row.index:
+        if c == value_col:
+            v = row[c]
+            # Coerce np.float64 -> native float (Minor #4); leave None/NaN as-is.
+            out[c] = float(v) if v is not None else v
+        elif c in (_END_DATE_FIELD, ann_col, _REPORT_TYPE_FIELD, _END_TYPE_FIELD):
+            out[c] = row[c]
     return out
 
 
