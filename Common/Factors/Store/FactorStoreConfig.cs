@@ -30,6 +30,7 @@ namespace QuantConnect.Factors.Store
                 store.Register($"barra_{col}", new RBarraAdapter(col, barraRoot));
             }
             // Task 4: parquet factors -> RParquetAdapter
+            store.Register("crowding", new RParquetAdapter("crowding-factor", "composite"));
         }
     }
 }
