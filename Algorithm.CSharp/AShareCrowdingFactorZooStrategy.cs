@@ -54,6 +54,7 @@ using QuantConnect.Algorithm.Framework.Risk;
 using QuantConnect.Algorithm.Framework.Selection;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.Fills;
+using QuantConnect.Python;
 using QuantConnect.Securities;
 
 namespace QuantConnect.Algorithm.CSharp
@@ -67,13 +68,17 @@ namespace QuantConnect.Algorithm.CSharp
         public override void Initialize()
         {
             // 回测窗口 + 资金 (默认可被 config parameters 覆盖).
+            // NOTE: SetAccountCurrency MUST come before SetCash — LEAN throws
+            // "Cannot change AccountCurrency after setting cash" otherwise
+            // (SecurityPortfolioManager.cs:650). Mirrors AShareBarraCNE5Algorithm
+            // init order.
             SetStartDate(GetDateParameter("start-date", new DateTime(2024, 1, 1)));
             SetEndDate(GetDateParameter("end-date", new DateTime(2024, 6, 28)));
-            SetCash(GetDecimalParameter("initial-cash", 1000000m));
 
             // A股账户: CNY 计价, 上海时区.
             SetAccountCurrency(Currencies.CNY);
-            SetTimeZone("Asia/Shanghai");
+            SetCash(GetDecimalParameter("initial-cash", 1000000m));
+            SetTimeZone(TimeZones.Shanghai);
             SetBenchmark(x => 0m);
 
             // 允许小单 (等权 300 只时单笔占比可能极小).
@@ -84,6 +89,17 @@ namespace QuantConnect.Algorithm.CSharp
             // 添加 plain Equity (默认模型对 A股错). 此 initializer 在每只 security
             // 添加时回调, 为 SSE/SZSE Equity 安装 A股股票模型.
             SetSecurityInitializer(new AShareStockSecurityInitializer());
+
+            // CRITICAL: Initialize the Python runtime BEFORE SetUniverseSelection/SetAlpha.
+            // Both AShareCSI300UniverseSelectionModel and CrowdingFactorZooAlphaModel use
+            // pythonnet (Py.GIL) to read parquet via pandas and to load
+            // barra_cne5_data_loader. For C# algorithms, LEAN does NOT auto-initialize
+            // PythonEngine (only Python algorithms get that via Loader.cs:171). Without
+            // this call, the first Py.GIL() in CreateUniverses (called from
+            // FrameworkPostInitialize) crashes the process with a native segfault — no
+            // exception, no stack trace, just exit 139. PythonInitializer.Initialize is
+            // idempotent (guarded by _isInitialized).
+            PythonInitializer.Initialize();
 
             // === LEAN Native Five-Layer Architecture ===
 

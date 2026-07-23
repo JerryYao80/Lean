@@ -166,7 +166,11 @@ namespace QuantConnect.Algorithm.CSharp.UniverseSelection
                 var rootPy = root.ToPython();
                 if (!path.__contains__(rootPy).__bool__())
                 {
-                    path.invoke("insert", 0, rootPy);
+                    // sys.path is a Python list — call its .insert() method directly
+                    // (pythonnet dispatches list.insert(0, item) natively). The previous
+                    // path.invoke("insert", ...) form treated `path` as a method object,
+                    // which raises "'list' object has no attribute 'invoke'".
+                    path.insert(0, rootPy);
                 }
 
                 // barra_cne5_data_loader.py is at <root>/data-source/tushare/ — insert
@@ -175,7 +179,7 @@ namespace QuantConnect.Algorithm.CSharp.UniverseSelection
                 var tusharePy = tushareDir.ToPython();
                 if (!path.__contains__(tusharePy).__bool__())
                 {
-                    path.invoke("insert", 0, tusharePy);
+                    path.insert(0, tusharePy);
                 }
 
                 dynamic importlib = Py.Import("importlib.util");
@@ -184,6 +188,17 @@ namespace QuantConnect.Algorithm.CSharp.UniverseSelection
                 dynamic spec = importlib.spec_from_file_location(
                     "barra_cne5_data_loader", loaderPath);
                 dynamic mod = importlib.module_from_spec(spec);
+
+                // CRITICAL: Register the module in sys.modules BEFORE exec_module.
+                // Without this, @dataclass(frozen=True) at line 10 of
+                // barra_cne5_data_loader.py fails during exec_module with
+                // "'NoneType' object has no attribute '__dict__'" because the
+                // dataclass decorator calls sys.modules.get(cls.__module__).__dict__
+                // and the module isn't in sys.modules yet (pythonnet's
+                // module_from_spec does not auto-register).
+                dynamic sys2 = Py.Import("sys");
+                sys2.modules.__setitem__("barra_cne5_data_loader", mod);
+
                 spec.loader.exec_module(mod);
 
                 _loader = mod.BarraCNE5DataLoader(_dataRoot);

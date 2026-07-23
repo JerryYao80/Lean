@@ -16,10 +16,10 @@
   "parameters": {
     "start-date": "2024-01-01",
     "end-date": "2024-06-28",
-    "initial-cash": 1000000,
+    "initial-cash": "1000000",
     "dataRoot": "/home/project/tushare-downloader/tushare_data_v2",
     "rootPath": "/home/project/hope/Lean",
     "resultRoot": "/home/project/hope/Lean/result",
-    "lowQuantile": 0.30
+    "lowQuantile": "0.30"
   }
 }

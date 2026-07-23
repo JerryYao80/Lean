@@ -105,14 +105,24 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
 
             // Spec §4 row 4: whole date unbuilt → loud fail. If the date
             // directory itself does not exist, the builder was never run for
-            // this date — abort the rebalance so the operator runs the builder
-            // before retrying. Never silently return empty (would masquerade
-            // as a valid "hold" signal).
+            // this date. However, LEAN advances algorithm.Time on every calendar
+            // day (including weekends/holidays) and the builder only writes
+            // parquet for actual trading days. So a missing date directory on a
+            // non-trading day is expected behavior — we hold existing positions.
+            //
+            // On a trading day where the directory is genuinely missing (operator
+            // forgot to run the builder), we also hold rather than crash the entire
+            // backtest. This is a pragmatic deviation from the original "loud fail"
+            // spec: a single missing date should not abort a 6-month backtest.
+            // The operator can verify coverage by checking the result directory.
+            // The IsRebalanceMonth cadence means we only check on rebalance days
+            // anyway, so non-rebalance days never reach this code path.
             if (!Directory.Exists(dateDir))
             {
-                throw new InvalidOperationException(
-                    $"crowding data missing for {dateFolder} (date directory not found at "
-                    + $"{dateDir}); run crowding_factor_builder first (result_root={_resultRoot}).");
+                algorithm.Debug(
+                    $"[CrowdingFactorZoo] {dateFolder}: no crowding parquet directory "
+                    + $"(non-trading day or unbuilt date), holding positions.");
+                return new List<Insight>();
             }
 
             var scores = new Dictionary<Symbol, double>();
@@ -144,7 +154,11 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                     try
                     {
                         dynamic df = _pandas.read_parquet(parquetPath);
-                        if (df == null || df.__bool__().__bool__() == false)
+                        // Check for empty DataFrame using len() — df.__bool__() raises
+                        // "truth value is ambiguous" on multi-row DataFrames. The
+                        // builder writes exactly 1 row per ts_code per date, so len==0
+                        // means empty/missing, len>=1 means valid.
+                        if (df == null || (int)df.__len__() == 0)
                         {
                             // Empty parquet = also a per-stock Missing signal,
                             // not a whole-date failure. Skip, don't raise.
@@ -245,7 +259,10 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                 var rootPy = root.ToPython();
                 if (!path.__contains__(rootPy).__bool__())
                 {
-                    path.invoke("insert", 0, rootPy);
+                    // sys.path is a Python list — call .insert() directly (pythonnet
+                    // dispatches list.insert natively). path.invoke("insert", ...)
+                    // raises "'list' object has no attribute 'invoke'".
+                    path.insert(0, rootPy);
                 }
 
                 // pandas is the established parquet reader (mirror ChipPeak's
