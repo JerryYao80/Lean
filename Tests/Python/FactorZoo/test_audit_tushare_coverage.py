@@ -7,7 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "Scripts"))
 
-from factor_zoo.audit_tushare_coverage import audit_table, CoverageStatus
+from factor_zoo.audit_tushare_coverage import audit_table, CoverageStatus, _resolve_latest_trade_date
 
 
 def test_audit_table_missing_dir_returns_not_downloaded(tmp_path):
@@ -76,3 +76,27 @@ def test_audit_table_skips_corrupt_parquet_without_crashing(tmp_path):
     assert report.last_date == "20260720"
     assert report.rows == 1  # only the good file counted
     assert report.partition_files == 1  # corrupt file skipped, not counted
+
+
+def test_resolve_latest_trade_date_excludes_future_dates(tmp_path):
+    """trade_cal is pre-populated for the full year with is_open=1 even on
+    FUTURE dates. _resolve_latest_trade_date must filter cal_date <= today
+    before taking the max, otherwise it returns a future date (e.g. 20261231)
+    and misdiagnoses fresh tables as STALE.
+
+    Synthetic trade_cal has a past open date (20260720) and a future open
+    date (20261231). For any run-date in (20260720, 20261231) the function
+    must return 20260720 (latest PAST open date), not 20261231.
+    """
+    import pyarrow as pa, pyarrow.parquet as pq
+    d = tmp_path / "trade_cal"
+    d.mkdir(parents=True)
+    tbl = pa.table({
+        "cal_date": ["20260720", "20261231"],
+        "is_open": [1, 1],
+    })
+    pq.write_table(tbl, d / "data.parquet")
+    resolved = _resolve_latest_trade_date(str(tmp_path))
+    assert resolved == "20260720", (
+        f"expected future date 20261231 to be filtered out, got {resolved}"
+    )

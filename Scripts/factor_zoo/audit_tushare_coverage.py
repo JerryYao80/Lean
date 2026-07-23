@@ -166,7 +166,11 @@ def _resolve_latest_trade_date(data_root: str) -> str:
             except Exception:
                 continue
             if "cal_date" in df.columns and "is_open" in df.columns:
-                open_dates = df.loc[df["is_open"].astype(str) == "1", "cal_date"].astype(str)
+                today = dt.date.today().strftime("%Y%m%d")
+                open_dates = df.loc[
+                    (df["is_open"].astype(str) == "1") & (df["cal_date"].astype(str) <= today),
+                    "cal_date",
+                ].astype(str)
                 if not open_dates.empty:
                     m = open_dates.max()
                     last = m if (last is None or m > last) else last

@@ -19,7 +19,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import sys
 from dataclasses import dataclass, field
@@ -27,6 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
+
+from factor_zoo.audit_tushare_coverage import _resolve_latest_trade_date
 
 
 def _table_dir(api_name: str, data_root: str) -> Path:
@@ -130,22 +131,6 @@ def resolve_universe(index_codes: list[str], data_root: str, asof: str) -> Unive
         overlap_count=overlap,
         unresolved=unresolved,
     )
-
-
-def _resolve_latest_trade_date(data_root: str) -> str:
-    cal = _table_dir("trade_cal", data_root)
-    if cal.exists():
-        last = None
-        for f in cal.rglob("data.parquet"):
-            df = _read_partition_file(f, columns=["cal_date", "is_open"])
-            if "cal_date" in df.columns and "is_open" in df.columns:
-                open_dates = df.loc[df["is_open"].astype(str).isin({"1", "True", "true"}), "cal_date"].astype(str)
-                if not open_dates.empty:
-                    m = open_dates.max()
-                    last = m if (last is None or m > last) else last
-        if last:
-            return last
-    return dt.date.today().strftime("%Y%m%d")
 
 
 def main(argv=None) -> int:
