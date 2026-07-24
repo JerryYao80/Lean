@@ -52,5 +52,40 @@ namespace QuantConnect.Factors.Store
         {
             return FactorRegistry.AllMetadata();
         }
+
+        /// <summary>Best-effort freshness: factor_id -> last available date (null if unknown/Runtime).</summary>
+        public IReadOnlyDictionary<string, DateTime?> FreshnessReport()
+        {
+            var rep = new Dictionary<string, DateTime?>();
+            List<KeyValuePair<string, IFactorAdapter>> snapshot;
+            lock (_lock) { snapshot = new List<KeyValuePair<string, IFactorAdapter>>(_adapters); }
+            foreach (var kv in snapshot)
+            {
+                if (kv.Value is RParquetAdapter pa)
+                {
+                    rep[kv.Key] = ParquetFreshness(pa);
+                }
+                else
+                {
+                    rep[kv.Key] = null; // CSV/Runtime: not resolvable at store level
+                }
+            }
+            return rep;
+        }
+
+        private static DateTime? ParquetFreshness(RParquetAdapter pa)
+        {
+            var (factorRoot, resultRoot) = pa.Describe();
+            var dir = System.IO.Path.Combine(resultRoot, factorRoot);
+            if (!System.IO.Directory.Exists(dir)) return null;
+            DateTime best = DateTime.MinValue;
+            foreach (var sub in System.IO.Directory.GetDirectories(dir))
+            {
+                var name = System.IO.Path.GetFileName(sub);
+                if (DateTime.TryParseExact(name, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var d) && d > best) best = d;
+            }
+            return best == DateTime.MinValue ? null : best;
+        }
     }
 }
