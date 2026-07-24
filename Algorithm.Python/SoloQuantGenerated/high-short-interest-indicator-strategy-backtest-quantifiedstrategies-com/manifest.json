@@ -1,0 +1,28 @@
+{
+  "strategy_id": "high-short-interest-indicator-strategy-backtest-quantifiedstrategies-com",
+  "class_name": "SoloQuantGeneratedShortInterestAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/high-short-interest-indicator-strategy-backtest-quantifiedstrategies-com/SoloQuantGeneratedShortInterestAlgorithm.py.broken",
+  "description": "A股复现草案：基于高卖空兴趣指标的多空策略。由于受限环境无法获取外部卖空数据，本草案使用 RelativeStrengthIndex (RSI) 作为代理指标来模拟排序逻辑（低RSI做多，高RSI做空），以展示策略架构。策略遵循A股T+1交易规则、涨跌停限制及最小交易单位100股的约束。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/high-short-interest-indicator-strategy-backtest-quantifiedstrategies-com/SoloQuantGeneratedShortInterestAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-11f2682087d8ac5e.json",
+  "parameters": {
+    "start_date": "2021-01-01",
+    "end_date": "2023-12-31",
+    "initial_capital": "1000000",
+    "universe": "600519.SSE, 000858.SZSE, 600036.SSE, 000001.SZSE, 600276.SSE"
+  },
+  "risk_controls": [
+    "Max Drawdown Stop: Liquidate all if portfolio drops 10% from peak",
+    "Trailing Stop: Liquidate position if unrealized profit drops below -5%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A-Share Equity Price",
+      "field": "Daily OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T03:48:06.043753+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

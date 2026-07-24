@@ -1,0 +1,166 @@
+Barra China Equity Model (CNE5) - Complete Descriptor Definitions
+==================================================================
+
+STYLE FACTOR 1: Beta
+--------------------
+Definition: 1.00 · BETA
+
+BETA (β):
+- Time-series regression of excess stock return (r_t - rf_t) against cap-weighted excess return of universe R_t
+- Formula: r_t - rf_t = α + β·R_t + e_t
+- Lookback: 252 trading days
+- Half-life: 63 trading days
+
+
+STYLE FACTOR 2: Momentum
+------------------------
+Definition: 1.00 · RSTR
+
+RSTR (Relative Strength):
+- Sum of excess log returns over trailing T=504 trading days with lag L=21 days
+- Formula: RSTR = Σ(t=L to T+L) w_t · [ln(1+r_t) - ln(1+rf_t)]
+- Exponential weight half-life: 126 trading days
+
+
+STYLE FACTOR 3: Size
+--------------------
+Definition: 1.00 · LNCAP
+
+LNCAP (Natural log of market cap):
+- ln(total market capitalization)
+
+
+STYLE FACTOR 4: Earnings Yield
+-------------------------------
+Definition: 0.68 · EPIBS + 0.11 · ETOP + 0.21 · CETOP
+
+EPIBS (Analyst Predicted Earnings-to-Price):
+- Earnings-to-price ratio forecasted by analysts
+
+ETOP (Trailing Earnings-to-Price):
+- Trailing 12-month earnings / current market cap
+- Trailing earnings = last fiscal year earnings + (current interim - previous year interim)
+
+CETOP (Cash Earnings-to-Price):
+- Cash earnings / market cap
+- Cash earnings = earnings + depreciation + amortization
+
+
+STYLE FACTOR 5: Residual Volatility
+------------------------------------
+Definition: 0.74 · DASTD + 0.16 · CMRA + 0.10 · HSIGMA
+
+DASTD (Daily Standard Deviation):
+- Standard deviation of daily returns over trailing 252 trading days
+- Exponential weight half-life: 42 trading days
+
+CMRA (Cumulative Range):
+- ln(1 + max cumulative return) - ln(1 + min cumulative return)
+- Measured over trailing 12 months
+
+HSIGMA (Historical Sigma):
+- Volatility of residual returns from factor model
+- Computed from trailing 252 trading days
+- Exponential weight half-life: 63 trading days
+
+
+STYLE FACTOR 6: Growth
+-----------------------
+Definition: 0.18 · SGRO + 0.24 · EGRO + 0.47 · EGIBS + 0.11 · EGIBS_s
+
+SGRO (Sales Growth):
+- 5-year regression slope of log sales against time
+- Requires at least 3 years of data
+
+EGRO (Earnings Growth):
+- 5-year regression slope of log earnings against time
+- Requires at least 3 years of data
+
+EGIBS (Predicted Earnings Growth):
+- Analyst predicted long-term earnings growth rate
+
+EGIBS_s (Short-term Predicted Earnings Growth):
+- (FY2 predicted EPS - FY1 predicted EPS) / |FY1 predicted EPS|
+
+
+STYLE FACTOR 7: Book-to-Price
+------------------------------
+Definition: 1.00 · BTOP
+
+BTOP (Book-to-Price):
+- Book value of common equity / market cap
+
+
+STYLE FACTOR 8: Leverage
+-------------------------
+Definition: 0.38 · MLEV + 0.35 · DTOA + 0.27 · BLEV
+
+MLEV (Market Leverage):
+- (Market equity + preferred equity + long-term debt + short-term debt) / market equity
+
+DTOA (Debt-to-Assets):
+- Total debt / total assets
+
+BLEV (Book Leverage):
+- (Book equity + preferred equity + long-term debt + short-term debt) / book equity
+
+
+STYLE FACTOR 9: Liquidity
+--------------------------
+Definition: 0.35 · STOM + 0.35 · STOQ + 0.30 · STOA
+
+STOM (Share Turnover 1 Month):
+- ln(monthly trading volume / shares outstanding)
+- Trailing 1 month
+
+STOQ (Share Turnover 1 Quarter):
+- ln(quarterly trading volume / shares outstanding)
+- Trailing 3 months
+
+STOA (Share Turnover 1 Year):
+- ln(annual trading volume / shares outstanding)
+- Trailing 12 months
+
+
+STYLE FACTOR 10: Non-linear Size
+---------------------------------
+Definition: 1.00 · NLSIZE
+
+NLSIZE (Non-linear Size):
+- Cube of size factor after orthogonalization
+- NLSIZE = (LNCAP)³ after removing correlation with LNCAP
+
+
+DATA REQUIREMENTS SUMMARY
+=========================
+
+Price Data (Daily):
+- Stock returns (r_t)
+- Risk-free rate (rf_t)
+- Market cap-weighted index returns (R_t)
+- Trading volume
+- Shares outstanding
+
+Fundamental Data (Quarterly/Annual):
+- Total market capitalization
+- Book value of common equity
+- Earnings (trailing 12-month, fiscal year, interim)
+- Sales (5-year history)
+- Cash flow (depreciation, amortization)
+- Total debt (long-term + short-term)
+- Total assets
+- Preferred equity
+
+Analyst Data:
+- Predicted EPS (FY1, FY2)
+- Long-term earnings growth forecasts
+- Earnings-to-price forecasts
+
+Lookback Periods:
+- 21 days (momentum lag)
+- 42 days (DASTD half-life)
+- 63 days (beta half-life, HSIGMA half-life)
+- 126 days (RSTR weight half-life)
+- 252 days (1 year daily data)
+- 504 days (2 years for momentum)
+- 5 years (growth factors)

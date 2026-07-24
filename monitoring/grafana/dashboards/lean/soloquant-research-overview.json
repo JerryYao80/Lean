@@ -1,0 +1,767 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Open Backtest Overview",
+      "tooltip": "Open the LEAN Backtest Overview dashboard for the selected SoloQuant strategy.",
+      "type": "link",
+      "url": "/d/lean-backtest-overview/backtest-overview?var-algorithm_id=${strategy_id}"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Open Live Paper Trading",
+      "tooltip": "Open the LEAN Live Paper Trading dashboard for the selected SoloQuant strategy.",
+      "type": "link",
+      "url": "/d/lean-live-trading/live-paper-trading?var-algorithm_id=${strategy_id}"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT sum(\"required_field_count\"), sum(\"implementation_step_count\") FROM \"soloquant_research_artifact\" WHERE $timeFilter GROUP BY time(1d)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Research Artifact Completeness",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 6
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"key_point_count\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'event'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Events",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"title\"), last(\"strategy_idea\"), last(\"evidence\") FROM \"soloquant_research_artifact\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Latest Screened Strategy Research",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"name\"), last(\"risk_level\"), last(\"impact_analysis\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'event'",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Latest Finance Intelligence Events",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"relationship_strength\"), count(\"source\") FROM \"soloquant_finance_event_edge\" WHERE $timeFilter GROUP BY time(1d), \"edge_type\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Event Relationships",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"key_point_count\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'event' GROUP BY time(1d), \"source_type\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Events by Source Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"key_point_count\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'event' GROUP BY time(1d), \"risk_level\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Events by Risk Level",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"name\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'entity' GROUP BY time(1d), \"entity_type\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Entities by Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"name\") FROM \"soloquant_finance_event_node\" WHERE $timeFilter AND \"node_type\" = 'theme' GROUP BY time(1d), \"theme\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Themes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT count(\"relationship_strength\"), count(\"source\") FROM \"soloquant_finance_event_edge\" WHERE $timeFilter GROUP BY time(1d), \"edge_type\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Finance Relationship Types",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "auto"
+          },
+          "mappings": [],
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"total_return\") FROM \"soloquant_strategy_result\" WHERE $timeFilter GROUP BY time(1h), \"strategy_id\", \"version\", \"stage\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Strategy Backtest vs Live Paper Returns",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "query": "SELECT last(\"score\"), last(\"total_return\"), last(\"total_value\"), last(\"position_count\"), last(\"is_best\") FROM \"soloquant_strategy_result\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          }
+        }
+      ],
+      "title": "Latest Strategy Version Results",
+      "type": "table"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "lean",
+    "soloquant",
+    "research"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        },
+        "definition": "SHOW TAG VALUES FROM \"soloquant_strategy_result\" WITH KEY = \"strategy_id\" WHERE time > now() -5y",
+        "hide": 0,
+        "includeAll": false,
+        "label": "SoloQuant Strategy",
+        "multi": false,
+        "name": "strategy_id",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"soloquant_strategy_result\" WITH KEY = \"strategy_id\" WHERE time > now() -5y",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SoloQuant Research Overview",
+  "uid": "soloquant-research-overview",
+  "version": 2,
+  "weekStart": ""
+}

@@ -1,0 +1,28 @@
+{
+  "strategy_id": "5種低波動因子-高效策略快速實踐-finlab",
+  "class_name": "SoloQuantGeneratedLowVolatilityAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/5種低波動因子-高效策略快速實踐-finlab/SoloQuantGeneratedLowVolatilityAlgorithm.py.broken",
+  "description": "利用低波动因子（NATR60）筛选低波动股票，并结合120日均线偏离度选出30只股票构建多头组合的A股策略。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/5種低波動因子-高效策略快速實踐-finlab/SoloQuantGeneratedLowVolatilityAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-36beccce326e22e3.json",
+  "parameters": {
+    "start_date": "20140101",
+    "end_date": "20240630",
+    "initial_capital": "1000000",
+    "universe": "000300.SSE,600519.SSE,000858.SZSE,600036.SSE,000001.SZSE"
+  },
+  "risk_controls": [
+    "Trailing Stop: 5% from 60-day High",
+    "Max Drawdown: 10% (Liquidate All)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Data",
+      "field": "Open, High, Low, Close, Volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T06:46:17.443338+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

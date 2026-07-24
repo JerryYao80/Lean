@@ -1,0 +1,13 @@
+{
+  "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+  "dataset-catalog": "config-ashare-dataset-catalog.json",
+  "feature-data-path": "../../Data/alternative/ashare-llm-quant-features",
+  "benchmark-file": "../../Data/alternative/ashare-llm-quant-features/benchmark/000300.SH.csv",
+  "report-file": "../../Results/ashare-llm-quant-feature-export-report.json",
+  "start-date": "20200101",
+  "end-date": "20251231",
+  "benchmark-symbol": "000300.SH",
+  "index-code": "000300.SH",
+  "benchmark-ma-window": 120,
+  "benchmark-momentum-window": 60
+}

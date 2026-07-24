@@ -1,0 +1,33 @@
+{
+  "strategy_id": "propagating-momentum-information-through-global-supply-chain-networks",
+  "class_name": "SoloQuantGeneratedCustomerMomentumAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/propagating-momentum-information-through-global-supply-chain-networks/SoloQuantGeneratedCustomerMomentumAlgorithm.py.broken",
+  "description": "A-share Customer Momentum Strategy implementation. This strategy simulates the 'Customer Momentum' effect where supplier returns are predicted by lagged customer returns. It implements a monthly rebalanced long-short portfolio (top/bottom quintile) based on a momentum signal, using A-share specific models (T+1, fee, lot size).",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/propagating-momentum-information-through-global-supply-chain-networks/SoloQuantGeneratedCustomerMomentumAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-308065e80042ae0d.json",
+  "parameters": {
+    "universe": "600000.SSE,000001.SZSE,600519.SSE,000858.SZSE",
+    "start-date": "2015-01-01",
+    "end-date": "2023-12-31",
+    "initial-capital": "100000"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (Liquidate all)",
+    "Trailing Stop: 5% per holding",
+    "Price Filter: > 5 CNY"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Data",
+      "field": "Daily Close Price"
+    },
+    {
+      "dataset": "Supply Chain Data",
+      "field": "Supplier-Customer Links (Simulated/Placeholder)"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T05:43:46.006165+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

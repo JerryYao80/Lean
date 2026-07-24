@@ -1,0 +1,1162 @@
+[
+  {
+    "ticker": "159001",
+    "name": "易方达保证金货币A",
+    "ts_code": "159001.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20141020"
+  },
+  {
+    "ticker": "159005",
+    "name": "汇添富收益快钱货币A",
+    "ts_code": "159005.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20150113"
+  },
+  {
+    "ticker": "159101",
+    "name": "华夏国证港股通科技ETF",
+    "ts_code": "159101.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250903"
+  },
+  {
+    "ticker": "159109",
+    "name": "景顺长城恒生港股通50ETF",
+    "ts_code": "159109.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251010"
+  },
+  {
+    "ticker": "159117",
+    "name": "鹏华港股通低波红利ETF",
+    "ts_code": "159117.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251017"
+  },
+  {
+    "ticker": "159118",
+    "name": "华夏标普港股通低波红利ETF",
+    "ts_code": "159118.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251127"
+  },
+  {
+    "ticker": "159120",
+    "name": "国联安港股通科技ETF",
+    "ts_code": "159120.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251113"
+  },
+  {
+    "ticker": "159121",
+    "name": "易方达恒生港股通汽车主题ETF",
+    "ts_code": "159121.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251124"
+  },
+  {
+    "ticker": "159125",
+    "name": "招商国证港股通科技ETF",
+    "ts_code": "159125.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251106"
+  },
+  {
+    "ticker": "159126",
+    "name": "南方中证港股通50ETF",
+    "ts_code": "159126.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251103"
+  },
+  {
+    "ticker": "159127",
+    "name": "南方中证港股通高股息投资ETF",
+    "ts_code": "159127.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251120"
+  },
+  {
+    "ticker": "159128",
+    "name": "天弘国证港股通科技ETF",
+    "ts_code": "159128.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251113"
+  },
+  {
+    "ticker": "159131",
+    "name": "华宝中证港股通信息技术综合ETF",
+    "ts_code": "159131.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251113"
+  },
+  {
+    "ticker": "159137",
+    "name": "华宝中证港股通医疗主题ETF",
+    "ts_code": "159137.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20260112"
+  },
+  {
+    "ticker": "159152",
+    "name": "平安恒生港股通科技主题ETF",
+    "ts_code": "159152.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20260203"
+  },
+  {
+    "ticker": "159210",
+    "name": "汇添富中证港股通汽车产业主题ETF",
+    "ts_code": "159210.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250604"
+  },
+  {
+    "ticker": "159217",
+    "name": "港股通创新药ETF工银",
+    "ts_code": "159217.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250403"
+  },
+  {
+    "ticker": "159220",
+    "name": "华宝标普港股通低波红利ETF",
+    "ts_code": "159220.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250512"
+  },
+  {
+    "ticker": "159239",
+    "name": "富国恒生港股通汽车主题ETF",
+    "ts_code": "159239.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250528"
+  },
+  {
+    "ticker": "159245",
+    "name": "富国国证港股通消费主题ETF",
+    "ts_code": "159245.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250619"
+  },
+  {
+    "ticker": "159251",
+    "name": "万家国证港股通科技ETF",
+    "ts_code": "159251.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250724"
+  },
+  {
+    "ticker": "159262",
+    "name": "广发恒生港股通科技主题ETF",
+    "ts_code": "159262.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250707"
+  },
+  {
+    "ticker": "159265",
+    "name": "鹏华国证港股通消费主题ETF",
+    "ts_code": "159265.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250702"
+  },
+  {
+    "ticker": "159266",
+    "name": "港股通央企红利ETF",
+    "ts_code": "159266.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250801"
+  },
+  {
+    "ticker": "159268",
+    "name": "汇添富国证港股通消费主题ETF",
+    "ts_code": "159268.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250721"
+  },
+  {
+    "ticker": "159269",
+    "name": "南方中证港股通科技ETF",
+    "ts_code": "159269.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250710"
+  },
+  {
+    "ticker": "159277",
+    "name": "富国中证港股通高股息投资ETF",
+    "ts_code": "159277.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250814"
+  },
+  {
+    "ticker": "159280",
+    "name": "汇添富国证港股通互联网ETF",
+    "ts_code": "159280.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250818"
+  },
+  {
+    "ticker": "159281",
+    "name": "天弘中证港股通央企红利ETF",
+    "ts_code": "159281.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250902"
+  },
+  {
+    "ticker": "159285",
+    "name": "华安国证港股通消费主题ETF",
+    "ts_code": "159285.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20251020"
+  },
+  {
+    "ticker": "159286",
+    "name": "鹏华国证港股通创新药ETF",
+    "ts_code": "159286.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250902"
+  },
+  {
+    "ticker": "159297",
+    "name": "南方国证港股通创新药ETF",
+    "ts_code": "159297.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250922"
+  },
+  {
+    "ticker": "159312",
+    "name": "广发恒指港股通ETF",
+    "ts_code": "159312.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20241108"
+  },
+  {
+    "ticker": "159315",
+    "name": "黄金股ETF工银",
+    "ts_code": "159315.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240614"
+  },
+  {
+    "ticker": "159316",
+    "name": "易方达恒生港股通创新药ETF",
+    "ts_code": "159316.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250326"
+  },
+  {
+    "ticker": "159318",
+    "name": "恒生港股通ETF",
+    "ts_code": "159318.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240621"
+  },
+  {
+    "ticker": "159321",
+    "name": "华安中证沪深港黄金产业股票ETF",
+    "ts_code": "159321.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240527"
+  },
+  {
+    "ticker": "159322",
+    "name": "平安中证沪深港黄金产业ETF",
+    "ts_code": "159322.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240614"
+  },
+  {
+    "ticker": "159323",
+    "name": "华夏中证港股通汽车产业主题ETF",
+    "ts_code": "159323.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250108"
+  },
+  {
+    "ticker": "159331",
+    "name": "国泰中证港股通高股息投资ETF",
+    "ts_code": "159331.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240801"
+  },
+  {
+    "ticker": "159333",
+    "name": "万家中证港股通央企红利ETF",
+    "ts_code": "159333.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240903"
+  },
+  {
+    "ticker": "159365",
+    "name": "富国恒指港股通ETF",
+    "ts_code": "159365.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20250630"
+  },
+  {
+    "ticker": "159506",
+    "name": "富国恒生港股通创新药及医疗保健ETF",
+    "ts_code": "159506.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20230703"
+  },
+  {
+    "ticker": "159545",
+    "name": "易方达恒生港股通高股息低波动ETF",
+    "ts_code": "159545.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240415"
+  },
+  {
+    "ticker": "159562",
+    "name": "华夏中证沪深港黄金产业股票ETF",
+    "ts_code": "159562.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240122"
+  },
+  {
+    "ticker": "159568",
+    "name": "博时港股通互联网ETF",
+    "ts_code": "159568.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240227"
+  },
+  {
+    "ticker": "159569",
+    "name": "景顺长城国证港股通红利低波动率ETF",
+    "ts_code": "159569.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240822"
+  },
+  {
+    "ticker": "159570",
+    "name": "汇添富国证港股通创新药ETF",
+    "ts_code": "159570.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20240122"
+  },
+  {
+    "ticker": "159636",
+    "name": "港股通科技30ETF工银",
+    "ts_code": "159636.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20220720"
+  },
+  {
+    "ticker": "159649",
+    "name": "华安中债1-5年国开行债券ETF",
+    "ts_code": "159649.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20221024"
+  },
+  {
+    "ticker": "159651",
+    "name": "平安中债-0-3年国开行债券ETF",
+    "ts_code": "159651.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20221116"
+  },
+  {
+    "ticker": "159711",
+    "name": "华夏中证港股通50ETF",
+    "ts_code": "159711.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20211228"
+  },
+  {
+    "ticker": "159712",
+    "name": "国泰中证港股通50ETF",
+    "ts_code": "159712.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20211111"
+  },
+  {
+    "ticker": "159726",
+    "name": "华夏恒生港股通中国内地企业高股息率ETF",
+    "ts_code": "159726.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20211123"
+  },
+  {
+    "ticker": "159776",
+    "name": "港股通医药ETF",
+    "ts_code": "159776.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20220325"
+  },
+  {
+    "ticker": "159788",
+    "name": "易方达中证港股通中国100ETF",
+    "ts_code": "159788.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20220302"
+  },
+  {
+    "ticker": "159792",
+    "name": "富国中证港股通互联网ETF",
+    "ts_code": "159792.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20210928"
+  },
+  {
+    "ticker": "159812",
+    "name": "前海开源黄金ETF",
+    "ts_code": "159812.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20200529"
+  },
+  {
+    "ticker": "159934",
+    "name": "易方达黄金ETF",
+    "ts_code": "159934.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20131216"
+  },
+  {
+    "ticker": "159937",
+    "name": "博时黄金ETF",
+    "ts_code": "159937.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20140901"
+  },
+  {
+    "ticker": "511600",
+    "name": "华安日日鑫货币H",
+    "ts_code": "511600.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160927"
+  },
+  {
+    "ticker": "511620",
+    "name": "国泰瞬利货币A",
+    "ts_code": "511620.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20170907"
+  },
+  {
+    "ticker": "511650",
+    "name": "华夏快线货币E",
+    "ts_code": "511650.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20170116"
+  },
+  {
+    "ticker": "511660",
+    "name": "建信现金添益货币H",
+    "ts_code": "511660.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160921"
+  },
+  {
+    "ticker": "511670",
+    "name": "华泰紫金天天金货币ETFA",
+    "ts_code": "511670.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20170828"
+  },
+  {
+    "ticker": "511690",
+    "name": "大成添益交易型货币E",
+    "ts_code": "511690.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20161020"
+  },
+  {
+    "ticker": "511700",
+    "name": "场内货币",
+    "ts_code": "511700.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20161017"
+  },
+  {
+    "ticker": "511800",
+    "name": "易方达货币E",
+    "ts_code": "511800.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20141208"
+  },
+  {
+    "ticker": "511810",
+    "name": "南方理财金货币ETF",
+    "ts_code": "511810.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20150105"
+  },
+  {
+    "ticker": "511820",
+    "name": "鹏华添利交易型货币B",
+    "ts_code": "511820.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160222"
+  },
+  {
+    "ticker": "511830",
+    "name": "华泰货币",
+    "ts_code": "511830.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20150803"
+  },
+  {
+    "ticker": "511860",
+    "name": "博时保证金货币ETF",
+    "ts_code": "511860.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20141209"
+  },
+  {
+    "ticker": "511900",
+    "name": "富国收益宝交易型货币H",
+    "ts_code": "511900.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20151209"
+  },
+  {
+    "ticker": "511910",
+    "name": "融通易支付货币E",
+    "ts_code": "511910.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160704"
+  },
+  {
+    "ticker": "511920",
+    "name": "广发货币E",
+    "ts_code": "511920.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160328"
+  },
+  {
+    "ticker": "511950",
+    "name": "广发添利货币A",
+    "ts_code": "511950.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20161219"
+  },
+  {
+    "ticker": "511960",
+    "name": "嘉实快线货币H",
+    "ts_code": "511960.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160111"
+  },
+  {
+    "ticker": "511970",
+    "name": "国寿安保货币E",
+    "ts_code": "511970.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20160718"
+  },
+  {
+    "ticker": "511980",
+    "name": "汇添富添富通货币E",
+    "ts_code": "511980.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20151102"
+  },
+  {
+    "ticker": "513020",
+    "name": "国泰中证港股通科技ETF",
+    "ts_code": "513020.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220208"
+  },
+  {
+    "ticker": "513040",
+    "name": "易方达中证港股通互联网ETF",
+    "ts_code": "513040.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20230612"
+  },
+  {
+    "ticker": "513070",
+    "name": "易方达中证港股通消费主题ETF",
+    "ts_code": "513070.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220324"
+  },
+  {
+    "ticker": "513090",
+    "name": "易方达中证香港证券投资主题(港股通)ETF",
+    "ts_code": "513090.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20200326"
+  },
+  {
+    "ticker": "513190",
+    "name": "华夏中证港股通内地金融ETF",
+    "ts_code": "513190.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20231011"
+  },
+  {
+    "ticker": "513200",
+    "name": "易方达中证港股通医药卫生综合ETF",
+    "ts_code": "513200.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220211"
+  },
+  {
+    "ticker": "513230",
+    "name": "华夏中证港股通消费主题ETF",
+    "ts_code": "513230.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220124"
+  },
+  {
+    "ticker": "513320",
+    "name": "易方达恒生港股通新经济ETF",
+    "ts_code": "513320.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220321"
+  },
+  {
+    "ticker": "513550",
+    "name": "港股通50",
+    "ts_code": "513550.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20210113"
+  },
+  {
+    "ticker": "513560",
+    "name": "兴银中证港股通科技ETF",
+    "ts_code": "513560.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20230213"
+  },
+  {
+    "ticker": "513630",
+    "name": "摩根标普港股通低波红利ETF",
+    "ts_code": "513630.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20231208"
+  },
+  {
+    "ticker": "513720",
+    "name": "国泰中证港股通互联网ETF",
+    "ts_code": "513720.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20260109"
+  },
+  {
+    "ticker": "513750",
+    "name": "广发中证港股通非银ETF",
+    "ts_code": "513750.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20231127"
+  },
+  {
+    "ticker": "513770",
+    "name": "华宝中证港股通互联网ETF",
+    "ts_code": "513770.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20220218"
+  },
+  {
+    "ticker": "513780",
+    "name": "景顺长城中证港股通创新药ETF",
+    "ts_code": "513780.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20241025"
+  },
+  {
+    "ticker": "513820",
+    "name": "汇添富中证港股通高股息投资ETF",
+    "ts_code": "513820.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240516"
+  },
+  {
+    "ticker": "513830",
+    "name": "嘉实中证港股通高股息投资ETF",
+    "ts_code": "513830.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250307"
+  },
+  {
+    "ticker": "513860",
+    "name": "海富通中证港股通科技ETF",
+    "ts_code": "513860.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20210702"
+  },
+  {
+    "ticker": "513900",
+    "name": "华安CES港股通精选100ETF",
+    "ts_code": "513900.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20180525"
+  },
+  {
+    "ticker": "513910",
+    "name": "华夏中证港股通央企红利ETF",
+    "ts_code": "513910.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240304"
+  },
+  {
+    "ticker": "513920",
+    "name": "华安恒生港股通中国央企红利ETF",
+    "ts_code": "513920.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240105"
+  },
+  {
+    "ticker": "513980",
+    "name": "景顺长城中证港股通科技ETF",
+    "ts_code": "513980.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20210702"
+  },
+  {
+    "ticker": "513990",
+    "name": "招商上证港股通ETF",
+    "ts_code": "513990.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20200818"
+  },
+  {
+    "ticker": "517400",
+    "name": "国泰中证沪深港黄金产业股票ETF",
+    "ts_code": "517400.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240508"
+  },
+  {
+    "ticker": "517520",
+    "name": "黄金股ETF",
+    "ts_code": "517520.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20231101"
+  },
+  {
+    "ticker": "518660",
+    "name": "黄金ETF工银",
+    "ts_code": "518660.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20200529"
+  },
+  {
+    "ticker": "518800",
+    "name": "国泰黄金ETF",
+    "ts_code": "518800.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20130729"
+  },
+  {
+    "ticker": "518850",
+    "name": "华夏黄金ETF",
+    "ts_code": "518850.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20200605"
+  },
+  {
+    "ticker": "518880",
+    "name": "华安黄金ETF",
+    "ts_code": "518880.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20130729"
+  },
+  {
+    "ticker": "518890",
+    "name": "中银黄金",
+    "ts_code": "518890.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20200928"
+  },
+  {
+    "ticker": "520510",
+    "name": "华夏中证港股通医疗主题ETF",
+    "ts_code": "520510.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250807"
+  },
+  {
+    "ticker": "520530",
+    "name": "港股通科技ETF东财",
+    "ts_code": "520530.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251208"
+  },
+  {
+    "ticker": "520550",
+    "name": "招商恒生港股通高股息低波动ETF",
+    "ts_code": "520550.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250124"
+  },
+  {
+    "ticker": "520560",
+    "name": "华宝港股通恒生中国(香港上市)30ETF",
+    "ts_code": "520560.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251013"
+  },
+  {
+    "ticker": "520600",
+    "name": "广发中证港股通汽车ETF",
+    "ts_code": "520600.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20241230"
+  },
+  {
+    "ticker": "520630",
+    "name": "广发中证港股通互联网ETF",
+    "ts_code": "520630.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251222"
+  },
+  {
+    "ticker": "520650",
+    "name": "南方中证港股通互联网ETF",
+    "ts_code": "520650.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251110"
+  },
+  {
+    "ticker": "520660",
+    "name": "南方中证国新港股通央企红利ETF",
+    "ts_code": "520660.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240710"
+  },
+  {
+    "ticker": "520670",
+    "name": "嘉实恒生港股通科技主题ETF",
+    "ts_code": "520670.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250819"
+  },
+  {
+    "ticker": "520690",
+    "name": "博时恒生港股通创新药精选ETF",
+    "ts_code": "520690.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250801"
+  },
+  {
+    "ticker": "520700",
+    "name": "万家中证港股通创新药ETF",
+    "ts_code": "520700.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20241014"
+  },
+  {
+    "ticker": "520720",
+    "name": "国泰中证港股通汽车产业主题ETF",
+    "ts_code": "520720.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250925"
+  },
+  {
+    "ticker": "520770",
+    "name": "建信恒指港股通ETF",
+    "ts_code": "520770.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20260126"
+  },
+  {
+    "ticker": "520780",
+    "name": "华宝中证港股通汽车产业主题ETF",
+    "ts_code": "520780.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251229"
+  },
+  {
+    "ticker": "520810",
+    "name": "易方达中证港股通高股息投资ETF",
+    "ts_code": "520810.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20260112"
+  },
+  {
+    "ticker": "520820",
+    "name": "汇添富恒指港股通ETF",
+    "ts_code": "520820.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251215"
+  },
+  {
+    "ticker": "520840",
+    "name": "华安恒生港股通科技主题ETF",
+    "ts_code": "520840.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250825"
+  },
+  {
+    "ticker": "520850",
+    "name": "易方达中证港股通医疗主题ETF",
+    "ts_code": "520850.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20260119"
+  },
+  {
+    "ticker": "520860",
+    "name": "富国中证港股通科技ETF",
+    "ts_code": "520860.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250725"
+  },
+  {
+    "ticker": "520880",
+    "name": "华宝恒生港股通创新药精选ETF",
+    "ts_code": "520880.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250707"
+  },
+  {
+    "ticker": "520900",
+    "name": "广发中证国新港股通央企红利ETF",
+    "ts_code": "520900.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240710"
+  },
+  {
+    "ticker": "520910",
+    "name": "华夏中证港股通互联网ETF",
+    "ts_code": "520910.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20260202"
+  },
+  {
+    "ticker": "520940",
+    "name": "华安恒指港股通ETF",
+    "ts_code": "520940.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250609"
+  },
+  {
+    "ticker": "520950",
+    "name": "摩根恒生港股通50ETF",
+    "ts_code": "520950.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251125"
+  },
+  {
+    "ticker": "520960",
+    "name": "嘉实恒指港股通ETF",
+    "ts_code": "520960.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20251031"
+  },
+  {
+    "ticker": "520970",
+    "name": "嘉实中证港股通创新药ETF",
+    "ts_code": "520970.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250807"
+  },
+  {
+    "ticker": "520980",
+    "name": "汇添富恒生港股通中国科技ETF",
+    "ts_code": "520980.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20250702"
+  },
+  {
+    "ticker": "520990",
+    "name": "景顺长城中证国新港股通央企红利ETF",
+    "ts_code": "520990.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20240710"
+  },
+  {
+    "ticker": "159915",
+    "name": "易方达创业板ETF",
+    "ts_code": "159915.SZ",
+    "market": "SZSE",
+    "price_limit": 0.2,
+    "list_date": "20111209"
+  },
+  {
+    "ticker": "159919",
+    "name": "嘉实沪深300ETF",
+    "ts_code": "159919.SZ",
+    "market": "SZSE",
+    "price_limit": 0.1,
+    "list_date": "20120528"
+  },
+  {
+    "ticker": "159949",
+    "name": "华安创业板50ETF",
+    "ts_code": "159949.SZ",
+    "market": "SZSE",
+    "price_limit": 0.2,
+    "list_date": "20160722"
+  },
+  {
+    "ticker": "510050",
+    "name": "华夏上证50ETF",
+    "ts_code": "510050.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20050223"
+  },
+  {
+    "ticker": "510300",
+    "name": "华泰柏瑞沪深300ETF",
+    "ts_code": "510300.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20120528"
+  },
+  {
+    "ticker": "510500",
+    "name": "南方中证500ETF",
+    "ts_code": "510500.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20130315"
+  },
+  {
+    "ticker": "511880",
+    "name": "银华日利",
+    "ts_code": "511880.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20130418"
+  },
+  {
+    "ticker": "511990",
+    "name": "华宝添益A",
+    "ts_code": "511990.SH",
+    "market": "SSE",
+    "price_limit": 0.1,
+    "list_date": "20130128"
+  }
+]

@@ -1,0 +1,41 @@
+{
+  "strategy_id": "understanding-factor-investing-aqr-funds",
+  "class_name": "UnderstandingFactorInvestingAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/understanding-factor-investing-aqr-funds/UnderstandingFactorInvestingAlgorithm.cs",
+  "description": "A multi-factor investing strategy that computes momentum, volatility, and volume factors, ranks them using a simplified composite alpha score (simulating MLP factor combination), and holds the top-k equal-weighted securities with drop-n turnover control and trailing stop risk management.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/understanding-factor-investing-aqr-funds/UnderstandingFactorInvestingAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/aqr-77439184866d9a4d.json",
+  "origin": "web",
+  "parameters": {
+    "start-date": "20190101",
+    "end-date": "20240630",
+    "initial-capital": "1000000",
+    "momentum-period": "14",
+    "bollinger-period": "20",
+    "top-k": "13",
+    "drop-n": "5",
+    "stop-loss": "0.15",
+    "max-weight": "0.10"
+  },
+  "risk_controls": [
+    "Trailing stop loss at 15% from peak price",
+    "Maximum position weight capped at 10%",
+    "Drop-n turnover control limiting daily rebalance sells to bottom 5 ranked current holdings",
+    "T+1 settlement model enforced via DelayedSettlementModel"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "daily",
+      "field": "close",
+      "reason": "Used for momentum calculation, Bollinger Band width, and composite alpha ranking"
+    },
+    {
+      "dataset": "daily",
+      "field": "volume",
+      "reason": "Used for volume ratio factor in composite alpha calculation"
+    }
+  ],
+  "generated_at_utc": "2026-06-18T02:06:38.049094+00:00",
+  "data_coverage": 1.0
+}

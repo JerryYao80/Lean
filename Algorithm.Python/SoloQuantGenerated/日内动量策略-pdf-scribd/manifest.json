@@ -1,0 +1,29 @@
+{
+  "strategy_id": "日内动量策略-pdf-scribd",
+  "class_name": "SoloQuantGeneratedIntradayMomentumAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/日内动量策略-pdf-scribd/SoloQuantGeneratedIntradayMomentumAlgorithm.py.broken",
+  "description": "基于日内动量效应和开盘区间突破(ORB)的A股ETF交易策略。使用沪深300ETF(510300.SS)作为标的，在开盘后30分钟确定区间，突破后进场，收盘前平仓。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/日内动量策略-pdf-scribd/SoloQuantGeneratedIntradayMomentumAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-466c7ce8a13e0353.json",
+  "parameters": {
+    "universe": "510300.SS",
+    "start_date": "20230101",
+    "end_date": "20240101",
+    "initial_capital": "100000"
+  },
+  "risk_controls": [
+    "ATR动态止损",
+    "收盘前强制平仓",
+    "持仓时间限制"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A股行情",
+      "field": "open, high, low, close, volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T08:30:25.921330+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

@@ -1,0 +1,86 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedRedditDiscussionAlgorithm : QCAlgorithm {
+    private List<Symbol> _symbols = new List<Symbol>();
+    private decimal _maxPortfolioValue = 0m;
+
+    public override void Initialize() {
+      // 1. Initialize: SetAccountCurrency before SetCash
+      SetAccountCurrency(Currencies.CNY);
+      
+      // 2. Initialize: SetStartDate/SetEndDate with ParseExact
+      SetStartDate(DateTime.ParseExact("20230101", "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact("20231231", "yyyyMMdd", null));
+      
+      // 3. Initialize: SetCash
+      SetCash(1000000);
+      
+      // 4. Initialize: SetBenchmark to 0m
+      SetBenchmark(_ => 0m);
+      
+      // 5. Initialize: AddEquity (Placeholder universe as source provided none)
+      string[] tickers = { "000001.SSE", "000002.SZSE" };
+      foreach (var ticker in tickers) {
+        var security = AddEquity(ticker, Resolution.Daily, ticker.EndsWith("SSE") ? Market.SSE : Market.SZSE);
+        
+        // 6. Initialize: Set A-share models
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+        
+        _symbols.Add(security.Symbol);
+      }
+    }
+
+    // 7. OnData: Direct implementation
+    public override void OnData(Slice data) {
+      // Update max portfolio value for risk management
+      if (Portfolio.TotalPortfolioValue > _maxPortfolioValue) {
+        _maxPortfolioValue = Portfolio.TotalPortfolioValue;
+      }
+
+      // 10. Risk Control: Max Drawdown Check (Placeholder)
+      if (Portfolio.TotalPortfolioValue < _maxPortfolioValue * 0.9m) {
+        Liquidate();
+        return;
+      }
+
+      // Placeholder Logic: Since no strategy was provided, we implement a simple equal-weight entry if not invested.
+      // In a real scenario, this would be replaced by specific signal logic.
+      foreach (var symbol in _symbols) {
+        if (!data.Bars.ContainsKey(symbol)) continue;
+        
+        var security = Securities[symbol];
+        
+        // 8. Position Calculation
+        decimal weight = 0.5m; // Dummy weight for demonstration
+        int targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / security.Price / 100) * 100;
+        int delta = targetQuantity - Portfolio[symbol].Quantity;
+        
+        // 9. Order Execution
+        if (delta != 0) {
+          MarketOrder(symbol, delta);
+        }
+      }
+    }
+  }
+}

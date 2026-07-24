@@ -1,0 +1,29 @@
+{
+  "strategy_id": "risk-parity-asset-allocation-quantpedia",
+  "class_name": "SoloQuantGeneratedRiskParityAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/risk-parity-asset-allocation-quantpedia/SoloQuantGeneratedRiskParityAlgorithm.py",
+  "description": "Risk Parity Asset Allocation strategy based on QuantPedia description. Implements Naive Risk Parity (inverse volatility weighting) on a universe of 4 ETFs (SPY, EFA, GLD, IEF). Rebalances weekly with a one-day skip delay. Includes trailing stop and max drawdown risk controls.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/risk-parity-asset-allocation-quantpedia/SoloQuantGeneratedRiskParityAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-263886cfbdfcef27.json",
+  "parameters": {
+    "start_date": "2007-03-21",
+    "end_date": "2021-03-19",
+    "initial_capital": "100000",
+    "universe": "SPY, EFA, GLD, IEF",
+    "lookback_period": "126",
+    "rebalance_frequency": "Weekly"
+  },
+  "risk_controls": [
+    "Max Drawdown: 20% (Liquidate all if exceeded)",
+    "Trailing Stop: 5% per security"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Price",
+      "field": "close"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T05:22:47.882905+00:00",
+  "data_coverage": 1.0
+}

@@ -1,0 +1,20 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "VolRegimeHfChinaAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "../../../Algorithm.Python/VolRegimeHfChinaAlgorithm.py",
+
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+
+  "data-provider": "DefaultDataProvider",
+
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": false,
+
+  "log-handler": "ConsoleLogHandler",
+
+  "parameters": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data"
+  }
+}

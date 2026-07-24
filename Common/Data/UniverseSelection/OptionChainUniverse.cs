@@ -91,13 +91,28 @@ namespace QuantConnect.Data.UniverseSelection
         public override IEnumerable<Symbol> SelectSymbols(DateTime utcTime, BaseDataCollection data)
         {
             var localEndTime = utcTime.ConvertFromUtc(Option.Exchange.TimeZone);
+
+            // DEBUG: Log data coming into SelectSymbols
+            var optionUniverses = data.Data.Cast<OptionUniverse>().ToList();
+            Console.WriteLine($"[DEBUG] OptionChainUniverse.SelectSymbols({utcTime:yyyyMMdd}): data.Data.Count={data.Data.Count}, OptionUniverses={optionUniverses.Count}, Underlying={data.Underlying?.Symbol?.Value ?? "NULL"}");
+
             // we will only update unique strikes when there is an exchange date change
-            _optionFilterUniverse.Refresh(data.Data.Cast<OptionUniverse>().ToList(), data.Underlying, localEndTime);
+            _optionFilterUniverse.Refresh(optionUniverses, data.Underlying, localEndTime);
 
             var results = Option.ContractFilter.Filter(_optionFilterUniverse);
+            Console.WriteLine($"[DEBUG]   Filter results: {results.Count()} symbols");
 
             // always prepend the underlying symbol
-            return _underlyingSymbol.Concat(results.Select(x => x.Symbol));
+            var finalSymbols = _underlyingSymbol.Concat(results.Select(x => x.Symbol)).ToList();
+            Console.WriteLine($"[DEBUG]   Final symbols count: {finalSymbols.Count}");
+
+            // DEBUG: Print first 3 symbols to check their type
+            if (finalSymbols.Count > 1)
+            {
+                Console.WriteLine($"[DEBUG]   First 3 symbols: {string.Join(", ", finalSymbols.Take(3).Select(s => $"{s.Value}(Type={s.SecurityType})"))}");
+            }
+
+            return finalSymbols;
         }
 
         /// <summary>

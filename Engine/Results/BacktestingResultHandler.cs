@@ -18,8 +18,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using QuantConnect.Brokerages;
 using QuantConnect.Configuration;
+using QuantConnect.Data;
 using QuantConnect.Interfaces;
 using QuantConnect.Logging;
 using QuantConnect.Orders;
@@ -307,6 +309,7 @@ namespace QuantConnect.Lean.Engine.Results
 
                 if (result != null)
                 {
+                    InfluxDbExporter?.RecordResultSnapshot(result.Results, Algorithm?.UtcTime ?? DateTime.UtcNow);
                     // Get Storage Location:
                     var key = $"{AlgorithmId}.json";
 
@@ -356,6 +359,7 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 var endTime = DateTime.UtcNow;
                 BacktestResultPacket result;
+                BacktestMonteCarloReport monteCarloReport = null;
                 // could happen if algorithm failed to init
                 if (Algorithm != null)
                 {
@@ -363,6 +367,7 @@ namespace QuantConnect.Lean.Engine.Results
                     var charts = new Dictionary<string, Chart>(Charts);
                     var orders = new Dictionary<int, Order>(TransactionHandler.Orders);
                     var profitLoss = new SortedDictionary<DateTime, decimal>(Algorithm.Transactions.TransactionRecord);
+                    monteCarloReport = TryRunMonteCarloAnalysis(charts);
                     var statisticsResults = GenerateStatisticsResults(charts, profitLoss, _capacityEstimate);
                     var runtime = GetAlgorithmRuntimeStatistics(statisticsResults.Summary, capacityEstimate: _capacityEstimate);
 
@@ -391,13 +396,25 @@ namespace QuantConnect.Lean.Engine.Results
                 result.DateFinished = DateTime.Now;
                 result.Progress = 1;
 
+                var provenanceTracker = DataProvenanceTracker.Current;
+                if (provenanceTracker != null)
+                {
+                    State["DataProvenance"] = provenanceTracker.ToJson();
+                }
+
                 StoreInsights();
+
+                if (monteCarloReport != null)
+                {
+                    SaveMonteCarloReport($"{AlgorithmId}-monte-carlo.json", monteCarloReport);
+                }
 
                 // Save summary results
                 SaveResults($"{AlgorithmId}-summary.json", CreateResultSummary(result));
 
                 //Place result into storage.
                 StoreResult(result);
+                InfluxDbExporter?.RecordMessage("run", "Backtest completed", utcTime: endTime);
 
                 result.Results.ServerStatistics = GetServerStatistics(endTime);
                 //Second, send the truncated packet:
@@ -409,6 +426,37 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 Log.Error(err);
             }
+        }
+
+        private BacktestMonteCarloReport TryRunMonteCarloAnalysis(Dictionary<string, Chart> charts)
+        {
+            var settings = BacktestMonteCarloSettings.From(_job?.Parameters);
+            if (!settings.Enabled)
+            {
+                return null;
+            }
+
+            if (!BacktestMonteCarloAnalysis.TryCreateReport(charts, settings, out var report))
+            {
+                Log.Trace("BacktestingResultHandler.TryRunMonteCarloAnalysis(): skipped because no daily returns were available.");
+                return null;
+            }
+
+            foreach (var statistic in BacktestMonteCarloAnalysis.CreateSummaryStatistics(report))
+            {
+                SummaryStatistic(statistic.Key, statistic.Value);
+            }
+
+            State[BacktestMonteCarloAnalysis.EnabledStateKey] = true.ToStringInvariant();
+            State[BacktestMonteCarloAnalysis.ReportStateKey] = $"{AlgorithmId}-monte-carlo.json";
+
+            Log.Trace($"BacktestingResultHandler.TryRunMonteCarloAnalysis(): generated {report.TrialCount} trials across {report.Scenarios.Count} scenarios.");
+            return report;
+        }
+
+        private void SaveMonteCarloReport(string name, BacktestMonteCarloReport report)
+        {
+            File.WriteAllText(GetResultsPath(name), JsonConvert.SerializeObject(report, Formatting.Indented, SerializerSettings));
         }
 
         /// <summary>
@@ -442,6 +490,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new DebugPacket(_projectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("debug", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -452,6 +501,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new SystemDebugPacket(_projectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("system", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -462,6 +512,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new LogPacket(AlgorithmId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("log", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -475,6 +526,7 @@ namespace QuantConnect.Lean.Engine.Results
             if (Messages.Count > 500) return;
             Messages.Enqueue(new HandledErrorPacket(AlgorithmId, message, stacktrace));
             _errorMessage = message;
+            InfluxDbExporter?.RecordMessage("error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -488,6 +540,7 @@ namespace QuantConnect.Lean.Engine.Results
             Messages.Enqueue(new RuntimeErrorPacket(_job.UserId, AlgorithmId, message, stacktrace));
             _errorMessage = message;
             SetAlgorithmState(message, stacktrace);
+            InfluxDbExporter?.RecordMessage("runtime_error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -496,7 +549,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// <param name="brokerageMessageEvent">The brokerage message event</param>
         public virtual void BrokerageMessage(BrokerageMessageEvent brokerageMessageEvent)
         {
-            // NOP
+            InfluxDbExporter?.RecordBrokerageMessage(brokerageMessageEvent, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -517,6 +570,7 @@ namespace QuantConnect.Lean.Engine.Results
                 return;
             }
 
+            var addedPoint = false;
             lock (ChartLock)
             {
                 //Add a copy locally:
@@ -541,6 +595,16 @@ namespace QuantConnect.Lean.Engine.Results
                     || chartName == PortfolioTurnoverKey)
                 {
                     series.AddPoint(value);
+                    addedPoint = true;
+                }
+            }
+
+            if (addedPoint)
+            {
+                InfluxDbExporter?.RecordChartPoint(chartName, seriesName, seriesType, unit, value);
+                if (chartName == StrategyEquityKey && seriesName == EquityKey)
+                {
+                    InfluxDbExporter?.RecordPortfolioSnapshot(value.Time);
                 }
             }
         }
@@ -665,6 +729,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             var statusPacket = new AlgorithmStatusPacket(_algorithmId, _projectId, status, message) { OptimizationId = _job.OptimizationId };
             MessagingHandler.Send(statusPacket);
+            InfluxDbExporter?.RecordMessage("status", status.ToString(), message, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -679,6 +744,7 @@ namespace QuantConnect.Lean.Engine.Results
             {
                 RuntimeStatistics[key] = value;
             }
+            InfluxDbExporter?.RecordRuntimeStatistic(key, value, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -688,6 +754,7 @@ namespace QuantConnect.Lean.Engine.Results
         public override void OrderEvent(OrderEvent newEvent)
         {
             _capacityEstimate?.OnOrderEvent(newEvent);
+            InfluxDbExporter?.RecordOrderEvent(newEvent, Algorithm?.Transactions?.GetOrderById(newEvent.OrderId));
         }
 
         /// <summary>

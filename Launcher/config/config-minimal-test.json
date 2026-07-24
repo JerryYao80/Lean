@@ -1,0 +1,1 @@
+{"environment":"backtesting","algorithm-type-name":"MinimalTestAlgorithm","algorithm-language":"CSharp","algorithm-location":"../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll","data-folder":"../../../Data","log-handler":"ConsoleLogHandler"}

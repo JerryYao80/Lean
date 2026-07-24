@@ -1,0 +1,31 @@
+{
+  "strategy_id": "a-z-databases-libguides",
+  "class_name": "SoloQuantGeneratedCEIBSAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/a-z-databases-libguides/SoloQuantGeneratedCEIBSAlgorithm.py",
+  "description": "A-share strategy template based on CEIBS database guide. Since the source contains no specific quant strategy, this draft implements a basic RSI mean-reversion logic to demonstrate the required LEAN architecture and A-share specific models.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/a-z-databases-libguides/SoloQuantGeneratedCEIBSAlgorithm.py",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-673176b2c07590a7.json",
+  "parameters": {
+    "start_date": "20230101",
+    "end_date": "20231231",
+    "initial_capital": "100000",
+    "ticker": "000300.SSE"
+  },
+  "risk_controls": [
+    "Max Drawdown Check: Liquidate if unrealized loss > 5%",
+    "Trailing Stop: Placeholder implementation"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "Close"
+    },
+    {
+      "dataset": "Equity",
+      "field": "Volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T10:53:07.240609+00:00",
+  "data_coverage": 1.0
+}

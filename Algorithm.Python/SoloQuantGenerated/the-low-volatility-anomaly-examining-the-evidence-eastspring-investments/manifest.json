@@ -1,0 +1,31 @@
+{
+  "strategy_id": "the-low-volatility-anomaly-examining-the-evidence-eastspring-investments",
+  "class_name": "SoloQuantGeneratedLowVolatilityAnomalyAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/the-low-volatility-anomaly-examining-the-evidence-eastspring-investments/SoloQuantGeneratedLowVolatilityAnomalyAlgorithm.py.broken",
+  "description": "A-share Low Volatility Anomaly Strategy: Selects the lowest volatility stocks from a fixed universe of blue-chip A-shares, rebalances monthly, implements A-share specific models (T+1, fees) and risk controls (trailing stop, max drawdown).",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/the-low-volatility-anomaly-examining-the-evidence-eastspring-investments/SoloQuantGeneratedLowVolatilityAnomalyAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-38439040a6a83ae1.json",
+  "parameters": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-01-01",
+    "initial_capital": "1000000",
+    "universe": "Fixed list of 20 A-share blue chips",
+    "rebalance_frequency": "Monthly",
+    "volatility_window": "60 days",
+    "selection_quintile": "Bottom 20% (Lowest Volatility)"
+  },
+  "risk_controls": [
+    "Max Drawdown: 15% (Liquidate all)",
+    "Trailing Stop: 8% per holding"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A-share Equity Daily Data",
+      "field": "close, volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T07:16:50.278245+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

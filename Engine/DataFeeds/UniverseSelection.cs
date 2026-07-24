@@ -182,6 +182,18 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             {
                 // materialize the enumerable into a set for processing
                 universe.Selected = selectSymbolsResult.ToHashSet();
+
+                // DEBUG: Log Selected symbols for Option universe
+                if (universe is OptionChainUniverse)
+                {
+                    Console.WriteLine($"[DEBUG] Universe.Selected set: {universe.Selected.Count} symbols");
+                    var optionSymbols = universe.Selected.Where(s => s.SecurityType == SecurityType.Option).ToList();
+                    Console.WriteLine($"[DEBUG]   Option symbols: {optionSymbols.Count}");
+                    if (optionSymbols.Count > 0)
+                    {
+                        Console.WriteLine($"[DEBUG]   Sample: {string.Join(", ", optionSymbols.Take(3).Select(s => s.Value))}");
+                    }
+                }
             }
 
             // first check for no pending removals, even if the universe selection
@@ -249,9 +261,22 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 var addedSubscription = false;
                 var dataFeedAdded = false;
                 var internalFeed = true;
+
+                // DEBUG: Log subscription request creation for option symbols
+                if (symbol.SecurityType == SecurityType.Option)
+                {
+                    Console.WriteLine($"[DEBUG ApplyUniverseSelection] Processing option symbol: {symbol.Value}");
+                }
+
                 foreach (var request in universe.GetSubscriptionRequests(security, dateTimeUtc, algorithmEndDateUtc,
                                                                          _algorithm.SubscriptionManager.SubscriptionDataConfigService))
                 {
+                    // DEBUG: Log each subscription request for options
+                    if (symbol.SecurityType == SecurityType.Option)
+                    {
+                        Console.WriteLine($"[DEBUG]   Request: Symbol={request.Configuration.Symbol.Value}, TickType={request.Configuration.TickType}, TradableDays={request.TradableDaysInDataTimeZone.Count()}");
+                    }
+
                     if (!request.TradableDaysInDataTimeZone.Any())
                     {
                         // Remove the config from the data manager. universe.GetSubscriptionRequests() might have added the configs
@@ -299,6 +324,18 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             }
 
             var securityChanges = _securityChangesConstructor.Flush();
+
+            // DEBUG: Log security changes for option universe
+            if (securityChanges.AddedSecurities.Any(s => s.Symbol.SecurityType == SecurityType.Option))
+            {
+                Console.WriteLine($"[DEBUG UniverseSelection.ApplyUniverseSelection] AddedSecurities count: {securityChanges.AddedSecurities.Count}");
+                var optionSecurities = securityChanges.AddedSecurities.Where(s => s.Symbol.SecurityType == SecurityType.Option).ToList();
+                Console.WriteLine($"[DEBUG]   Option securities added: {optionSecurities.Count}");
+                if (optionSecurities.Count > 0)
+                {
+                    Console.WriteLine($"[DEBUG]   Sample: {string.Join(", ", optionSecurities.Take(5).Select(s => s.Symbol.Value))}");
+                }
+            }
 
             // Add currency data feeds that weren't explicitly added in Initialize
             if (securityChanges.AddedSecurities.Count > 0)

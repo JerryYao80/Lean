@@ -1,0 +1,33 @@
+{
+  "strategy_id": "pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment",
+  "class_name": "SoloQuantGeneratedAlphaGPTAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment/SoloQuantGeneratedAlphaGPTAlgorithm.cs",
+  "description": "基于Alpha-GPT思想的多因子日频策略：利用资金流、上影线比例、量价相关性三个alpha因子，每日调仓做多前20%等权组合，并包含A股手续费模型、最大回撤控制和个股止损。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-alpha-gpt-human-ai-interactive-alpha-mining-for-quantitative-investment/SoloQuantGeneratedAlphaGPTAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-7f6f8de050e9dfca.json",
+  "parameters": {
+    "start-date": "2019-01-01",
+    "end-date": "2023-12-31",
+    "initial-capital": "100000"
+  },
+  "risk_controls": [
+    "组合最大回撤超过15%时全仓平仓",
+    "个股浮亏超过5%时平仓",
+    "信号截面标准化（z-score）",
+    "只做多不做空，减轻风险暴露",
+    "使用A股手续费模型（佣金万分之三，卖出印花税千分之一）",
+    "最小交易单位100股"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "daily TradeBar",
+      "field": "open, high, low, close, volume"
+    },
+    {
+      "dataset": "daily QuoteBar",
+      "field": "high, open, close, low"
+    }
+  ],
+  "generated_at_utc": "2026-05-19T12:20:41.489448+00:00"
+}

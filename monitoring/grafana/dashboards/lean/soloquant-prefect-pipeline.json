@@ -1,0 +1,399 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "SoloQuant Prefect pipeline orchestration: tick health, stage timing, task status",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "策略全生命周期管理",
+      "url": "/d/strategy-lifecycle",
+      "type": "link",
+      "targetBlank": true
+    },
+    {
+      "title": "Pipeline Funnel",
+      "url": "/d/soloquant-strategy-pipeline",
+      "type": "link",
+      "targetBlank": true
+    },
+    {
+      "title": "Prefect UI",
+      "url": "http://localhost:4200",
+      "type": "link",
+      "targetBlank": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "Pipeline Tick Status",
+      "type": "stat",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "id": 1,
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "✅ OK", "color": "green" }, "0": { "text": "⏭ Skipped", "color": "blue" }, "2": { "text": "⚠ Degraded", "color": "yellow" }, "3": { "text": "❌ Error", "color": "red" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"status_code\") FROM \"soloquant_prefect_tick\" WHERE $timeFilter GROUP BY *",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Last Tick Duration",
+      "type": "stat",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "id": 2,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300 },
+              { "color": "red", "value": 480 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"duration_seconds\") FROM \"soloquant_prefect_tick\" WHERE $timeFilter GROUP BY *",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Stage Summary",
+      "type": "stat",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "id": 3,
+      "fieldConfig": {
+        "defaults": { "decimals": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ok_stages" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "error_stages" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "skipped_stages" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "degraded_stages" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"ok_stages\"), last(\"error_stages\"), last(\"skipped_stages\"), last(\"degraded_stages\") FROM \"soloquant_prefect_tick\" WHERE $timeFilter GROUP BY *",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Last Tick Time",
+      "type": "stat",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "id": 4,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"duration_seconds\") * 0 + (now() / 1000000000) FROM \"soloquant_prefect_tick\" WHERE $timeFilter GROUP BY *",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Tick History",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300 },
+              { "color": "red", "value": 480 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT \"duration_seconds\" FROM \"soloquant_prefect_tick\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Tick Status Over Time",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "fillOpacity": 30,
+            "lineWidth": 1,
+            "pointSize": 10,
+            "showPoints": "always",
+            "spanNulls": false
+          },
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" }, "0": { "text": "Skipped", "color": "blue" }, "2": { "text": "Degraded", "color": "yellow" }, "3": { "text": "Error", "color": "red" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "color": { "mode": "thresholds" },
+          "decimals": 0,
+          "min": -0.5,
+          "max": 3.5
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT \"status_code\" FROM \"soloquant_prefect_tick\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Stage Duration Breakdown",
+      "type": "barchart",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 12 },
+      "id": 7,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "barWidth": 0.6,
+        "groupWidth": 0.7,
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "stacking": "none",
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "groupBy": [],
+        "showValue": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"duration_seconds\") FROM \"soloquant_prefect_stage\" WHERE $timeFilter GROUP BY \"stage\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Stage Status Table",
+      "type": "table",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 12 },
+      "id": 8,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "status_text" }, "properties": [
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "ok": { "text": "✅ OK", "color": "green" }, "skipped": { "text": "⏭ Skipped", "color": "blue" }, "error": { "text": "❌ Error", "color": "red" } } }
+            ] }
+          ] },
+          { "matcher": { "id": "byName", "options": "duration_seconds" }, "properties": [
+            { "id": "unit", "value": "s" },
+            { "id": "decimals", "value": 2 }
+          ] }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false },
+        "sortBy": [{ "displayName": "stage", "desc": false }],
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "time": false },
+            "renameByName": { "stage": "Stage", "status_text": "Status", "duration_seconds": "Duration", "mode": "Mode", "pid": "PID" }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT last(\"status_text\"), last(\"duration_seconds\"), last(\"mode\"), last(\"pid\") FROM \"soloquant_prefect_stage\" WHERE $timeFilter GROUP BY \"stage\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Stage Duration Time Series",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 9,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean", "max"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "lean-influxdb" },
+          "query": "SELECT mean(\"duration_seconds\") FROM \"soloquant_prefect_stage\" WHERE $timeFilter AND \"status_text\" = 'ok' GROUP BY time($__interval), \"stage\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["soloquant", "prefect", "pipeline"],
+  "templating": {
+    "list": []
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "SoloQuant Prefect Pipeline",
+  "uid": "soloquant-prefect-pipeline",
+  "version": 1
+}

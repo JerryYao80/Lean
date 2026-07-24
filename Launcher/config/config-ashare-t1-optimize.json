@@ -1,0 +1,22 @@
+{
+  "tushare-data-path": "/home/project/tushare-downloader/tushare_data",
+  "dataset-catalog": "config-ashare-dataset-catalog.json",
+  "start-date": "20200101",
+  "end-date": "20251231",
+  "universe": [
+    "000001.SZ",
+    "600000.SH",
+    "300750.SZ"
+  ],
+  "lookback-period": 20,
+  "entry-threshold": -2.0,
+  "exit-threshold": 0.0,
+  "max-positions": 3,
+  "position-size": 0.2,
+  "initial-capital": 1000000,
+  "fee-rate": 0.0013,
+  "report-file": "../../Results/ashare-t1-optimize-report.md",
+  "trade-report-file": "../../Results/ashare-t1-optimize-trades.csv",
+  "daily-summary-file": "../../Results/ashare-t1-optimize-daily.csv",
+  "summary-file": "../../Results/ashare-t1-optimize-summary.json"
+}

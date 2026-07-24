@@ -1,0 +1,32 @@
+{
+  "strategy_id": "research-on-stock-selection-strategy-with-the-fusion-of-data-of-multi-factor-vol",
+  "class_name": "MultiFactorVolumePriceSvmAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/research-on-stock-selection-strategy-with-the-fusion-of-data-of-multi-factor-vol/MultiFactorVolumePriceSvmAlgorithm.cs.broken",
+  "description": "基于支持向量机思想构建的两阶段选股策略。第一阶段通过多因子（如动量、波动率）筛选基础股票池，第二阶段融合量价数据（如成交量变化）对基础池进行二次筛选，选取综合得分最高的股票进行等权配置。策略采用月度调仓机制，并包含移动止损风控。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/research-on-stock-selection-strategy-with-the-fusion-of-data-of-multi-factor-vol/MultiFactorVolumePriceSvmAlgorithm.cs.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/aqr-0013052ebd465d37.json",
+  "origin": "web",
+  "parameters": {
+    "start-date": "20200101",
+    "end-date": "20241231",
+    "initial-capital": "1000000",
+    "lookback-period": "60",
+    "top-n": "5",
+    "max-weight": "0.20",
+    "stop-loss": "0.10"
+  },
+  "risk_controls": [
+    "个股权重上限约束",
+    "基于最高价的移动止损风控 (回撤 10%)"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "daily",
+      "field": "close, volume"
+    }
+  ],
+  "generated_at_utc": "2026-06-10T21:35:19.125727+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

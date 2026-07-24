@@ -1,0 +1,56 @@
+{
+  "datasets": {
+    "fund_daily": {
+      "path": "fund_daily/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "daily": {
+      "path": "daily/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "fund_nav": {
+      "path": "fund_nav/ts_code={symbol}/data.parquet",
+      "date_field": "nav_date",
+      "symbol_field": "ts_code"
+    },
+    "fund_adj": {
+      "path": "fund_adj/year=*/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "etf_basic": {
+      "path": "etf_basic/data.parquet",
+      "symbol_field": "ts_code"
+    },
+    "stock_basic": {
+      "path": "stock_basic/data.parquet",
+      "symbol_field": "ts_code"
+    },
+    "etf_share_size": {
+      "path": "etf_share_size/year=*/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "index_daily": {
+      "path": "index_daily/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "daily_basic": {
+      "path": "daily_basic/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "stk_limit": {
+      "path": "stk_limit/ts_code={symbol}/data.parquet",
+      "date_field": "trade_date",
+      "symbol_field": "ts_code"
+    },
+    "trade_cal": {
+      "path": "trade_cal/data.parquet",
+      "date_field": "cal_date"
+    }
+  }
+}

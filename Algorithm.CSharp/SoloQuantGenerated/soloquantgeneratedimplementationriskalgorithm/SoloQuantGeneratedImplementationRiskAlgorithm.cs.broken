@@ -1,0 +1,124 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedImplementationRiskAlgorithm : QCAlgorithm {
+    private List<Symbol> _symbols = new List<Symbol>();
+    private Dictionary<Symbol, SoloQuantSymbolData> _symbolDataDict = new Dictionary<Symbol, SoloQuantSymbolData>();
+    private DateTime _lastRebalanceTime = DateTime.MinValue;
+    private decimal _maxDrawdownLimit = 0.20m; // 20% Max Drawdown
+    private decimal _highestPortfolioValue = 0m;
+
+    public override void Initialize() {
+      // 1. Set Account Currency
+      SetAccountCurrency(Currencies.CNY);
+      
+      // 2. Set Cash
+      SetCash(1000000);
+      
+      // 3. Set Dates
+      SetStartDate(DateTime.ParseExact("20200101", "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact("20241231", "yyyyMMdd", null));
+      
+      // 4. Set Benchmark
+      SetBenchmark(_ => 0m);
+
+      // 5. Add Equities (Placeholder A-share universe simulating the S&P 500 buckets)
+      string[] tickers = { "600000.SSE", "600519.SSE", "601318.SSE", "000001.SZSE", "000858.SZSE", "002415.SZSE" };
+      
+      foreach (var ticker in tickers) {
+        Market market = ticker.StartsWith("6") ? Market.SSE : Market.SZSE;
+        var security = AddEquity(ticker, Resolution.Daily, market);
+        
+        // 6. Set A-share Models
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+
+        _symbols.Add(security.Symbol);
+        _symbolDataDict[security.Symbol] = new SoloQuantSymbolData(security.Symbol, this);
+      }
+      
+      _highestPortfolioValue = Portfolio.TotalPortfolioValue;
+    }
+
+    public override void OnData(Slice data) {
+      // 10. Risk Control: Max Drawdown Check
+      if (Portfolio.TotalPortfolioValue > _highestPortfolioValue) {
+        _highestPortfolioValue = Portfolio.TotalPortfolioValue;
+      }
+      
+      decimal drawdown = (_highestPortfolioValue - Portfolio.TotalPortfolioValue) / _highestPortfolioValue;
+      if (drawdown > _maxDrawdownLimit) {
+        Liquidate();
+        return;
+      }
+
+      // 7. Rebalance Logic: Monthly
+      if (Time.Month == _lastRebalanceTime.Month && Time.Year == _lastRebalanceTime.Year) return;
+      _lastRebalanceTime = Time;
+
+      // BM01 Logic: SMA 200 Momentum
+      var longSymbols = new List<Symbol>();
+      foreach (var symbol in _symbols) {
+        if (!data.ContainsKey(symbol)) continue;
+        
+        var sd = _symbolDataDict[symbol];
+        // Hold if close > SMA200
+        if (sd.SMA.IsReady && data[symbol].Price > sd.SMA.Current.Value) {
+          longSymbols.Add(symbol);
+        }
+      }
+
+      // Portfolio Construction: Equal Weight
+      decimal weight = 0m;
+      if (longSymbols.Count > 0) {
+        weight = 1m / longSymbols.Count;
+      }
+
+      // 8. & 9. Execute Orders
+      foreach (var symbol in _symbols) {
+        var security = Securities[symbol];
+        int targetQuantity = 0;
+
+        if (longSymbols.Contains(symbol)) {
+          // 8. Position Calculation (rounded to 100 shares)
+          targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / security.Price / 100) * 100;
+        }
+
+        int delta = targetQuantity - security.Holdings.Quantity;
+        if (delta != 0) {
+          MarketOrder(symbol, delta);
+        }
+      }
+    }
+
+    // Helper class for indicators
+    public class SoloQuantSymbolData {
+      public SimpleMovingAverage SMA;
+      public Symbol Symbol { get; }
+
+      public SoloQuantSymbolData(Symbol symbol, QCAlgorithm algorithm) {
+        Symbol = symbol;
+        SMA = algorithm.SMA(symbol, 200, Resolution.Daily);
+      }
+    }
+  }
+}

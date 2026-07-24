@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -78,6 +79,7 @@ namespace QuantConnect.Lean.Engine.Results
         private bool _sampleChartAlways;
         private bool _userExchangeIsOpen;
         private DateTime _lastChartSampleLogicCheck;
+        private long _influxAlgorithmMessageSequence;
         private readonly Dictionary<string, SecurityExchangeHours> _exchangeHours;
 
 
@@ -546,6 +548,7 @@ namespace QuantConnect.Lean.Engine.Results
             if (Messages.Count > 500) return; //if too many in the queue already skip the logging.
             Messages.Enqueue(new DebugPacket(_job.ProjectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("debug", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -556,6 +559,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             Messages.Enqueue(new SystemDebugPacket(_job.ProjectId, AlgorithmId, CompileId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("system", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
 
@@ -570,6 +574,7 @@ namespace QuantConnect.Lean.Engine.Results
             if (Messages.Count > 500) return;
             Messages.Enqueue(new LogPacket(AlgorithmId, message));
             AddToLogStore(message);
+            InfluxDbExporter?.RecordMessage("log", message, utcTime: Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -582,6 +587,7 @@ namespace QuantConnect.Lean.Engine.Results
             if (Messages.Count > 500) return;
             Messages.Enqueue(new HandledErrorPacket(AlgorithmId, message, stacktrace));
             AddToLogStore(message + (!string.IsNullOrEmpty(stacktrace) ? ": StackTrace: " + stacktrace : string.Empty));
+            InfluxDbExporter?.RecordMessage("error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -594,6 +600,7 @@ namespace QuantConnect.Lean.Engine.Results
             Messages.Enqueue(new RuntimeErrorPacket(_job.UserId, AlgorithmId, message, stacktrace));
             AddToLogStore(message + (!string.IsNullOrEmpty(stacktrace) ? ": StackTrace: " + stacktrace : string.Empty));
             SetAlgorithmState(message, stacktrace);
+            InfluxDbExporter?.RecordMessage("runtime_error", message, stacktrace, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -602,7 +609,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// <param name="brokerageMessageEvent">The brokerage message event</param>
         public virtual void BrokerageMessage(BrokerageMessageEvent brokerageMessageEvent)
         {
-            // NOP
+            InfluxDbExporter?.RecordBrokerageMessage(brokerageMessageEvent, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -642,6 +649,12 @@ namespace QuantConnect.Lean.Engine.Results
 
                 //Add our value:
                 series.Values.Add(value);
+            }
+
+            InfluxDbExporter?.RecordChartPoint(chartName, seriesName, seriesType, unit, value);
+            if (chartName == StrategyEquityKey && seriesName == EquityKey)
+            {
+                InfluxDbExporter?.RecordPortfolioSnapshot(value.Time);
             }
         }
 
@@ -718,6 +731,7 @@ namespace QuantConnect.Lean.Engine.Results
             Log.Trace($"LiveTradingResultHandler.SendStatusUpdate(): status: '{status}'. {(string.IsNullOrEmpty(message) ? string.Empty : " " + message)}");
             var packet = new AlgorithmStatusPacket(_job.AlgorithmId, _job.ProjectId, status, message);
             Messages.Enqueue(packet);
+            InfluxDbExporter?.RecordMessage("status", status.ToString(), message, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
 
@@ -738,6 +752,7 @@ namespace QuantConnect.Lean.Engine.Results
                 RuntimeStatistics[key] = value;
             }
             Log.Debug("LiveTradingResultHandler.RuntimeStatistic(): End setting statistic");
+            InfluxDbExporter?.RecordRuntimeStatistic(key, value, Algorithm?.UtcTime ?? DateTime.UtcNow);
         }
 
         /// <summary>
@@ -790,6 +805,7 @@ namespace QuantConnect.Lean.Engine.Results
 
                 //Store to S3:
                 StoreResult(result);
+                InfluxDbExporter?.RecordMessage("run", "Live result finalized", utcTime: endTime);
                 Log.Trace("LiveTradingResultHandler.SendFinalResult(): Finished storing results. Start sending...");
                 //Truncate packet to fit within 32kb:
                 result.Results = new LiveResult();
@@ -845,6 +861,7 @@ namespace QuantConnect.Lean.Engine.Results
 
                 if (live != null)
                 {
+                    InfluxDbExporter?.RecordResultSnapshot(live.Results, DateTime.UtcNow);
                     if (live.Results.OrderEvents != null)
                     {
                         // we store order events separately
@@ -940,6 +957,7 @@ namespace QuantConnect.Lean.Engine.Results
 
             var message = "New Order Event: " + newEvent;
             DebugMessage(message);
+            InfluxDbExporter?.RecordOrderEvent(newEvent, order);
         }
 
         /// <summary>
@@ -1082,6 +1100,7 @@ namespace QuantConnect.Lean.Engine.Results
                 SampleRange(Algorithm.GetChartUpdates(true));
             }
 
+            ProcessAlgorithmLogsToInflux();
             ProcessAlgorithmLogs(messageQueueLimit: 500);
 
             //Set the running statistics:
@@ -1225,10 +1244,21 @@ namespace QuantConnect.Lean.Engine.Results
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected override void UpdatePortfolioValues(DateTime time, bool force = false)
         {
-            if (force || UserExchangeIsOpen(time))
+            if (force || UserExchangeIsOpen(time) || ShouldRefreshPortfolioOutsideMarketHours())
             {
                 base.UpdatePortfolioValues(time, force);
             }
+        }
+
+        private bool ShouldRefreshPortfolioOutsideMarketHours()
+        {
+            if (Algorithm?.LiveMode != true)
+            {
+                return false;
+            }
+
+            var parameter = Algorithm.GetParameter("live-portfolio-refresh-always");
+            return bool.TryParse(parameter, out var enabled) && enabled;
         }
 
         /// <summary>
@@ -1269,6 +1299,31 @@ namespace QuantConnect.Lean.Engine.Results
         public void SetSummaryStatistic(string name, string value)
         {
             SummaryStatistic(name, value);
+        }
+
+        private void ProcessAlgorithmLogsToInflux()
+        {
+            RecordAlgorithmMessagesToInflux("debug", Algorithm.DebugMessages);
+            RecordAlgorithmMessagesToInflux("error", Algorithm.ErrorMessages);
+            RecordAlgorithmMessagesToInflux("log", Algorithm.LogMessages);
+        }
+
+        private void RecordAlgorithmMessagesToInflux(string level, ConcurrentQueue<string> messages)
+        {
+            if (InfluxDbExporter == null || messages == null || messages.IsEmpty)
+            {
+                return;
+            }
+
+            foreach (var message in messages)
+            {
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    var sequence = Interlocked.Increment(ref _influxAlgorithmMessageSequence);
+                    var utcTime = (Algorithm?.UtcTime ?? DateTime.UtcNow).AddTicks(sequence);
+                    InfluxDbExporter.RecordMessage(level, message, utcTime: utcTime);
+                }
+            }
         }
     }
 }

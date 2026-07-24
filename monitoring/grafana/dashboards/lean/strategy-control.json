@@ -1,0 +1,289 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    { "asDropdown": false, "icon": "external link", "keepTime": true, "title": "Live Paper Dashboard", "type": "link", "url": "/d/barra-cne5-live-paper" },
+    { "asDropdown": false, "icon": "external link", "keepTime": true, "title": "Backtest Dashboard", "type": "link", "url": "/d/ashare-multi-family" }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "控制总览",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": { "color": { "fixedColor": "green", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "运行中策略",
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "status": true, "uptime_seconds": true, "strategies_total": true } } }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "已停止策略",
+      "transformations": [
+        { "id": "calculateField", "options": { "alias": "stopped", "binary": { "left": "strategies_total", "operator": "-", "right": "strategies_running" }, "mode": "binary" } },
+        { "id": "organize", "options": { "excludeByName": { "status": true, "uptime_seconds": true, "strategies_running": true, "strategies_total": true } } }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": { "color": { "fixedColor": "blue", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }, "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "API 运行时间",
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "status": true, "strategies_running": true, "strategies_total": true } } }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": { "color": { "fixedColor": "purple", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "策略总数",
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "status": true, "uptime_seconds": true, "strategies_running": true } } }],
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "panels": [],
+      "title": "Legacy Live Paper 策略",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center", "cellOptions": { "type": "auto" }, "filterable": true },
+          "mappings": [{ "options": { "running": { "color": "green", "index": 0, "text": "● 运行中" }, "stopped": { "color": "red", "index": 1, "text": "○ 已停止" } }, "type": "value" }],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "config_path" }, "properties": [{ "id": "custom.hidden", "value": true }] },
+          { "matcher": { "id": "byName", "options": "started_at_utc" }, "properties": [{ "id": "custom.hidden", "value": true }] },
+          { "matcher": { "id": "byName", "options": "uptime_seconds" }, "properties": [{ "id": "unit", "value": "s" }] }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true, "sortBy": [{ "desc": true, "displayName": "状态" }] },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/strategies?group=legacy-lp", "url_options": { "method": "GET" } }],
+      "title": "Legacy Live Paper 策略",
+      "transformations": [
+        { "id": "unpack", "options": { "fields": "strategies" } },
+        { "id": "organize", "options": { "excludeByName": { "algorithm_id": true, "group": true }, "renameByName": { "strategy_id": "策略", "status": "状态", "pid": "PID", "uptime_seconds": "运行时间", "bridge": "Bridge" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "id": 102,
+      "panels": [],
+      "title": "SoloQuant Live Paper 策略",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center", "cellOptions": { "type": "auto" }, "filterable": true },
+          "mappings": [{ "options": { "running": { "color": "green", "index": 0, "text": "● 运行中" }, "stopped": { "color": "red", "index": 1, "text": "○ 已停止" } }, "type": "value" }],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "config_path" }, "properties": [{ "id": "custom.hidden", "value": true }] },
+          { "matcher": { "id": "byName", "options": "uptime_seconds" }, "properties": [{ "id": "unit", "value": "s" }] }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 17 },
+      "id": 20,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true, "sortBy": [{ "desc": true, "displayName": "状态" }] },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/strategies?group=soloquant-lp", "url_options": { "method": "GET" } }],
+      "title": "SoloQuant Live Paper 策略",
+      "transformations": [
+        { "id": "unpack", "options": { "fields": "strategies" } },
+        { "id": "organize", "options": { "excludeByName": { "algorithm_id": true, "group": true, "bridge": true, "started_at_utc": true }, "renameByName": { "strategy_id": "策略", "status": "状态", "pid": "PID", "uptime_seconds": "运行时间" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 103,
+      "panels": [],
+      "title": "Bridge 进程",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center", "cellOptions": { "type": "auto" }, "filterable": true },
+          "mappings": [{ "options": { "running": { "color": "green", "index": 0, "text": "● 运行中" }, "stopped": { "color": "red", "index": 1, "text": "○ 已停止" } }, "type": "value" }],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "uptime_seconds" }, "properties": [{ "id": "unit", "value": "s" }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "id": 30,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true, "sortBy": [{ "desc": true, "displayName": "状态" }] },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/strategies?group=bridge", "url_options": { "method": "GET" } }],
+      "title": "Bridge 进程状态",
+      "transformations": [
+        { "id": "unpack", "options": { "fields": "strategies" } },
+        { "id": "organize", "options": { "excludeByName": { "algorithm_id": true, "group": true, "bridge": true, "config_path": true, "started_at_utc": true }, "renameByName": { "strategy_id": "Bridge", "status": "状态", "pid": "PID", "uptime_seconds": "运行时间" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 104,
+      "panels": [],
+      "title": "核心进程",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center", "cellOptions": { "type": "auto" }, "filterable": true },
+          "mappings": [{ "options": { "running": { "color": "green", "index": 0, "text": "● 运行中" }, "stopped": { "color": "red", "index": 1, "text": "○ 已停止" } }, "type": "value" }],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "uptime_seconds" }, "properties": [{ "id": "unit", "value": "s" }] }
+        ]
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 37 },
+      "id": 40,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/strategies?group=core", "url_options": { "method": "GET" } }],
+      "title": "核心守护进程",
+      "transformations": [
+        { "id": "unpack", "options": { "fields": "strategies" } },
+        { "id": "organize", "options": { "excludeByName": { "algorithm_id": true, "group": true, "bridge": true, "config_path": true, "started_at_utc": true }, "renameByName": { "strategy_id": "进程", "status": "状态", "pid": "PID", "uptime_seconds": "运行时间" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 105,
+      "panels": [],
+      "title": "分组操作",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "启动全部 livepaper 策略（包括 legacy）",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "green", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 0, "y": 44 },
+      "id": 50,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "▶ 启动 Live Paper",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "停止全部 livepaper 策略",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 4, "y": 44 },
+      "id": 51,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "⏹ 停止 Live Paper",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "启动全部 Bridge 进程",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "green", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 8, "y": 44 },
+      "id": 52,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "▶ 启动 Bridge",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "停止全部 Bridge 进程",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 12, "y": 44 },
+      "id": 53,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "⏹ 停止 Bridge",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "启动全部核心守护进程",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "green", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 44 },
+      "id": 54,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "▶ 启动 Core",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" },
+      "description": "停止全部核心守护进程",
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 20, "y": 44 },
+      "id": 55,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "auto", "wideLayout": true },
+      "targets": [{ "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "strategy-control-api" }, "format": "json", "refId": "A", "type": "json", "url": "/api/health", "url_options": { "method": "GET" } }],
+      "title": "⏹ 停止 Core",
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["strategy-control", "soloquant"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "Asia/Shanghai",
+  "title": "策略控制中心",
+  "uid": "strategy-control"
+}

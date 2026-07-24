@@ -1,0 +1,80 @@
+strategy_name: Gold2BetaVolTargetStrategy
+rl_state_completeness: partial
+lean_config: Launcher/config/config-gold2-beta-vol-target-backtest.json
+risk_model_target: Gold2ExtremeRiskModel+Gold2RealRateCapModel
+universe_conflict: [GoldOvernightPremiumAlgorithm]
+parameter_space:
+  - {name: trend-ma-short, type: int, range: [10, 40], default: 20, layer: L2_Alpha}
+  - {name: trend-ma-long, type: int, range: [60, 200], default: 120, layer: L2_Alpha}
+  - {name: ewma-lambda, type: float, range: [0.85, 0.99], default: 0.94, layer: L3_Portfolio}
+  - {name: vol-target, type: float, range: [0.08, 0.15], default: 0.11, layer: L3_Portfolio}
+  - {name: vol-warmup, type: int, range: [40, 120], default:  60, layer: L3_Portfolio}
+  - {name: smooth-alpha, type: float, range: [0.1, 0.5], default: 0.25, layer: L3_Portfolio}
+  - {name: rebalance-threshold, type: float, range: [0.02, 0.10], default: 0.05, layer: L3_Portfolio}
+  - {name: extreme-vol-cap, type: float, range: [0.20, 0.50], default: 0.30, layer: L4_Risk}
+  - {name: realrate-cap, type: float, range: [0.40, 0.80], default: 0.60, layer: L4_Risk}
+  - {name: trend-floor, type: float, range: [0.0, 0.30], default: 0.20, layer: L2_Alpha}
+  - {name: trend-disable, type: bool, range: [false, true], default: false, layer: L2_Alpha}
+state_schema:
+  fields:
+    - {name: ts, type: string}
+    - {name: strategy, type: string}
+    - {name: tpv, type: float}
+    - {name: cash_pct, type: float}
+    - {name: positions, type: array, item_schema: [sym, w]}
+    - {name: w_smooth, type: float}
+    - {name: trend_dir, type: int}
+    - {name: extreme_triggered, type: bool}
+    - {name: realrate_cap, type: float}
+    - {name: dir_coef, type: float}
+    - {name: w_after_vol, type: float}
+    - {name: extreme_cap, type: float}
+    - {name: trend_disabled, type: bool}
+    - {name: drawdown, type: float}
+    - {name: pnl, type: float}
+  dim_hint: 15
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+universe:
+  symbols: ["518880"]
+  timezone: Asia/Shanghai
+review:
+  adapter_module: adapters.gold2
+  adapter_class: Gold2ReviewAdapter
+  layer_names: [trend, vol_target, extreme_risk, realrate_cap]
+  review_schedule: on_backtest
+  block_deploy: false
+  last_review: null
+  review_status: null
+  review_artifact_path: null
+  thresholds:
+    max_layer_attribution_gap: 0.15
+    min_narrative_trades: 20
+    max_consecutive_dd_days: 15
+feedback:
+  adapter_module: feedback.adapters.gold2
+  adapter_class: Gold2FeedbackAdapter
+  trigger_thresholds:
+    review_status_fail: true
+    max_layer_attribution_gap: 0.15
+    min_narrative_trades: 20
+  shaping_term_map:
+    extreme_risk: extreme_risk_contrib_penalty
+    realrate_cap: realrate_cap_contrib_penalty
+  observation_fields: [tpv, cash_pct, w_smooth, trend_dir, extreme_triggered,
+                       realrate_cap, dir_coef, w_after_vol, extreme_cap, trend_disabled,
+                       drawdown, pnl, t]
+inspiration:
+  persistence:
+    min_generations: 3
+    gap_threshold: 0.15
+    weight_nonconvergence_delta: 0.1
+  timeout_generations: 5
+  llm:
+    config_key: code-generation-llm
+    model: glm-5.1
+    temperature: 0.7
+  hypothesis_dir: Results/soloquant/local-strategies

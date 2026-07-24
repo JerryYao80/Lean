@@ -1,0 +1,730 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "SoloQuant 爬取可视化：数据源维度、及时性×重磅性散点图、质量分数趋势",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "Prefect Pipeline",
+      "url": "/d/soloquant-prefect-pipeline",
+      "type": "link",
+      "targetBlank": true
+    },
+    {
+      "title": "策略生命周期",
+      "url": "/d/strategy-lifecycle",
+      "type": "link",
+      "targetBlank": true
+    },
+    {
+      "title": "Prefect UI",
+      "url": "http://localhost:4200",
+      "type": "link",
+      "targetBlank": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "今日爬取条目总数",
+      "type": "stat",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT SUM(\"crawled_count\") FROM \"soloquant_crawl_source\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "今日重磅条目数 (≥7分)",
+      "type": "stat",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT COUNT(*) FROM \"soloquant_crawl_item\" WHERE $timeFilter AND \"weight_score\" >= 7",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "平均及时性",
+      "type": "gauge",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT MEAN((100 - \"avg_lag_minutes\") / 100.0) FROM \"soloquant_crawl_source\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "平均重磅评分",
+      "type": "gauge",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 10,
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT MEAN(\"avg_weight_score\") FROM \"soloquant_crawl_source\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "各数据源爬取量时序",
+      "type": "timeseries",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT SUM(\"crawled_count\") FROM \"soloquant_crawl_source\" WHERE $timeFilter GROUP BY time(__interval), \"source_name\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "及时性 vs 重磅性散点图",
+      "type": "scatter",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 6,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT \"lag_minutes\", \"weight_score\" FROM \"soloquant_crawl_item\" WHERE $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "各数据源质量分数趋势",
+      "type": "timeseries",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 7,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT MEAN(\"avg_weight_score\") * (100 - MEAN(\"avg_lag_minutes\")) / 1000.0 FROM \"soloquant_crawl_source\" WHERE $timeFilter GROUP BY time(__interval), \"source_name\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "数据源健康状态",
+      "type": "table",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 8,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status_code"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "OK",
+                        "color": "green"
+                      },
+                      "0": {
+                        "text": "Skip",
+                        "color": "blue"
+                      },
+                      "2": {
+                        "text": "Degraded",
+                        "color": "yellow"
+                      },
+                      "3": {
+                        "text": "Error",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"source_type\") AS source_type, last(\"status_code\") AS status_code, last(\"crawled_count\") AS crawled, last(\"duplicate_count\") AS dup, last(\"screened_count\") AS screened, last(\"avg_lag_minutes\") AS avg_lag, last(\"avg_weight_score\") AS avg_weight FROM \"soloquant_crawl_source\" WHERE $timeFilter GROUP BY \"source_name\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Local-Src 新增文件",
+      "type": "timeseries",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 9,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT COUNT(\"weight_score\") FROM \"soloquant_local_src\" WHERE $timeFilter GROUP BY time(__interval), \"weight_tier\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "Local-Src 最近处理文件",
+      "type": "table",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "id": 10,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"file_ext\") AS ext, last(\"weight_score\") AS score, last(\"discovered_at_lag_minutes\") AS lag_min, last(\"file_size_bytes\") AS size FROM \"soloquant_local_src\" WHERE $timeFilter GROUP BY \"filename_hash\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "title": "重磅条目时间线 (≥7分)",
+      "type": "state-timeline",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 11,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 60,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT \"weight_score\" FROM \"soloquant_crawl_item\" WHERE $timeFilter AND \"weight_score\" >= 7 GROUP BY \"source_name\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "soloquant",
+    "crawl",
+    "visibility"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "definition": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"source_type\"",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Source Type",
+        "multi": true,
+        "name": "source_type",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"source_type\"",
+        "refresh": 2,
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        }
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "definition": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"source_name\"",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Source Name",
+        "multi": true,
+        "name": "source_name",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"source_name\"",
+        "refresh": 2,
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        }
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "definition": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"category\"",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Category",
+        "multi": true,
+        "name": "category",
+        "options": [],
+        "query": "SHOW TAG VALUES FROM \"soloquant_crawl_source\" WITH KEY = \"category\"",
+        "refresh": 2,
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "lean-influxdb"
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "SoloQuant 爬取可视化",
+  "uid": "soloquant-crawl-visibility",
+  "version": 0
+}

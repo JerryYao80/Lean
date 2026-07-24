@@ -64,10 +64,7 @@ namespace QuantConnect.Statistics
         {
             foreach (var kvp in customSummary)
             {
-                if (!Summary.ContainsKey(kvp.Key))
-                {
-                    Summary[kvp.Key] = kvp.Value;
-                }
+                Summary[kvp.Key] = kvp.Value;
             }
         }
     }

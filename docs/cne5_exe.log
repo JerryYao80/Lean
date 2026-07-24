@@ -1,0 +1,11 @@
+Barra CNE5 回测命令
+
+1. 完整 pipeline（因子 + 回测 + 蒙特卡洛）
+/root/miniconda3/envs/quant311/bin/python Scripts/barra_cne5_pipeline.py --config Launcher/config/config-barra-cne5-pipeline.json
+
+2. 只跑 LEAN 回测
+cd /home/project/hope/Lean/Launcher/bin/Debug
+./QuantConnect.Lean.Launcher --config ../../config/config-barra-cne5-backtest.json
+
+3. 因子已存在时，跑“回测 + 蒙特卡洛”
+/root/miniconda3/envs/quant311/bin/python Scripts/barra_cne5_pipeline.py --config Launcher/config/config-barra-cne5-pipeline.json --factor-source-mode reuse

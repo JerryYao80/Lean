@@ -1,0 +1,79 @@
+{
+  "strategy_sources": [
+    {
+      "name": "arXiv q-fin",
+      "type": "searxng",
+      "site_restriction": "arxiv.org",
+      "enabled": true
+    },
+    {
+      "name": "SSRN",
+      "type": "searxng",
+      "site_restriction": "ssrn.com",
+      "enabled": true
+    },
+    {
+      "name": "Quantpedia",
+      "type": "searxng",
+      "site_restriction": "quantpedia.com",
+      "enabled": true
+    },
+    {
+      "name": "arXiv API",
+      "type": "api",
+      "url": "https://export.arxiv.org/api/query",
+      "category": "q-fin",
+      "enabled": true
+    }
+  ],
+  "finance_sources": [
+    {
+      "name": "Fed RSS",
+      "type": "rss",
+      "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+      "enabled": true
+    },
+    {
+      "name": "PBoC",
+      "type": "searxng",
+      "site_restriction": "pbc.gov.cn",
+      "enabled": true
+    },
+    {
+      "name": "CSRC",
+      "type": "searxng",
+      "site_restriction": "csrc.gov.cn",
+      "enabled": true
+    }
+  ],
+  "api_sources": [
+    {
+      "name": "FRED API",
+      "type": "api",
+      "url": "https://api.stlouisfed.org/fred/",
+      "api_key_env": "FRED_API_KEY",
+      "enabled": true
+    },
+    {
+      "name": "SEC EDGAR",
+      "type": "api",
+      "url": "https://efts.sec.gov/LATEST/",
+      "enabled": false
+    },
+    {
+      "name": "Semantic Scholar",
+      "type": "api",
+      "url": "https://api.semanticscholar.org/",
+      "enabled": false
+    }
+  ],
+  "crawl_settings": {
+    "max_queries_per_task": 10,
+    "max_results_per_query": 3,
+    "content_truncate_chars": 16000,
+    "llm_screening_enabled": true,
+    "llm_primary_provider": "zhipu",
+    "llm_fallback_provider": "deepseek",
+    "weight_score_threshold": 5.0
+  }
+}

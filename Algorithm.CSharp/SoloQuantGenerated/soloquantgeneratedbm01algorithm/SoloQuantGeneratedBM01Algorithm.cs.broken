@@ -1,0 +1,167 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedBM01Algorithm : QCAlgorithm {
+    // Parameters
+    private string _startDateStr = "20200101";
+    private string _endDateStr = "20241231";
+    private string _initialCashStr = "1000000";
+    private decimal _trailingStopPct = 0.05m; // 5% trailing stop
+    private decimal _maxDrawdownPct = 0.20m;  // 20% max drawdown limit
+    
+    // State
+    private int _lastRebalanceMonth = -1;
+    private decimal _peakPortfolioValue = 0m;
+    private Dictionary<Symbol, SoloQuantSymbolData> _symbolDataDict = new Dictionary<Symbol, SoloQuantSymbolData>();
+
+    public override void Initialize() {
+      // 1. SetAccountCurrency must be before SetCash
+      SetAccountCurrency(Currencies.CNY);
+      
+      // 2. Parse dates exactly
+      SetStartDate(DateTime.ParseExact(_startDateStr, "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact(_endDateStr, "yyyyMMdd", null));
+      
+      // 3. Set Cash
+      SetCash(decimal.Parse(_initialCashStr));
+      
+      // 4. Set Benchmark to zero to avoid external data dependency
+      SetBenchmark(_ => 0m);
+      
+      // 5. Define Universe (Representative A-share tickers for simulation)
+      // Note: Using a subset of blue-chip stocks to represent the pool.
+      var tickers = new[] { "600000.SSE", "600036.SSE", "600519.SSE", "000001.SZSE", "000002.SZSE" };
+
+      foreach (var ticker in tickers) {
+        var market = ticker.EndsWith(".SZSE") ? Market.SZSE : Market.SSE;
+        var security = AddEquity(ticker, Resolution.Daily, market);
+
+        // 6. Set A-share Models
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel(); // No arguments
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9)); // T+1
+
+        // Initialize Indicators
+        var sma200 = SMA(security.Symbol, 200, Resolution.Daily);
+        var symbolData = new SoloQuantSymbolData(security.Symbol, sma200);
+        _symbolDataDict[security.Symbol] = symbolData;
+      }
+      
+      _peakPortfolioValue = Portfolio.TotalPortfolioValue;
+    }
+
+    public override void OnData(Slice data) {
+      // Update Peak for Drawdown Calc
+      if (Portfolio.TotalPortfolioValue > _peakPortfolioValue) {
+        _peakPortfolioValue = Portfolio.TotalPortfolioValue;
+      }
+
+      // Risk Control: Max Drawdown Check
+      if (_peakPortfolioValue > 0) {
+        decimal drawdown = (_peakPortfolioValue - Portfolio.TotalPortfolioValue) / _peakPortfolioValue;
+        if (drawdown > _maxDrawdownPct) {
+          Liquidate();
+          Error("Max Drawdown limit reached. Liquidating portfolio.");
+          return;
+        }
+      }
+
+      // Risk Control: Trailing Stop for individual positions
+      foreach (var kvp in _symbolDataDict) {
+        var symbol = kvp.Key;
+        var data = kvp.Value;
+        if (Portfolio[symbol].Invested) {
+          var currentPrice = Securities[symbol].Price;
+          if (currentPrice > data.HighWaterMark) {
+            data.HighWaterMark = currentPrice;
+          }
+          if (currentPrice < data.HighWaterMark * (1m - _trailingStopPct)) {
+            Liquidate(symbol);
+            data.HighWaterMark = 0m; // Reset
+          }
+        } else {
+            data.HighWaterMark = 0m; // Reset if not invested
+        }
+      }
+
+      // Trading Logic: Monthly Rebalance
+      if (Time.Month == _lastRebalanceMonth) return;
+      _lastRebalanceMonth = Time.Month;
+
+      // 1. Filter eligible assets (Close > SMA200)
+      var longSymbols = new List<Symbol>();
+      foreach (var kvp in _symbolDataDict) {
+        var symbol = kvp.Key;
+        var sd = kvp.Value;
+        if (!sd.SMA.IsReady) continue;
+
+        if (Securities[symbol].Price > sd.SMA.Current.Value) {
+          longSymbols.Add(symbol);
+        }
+      }
+
+      if (longSymbols.Count == 0) {
+        Liquidate();
+        return;
+      }
+
+      // 2. Equal Weight Calculation
+      decimal weight = 1m / longSymbols.Count;
+
+      // 3. Execute Trades
+      foreach (var symbol in longSymbols) {
+        var security = Securities[symbol];
+        var price = security.Price;
+        
+        // 8. Calculate target quantity (rounded to 100 shares)
+        int targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / price / 100) * 100;
+        
+        // 9. Order execution
+        int currentQuantity = Portfolio[symbol].Quantity;
+        int delta = targetQuantity - currentQuantity;
+        
+        if (delta != 0) {
+          MarketOrder(symbol, delta);
+        }
+      }
+
+      // Liquidate symbols not in the long list (if any leftover)
+      foreach (var symbol in Portfolio.Keys) {
+        if (symbol.Value != "CNY" && !longSymbols.Contains(symbol)) {
+          Liquidate(symbol);
+        }
+      }
+    }
+  }
+
+  // Helper class for symbol data (Avoid 'SymbolData' name)
+  public class SoloQuantSymbolData {
+    public Symbol Symbol { get; }
+    public SimpleMovingAverage SMA { get; }
+    public decimal HighWaterMark { get; set; }
+
+    public SoloQuantSymbolData(Symbol symbol, SimpleMovingAverage sma) {
+      Symbol = symbol;
+      SMA = sma;
+      HighWaterMark = 0m;
+    }
+  }
+}

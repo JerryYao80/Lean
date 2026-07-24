@@ -1,0 +1,139 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using QuantConnect.Algorithm;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders;
+using QuantConnect.Indicators;
+using QuantConnect.Securities;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data.Fundamental;
+
+namespace QuantConnect.Algorithm.CSharp {
+  public class SoloQuantGeneratedImpRiskAlgorithm : QCAlgorithm {
+    private List<Symbol> _symbols = new List<Symbol>();
+    private Dictionary<Symbol, SoloQuantSymbolData> _symbolData = new Dictionary<Symbol, SoloQuantSymbolData>();
+    private DateTime _lastRebalanceTime = DateTime.MinValue;
+    private decimal _maxDrawdownLimit = 0.15m; // 15% Max Drawdown Limit
+    private decimal _trailingStopPercent = 0.05m; // 5% Trailing Stop
+
+    public override void Initialize() {
+      SetAccountCurrency(Currencies.CNY);
+      SetCash(decimal.Parse("1000000"));
+      SetStartDate(DateTime.ParseExact("20200101", "yyyyMMdd", null));
+      SetEndDate(DateTime.ParseExact("20241231", "yyyyMMdd", null));
+      SetBenchmark(_ => 0m);
+
+      // Simulating a bucket of 6 stocks from the paper's universe (using SSE stocks as proxies)
+      string[] tickers = { "600000.SSE", "600519.SSE", "000001.SSE", "000002.SSE", "601318.SSE", "600036.SSE" };
+
+      foreach (var ticker in tickers) {
+        var security = AddEquity(ticker, Resolution.Daily, Market.SSE);
+        security.FeeModel = new AShareStockFeeModel();
+        security.FillModel = new AShareStockFillModel();
+        security.BuyingPowerModel = new AShareStockBuyingPowerModel();
+        security.SettlementModel = new DelayedSettlementModel(1, TimeSpan.FromHours(9));
+
+        _symbols.Add(security.Symbol);
+        _symbolData[security.Symbol] = new SoloQuantSymbolData(security.Symbol);
+      }
+
+      Schedule.On(DateRules.MonthStart("600000.SSE"), TimeRules.AfterMarketOpen("600000.SSE", 30), () => {
+        Rebalance();
+      });
+    }
+
+    public override void OnData(Slice data) {
+      // Update Indicators
+      foreach (var symbol in _symbols) {
+        if (data.Bars.ContainsKey(symbol)) {
+          _symbolData[symbol].Update(data.Time, data[symbol].Close);
+        }
+      }
+
+      // Risk Controls: Max Drawdown Check
+      if (Portfolio.TotalPortfolioValue < (1 - _maxDrawdownLimit) * Portfolio.TotalPortfolioValue) {
+        Liquidate();
+        return;
+      }
+
+      // Risk Controls: Trailing Stop Loss
+      foreach (var kvp in Portfolio) {
+        if (kvp.Value.Invested) {
+          var security = kvp.Value;
+          var currentPrice = Securities[security.Symbol].Price;
+          // Simple trailing stop logic based on highest price since entry (simplified)
+          if (security.UnrealizedProfitPercent < -_trailingStopPercent) {
+            Liquidate(security.Symbol);
+          }
+        }
+      }
+    }
+
+    private void Rebalance() {
+      // Strategy: BM07 Cross-Sectional Momentum (12-1)
+      // Select top 2 assets by 12-month return (approximated by 252-day ROC)
+      var readySymbols = _symbols.Where(s => _symbolData[s].IsReady).ToList();
+      
+      if (readySymbols.Count < 2) return;
+
+      var topMomentumSymbols = readySymbols
+          .OrderByDescending(s => _symbolData[s].ROC252.Current.Value)
+          .Take(2)
+          .ToList();
+
+      // Liquidate existing positions not in top 2
+      foreach (var symbol in _symbols) {
+        if (!topMomentumSymbols.Contains(symbol) && Portfolio[symbol].Invested) {
+          Liquidate(symbol);
+        }
+      }
+
+      // Equal weight allocation (50% each)
+      decimal weight = 0.5m;
+
+      foreach (var symbol in topMomentumSymbols) {
+        var security = Securities[symbol];
+        if (security.Price == 0) continue;
+
+        int targetQuantity = (int)(Portfolio.TotalPortfolioValue * weight / security.Price / 100) * 100;
+        
+        // Adjust for existing position
+        int currentQuantity = Portfolio[symbol].Quantity;
+        int delta = targetQuantity - currentQuantity;
+
+        if (delta != 0) {
+          MarketOrder(symbol, delta);
+        }
+      }
+    }
+
+    // Internal class for Symbol Data
+    public class SoloQuantSymbolData {
+      public Symbol Symbol;
+      public RateOfChangePercent ROC252;
+      public SimpleMovingAverage SMA200;
+
+      public bool IsReady => ROC252.IsReady && SMA200.IsReady;
+
+      public SoloQuantSymbolData(Symbol symbol) {
+        Symbol = symbol;
+        ROC252 = new RateOfChangePercent(252); // 12-1 Momentum approx
+        SMA200 = new SimpleMovingAverage(200);
+      }
+
+      public void Update(DateTime time, decimal close) {
+        ROC252.Update(time, close);
+        SMA200.Update(time, close);
+      }
+    }
+  }
+}

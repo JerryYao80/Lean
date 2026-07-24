@@ -370,6 +370,19 @@ namespace QuantConnect.Data.UniverseSelection
         /// <param name="selection">The current universe selection</param>
         protected void OnSelectionChanged(HashSet<Symbol> selection = null)
         {
+            // DEBUG: Log when option symbols are selected
+            var optionSymbols = (selection ?? new HashSet<Symbol>()).Where(s => s.SecurityType == SecurityType.Option).ToList();
+            if (optionSymbols.Count > 0)
+            {
+                Console.WriteLine($"[DEBUG Universe.OnSelectionChanged] Selected {optionSymbols.Count} option symbols");
+                Selected = selection ?? new HashSet<Symbol>();
+                Console.WriteLine($"[DEBUG]   Selected property updated: {Selected.Count} total symbols");
+            }
+            else
+            {
+                Selected = selection ?? new HashSet<Symbol>();
+            }
+
             SelectionChanged?.Invoke(this, new SelectionEventArgs(selection ?? new HashSet<Symbol>()));
         }
 

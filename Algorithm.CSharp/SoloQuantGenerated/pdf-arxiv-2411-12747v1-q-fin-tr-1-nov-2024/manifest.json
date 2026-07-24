@@ -1,0 +1,43 @@
+{
+  "strategy_id": "pdf-arxiv-2411-12747v1-q-fin-tr-1-nov-2024",
+  "class_name": "SoloQuantGeneratedRankingAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-arxiv-2411-12747v1-q-fin-tr-1-nov-2024/SoloQuantGeneratedRankingAlgorithm.cs",
+  "description": "A daily-rebalanced long-only equity strategy driven by a composite ranking score (momentum, RSI, and volatility) as a stand-in for AI-predicted returns. It selects the top K stocks from a configurable universe (e.g., CSI 300), assigns equal weight, limits per-stock exposure, and controls risk via maximum drawdown and turnover penalties. A-share transaction costs (0.03% buy, 0.13% sell) and 100-share lot size are respected.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/pdf-arxiv-2411-12747v1-q-fin-tr-1-nov-2024/SoloQuantGeneratedRankingAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/20260510/ssrn-9f01cbabb4668a8f.json",
+  "parameters": {
+    "universe": "Index ticker for universe (e.g., '000300' for CSI 300)",
+    "start-date": "Backtest start date, default 2018-01-01",
+    "end-date": "Backtest end date, default 2023-12-31",
+    "initial-capital": "Starting capital, default 1000000",
+    "top-k": "Number of top stocks to hold, default 10",
+    "momentum-period": "Momentum lookback period, default 20",
+    "rsi-period": "RSI period, default 14",
+    "bollinger-period": "Bollinger Band period, default 20",
+    "max-single-weight": "Maximum weight per stock, default 0.2",
+    "max-drawdown": "Maximum allowable portfolio drawdown (negative), e.g., -0.15",
+    "stop-loss-from-high": "Individual stop loss from recent high (negative), e.g., -0.08"
+  },
+  "risk_controls": [
+    "Portfolio maximum drawdown threshold: liquidate all if exceeded",
+    "Individual stop-loss: exit position if price drops more than X% from recent high",
+    "Maximum single position weight cap",
+    "Turnover penalty implicitly captured by transaction costs; no explicit turnover constraint in this implementation"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity daily price/volume (TradeBar)",
+      "field": "Open, High, Low, Close, Volume"
+    },
+    {
+      "dataset": "Universe membership (Coarse/Fine fundamental)",
+      "field": "Volume, Price, Fundamental data for filtering"
+    },
+    {
+      "dataset": "Index daily price (for benchmark)",
+      "field": "Close (of the index ticker)"
+    }
+  ],
+  "generated_at_utc": "2026-05-19T07:24:43.221621+00:00"
+}
