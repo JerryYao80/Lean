@@ -3,6 +3,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Phase 4: FactorCatalog path (monkeypatchable in tests). The reconstruction LLM
+# reads this so it knows what factors the zoo offers (spec §3.2).
+CATALOG_PATH = Path(__file__).resolve().parents[2] / "Results" / "factor-zoo" / "factor-catalog.yaml"
+
 _SYSTEM_PROMPT = """你是量化策略研究员。任务:基于一个量化策略某因子层的复盘归因 + 代际优化历史,
 诊断该层"为什么 reward shaping 修不动",并提出一个替代设计假设(新策略思路)。
 
@@ -14,7 +18,33 @@ _SYSTEM_PROMPT = """你是量化策略研究员。任务:基于一个量化策�
 - 输出 Markdown,包含:根因诊断、替代设计假设、预期改善、A 股落地映射"""
 
 
-def build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_semantic, threshold):
+def _load_available_factors(catalog_path=None) -> list:
+    """Phase 4: read FactorCatalog yaml -> [{id,name,category,selection_hint}].
+
+    Returns [] if the catalog is missing/corrupt (graceful degrade; the prompt
+    then omits the available-factors section entirely).
+    """
+    import yaml
+    p = Path(catalog_path) if catalog_path else CATALOG_PATH
+    if not p.exists():
+        return []
+    try:
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    out = []
+    for f in doc.get("factors", []):
+        out.append({
+            "id": f.get("id"),
+            "name": f.get("name"),
+            "category": f.get("category"),
+            "selection_hint": f.get("selection_hint"),
+        })
+    return out
+
+
+def build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_semantic, threshold,
+                 available_factors=None):
     gen_table = "\n".join(
         f"  代 {g['generation']} | gap={g.get('layer_gaps',{}).get(inspired_layer,{}).get('gap',0):.2f} | "
         f"weight={g.get('shaping_overrides',{}).get(inspired_layer + '_contrib_penalty', 0):.2f} | "
@@ -29,6 +59,13 @@ def build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_s
                   if float(t.get("layer_contributions", {}).get(inspired_layer, 0)) < 0][:10]
     neg_trades_str = "\n".join(f"  {t.get('entry_time','?')}: {t.get('layer_contributions',{}).get(inspired_layer)}"
                                for t in neg_trades) or "  (无负贡献交易)"
+    # Phase 4: only emit the available-factors section when a catalog was loaded.
+    factors_str = ""
+    if available_factors:
+        factors_str = "\n\n## 可选用因子 (factor zoo)\n" + "\n".join(
+            f"  - {f.get('id')} ({f.get('category')}): {f.get('selection_hint')}"
+            for f in available_factors
+        ) + "\n\n重构假设可指定 factor-include: [<id>, ...] 选用这些因子。"
     return f"""## 策略
 {strategy_name}
 
@@ -43,7 +80,7 @@ def build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_s
 layer_attribution[{inspired_layer}]: {layer_agg}
 
 ## 该层 per-trade 负贡献样本(最多 10 笔)
-{neg_trades_str}
+{neg_trades_str}{factors_str}
 
 ## 输出要求
 Markdown 文档,标题: "受 {strategy_name} {inspired_layer} 层失效启发的策略假设",
@@ -78,7 +115,9 @@ def run(strategy_name, inspired_layer, review_doc, gen_history, manifest_raw, ll
         hypothesis_dir="Results/soloquant/local-strategies"):
     layer_semantic = inspired_layer
     threshold = manifest_raw.get("inspiration", {}).get("persistence", {}).get("gap_threshold", 0.15)
-    user_prompt = build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_semantic, threshold)
+    available_factors = _load_available_factors()
+    user_prompt = build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_semantic, threshold,
+                               available_factors=available_factors)
     markdown = _call_llm(_SYSTEM_PROMPT, user_prompt, llm_cfg)
     if len(markdown.strip()) < 100:
         raise ValueError(f"LLM output too short ({len(markdown)} chars < 100), not writing hypothesis file")

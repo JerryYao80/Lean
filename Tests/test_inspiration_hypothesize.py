@@ -59,3 +59,55 @@ def test_run_raises_on_llm_exception(tmp_path):
         with pytest.raises(RuntimeError, match="network"):
             run("Gold2", "extreme_risk", _REVIEW_DOC, _GEN_HISTORY,
                 {"review": {"layer_names": ["extreme_risk"]}}, {}, hypothesis_dir=str(tmp_path))
+
+
+# ── Phase 4: FactorCatalog injection into the prompt ─────────────────────────
+_AVAILABLE_FACTORS = [
+    {"id": "crowding", "name": "Trading Crowding Score", "category": "Sentiment",
+     "selection_hint": "拥挤度, 高=过热, 通常反向"},
+    {"id": "hv_20d", "name": "20-Day Realized Volatility", "category": "Volatility",
+     "selection_hint": "20日已实现波动率, 高=高波动"},
+]
+
+
+def test_build_prompt_includes_available_factors_when_provided():
+    prompt = build_prompt("Gold2", "extreme_risk", _REVIEW_DOC, _GEN_HISTORY,
+                          layer_semantic="extreme risk cap", threshold=0.15,
+                          available_factors=_AVAILABLE_FACTORS)
+    assert "## 可选用因子" in prompt
+    assert "crowding" in prompt
+    assert "拥挤度" in prompt
+    assert "hv_20d" in prompt
+
+
+def test_build_prompt_omits_factor_section_when_empty():
+    # Empty/None available_factors must NOT add the section (graceful degrade;
+    # keeps existing prompt assertions valid when no catalog is present).
+    prompt_empty = build_prompt("Gold2", "extreme_risk", _REVIEW_DOC, _GEN_HISTORY,
+                                layer_semantic="extreme risk cap", threshold=0.15,
+                                available_factors=[])
+    assert "## 可选用因子" not in prompt_empty
+    prompt_none = build_prompt("Gold2", "extreme_risk", _REVIEW_DOC, _GEN_HISTORY,
+                               layer_semantic="extreme risk cap", threshold=0.15)
+    assert "## 可选用因子" not in prompt_none
+
+
+def test_run_loads_catalog_from_file(tmp_path, monkeypatch):
+    import yaml as _yaml
+    catalog = {"version": "2026-07-25T00:00:00+00:00", "universe": ["CSI300"],
+               "factors": _AVAILABLE_FACTORS}
+    cat_path = tmp_path / "factor-catalog.yaml"
+    cat_path.write_text(_yaml.safe_dump(catalog, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setattr("hypothesize.CATALOG_PATH", cat_path)
+
+    captured = {}
+
+    def _capture(system_prompt, user_prompt, llm_cfg):
+        captured["user_prompt"] = user_prompt
+        return "# 假设\n\n" + "x" * 100
+
+    with patch("hypothesize._call_llm", side_effect=_capture):
+        run("Gold2", "extreme_risk", _REVIEW_DOC, _GEN_HISTORY,
+            {"review": {"layer_names": ["extreme_risk"]}}, {}, hypothesis_dir=str(tmp_path))
+    assert "## 可选用因子" in captured["user_prompt"]
+    assert "crowding" in captured["user_prompt"]
