@@ -28,6 +28,8 @@ def optimize(manifest_path: str, config: dict, n_trials: int = 200,
         for p in manifest.parameter_space:
             if p.type == "int":
                 params[p.name] = trial.suggest_int(p.name, int(p.range[0]), int(p.range[1]))
+            elif p.type == "categorical":
+                params[p.name] = trial.suggest_categorical(p.name, list(p.range))
             elif p.log:
                 params[p.name] = trial.suggest_float(p.name, float(p.range[0]), float(p.range[1]), log=True)
             else:
