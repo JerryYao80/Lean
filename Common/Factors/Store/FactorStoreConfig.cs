@@ -18,8 +18,12 @@ namespace QuantConnect.Factors.Store
         public static void RegisterDefaults(FactorStore store)
         {
             FactorRegistry.Initialize();
-            // Task 2: Runtime factors -> RRegistryAdapter
-            foreach (var fid in new[] { "hv_20d", "momentum_20d", "ma_cross_5_20", "rsi_14d", "amihud_20d", "iv_hv_spread" })
+            // Task 2: Runtime factors -> RRegistryAdapter.
+            // iv_hv_spread is also Runtime but is registered by VaRFactors.Register() (called by
+            // VarStrategy), NOT by FactorRegistry.Initialize(); default-registering it here would
+            // always return Missing. A strategy needing it must Register(new RRegistryAdapter("iv_hv_spread"))
+            // after VaRFactors.Register().
+            foreach (var fid in new[] { "hv_20d", "momentum_20d", "ma_cross_5_20", "rsi_14d", "amihud_20d" })
             {
                 store.Register(fid, new RRegistryAdapter(fid));
             }

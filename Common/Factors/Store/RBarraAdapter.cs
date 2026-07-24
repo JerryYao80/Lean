@@ -67,9 +67,11 @@ namespace QuantConnect.Factors.Store
 
         private static (string market, string ticker) ResolveMarketTicker(Symbol symbol)
         {
+            // 6-prefix (SH main board) or 51-prefix (SH ETF: 510xxx-518xxx) -> sse; else szse.
+            // Matches the reference SymbolToTsCode rule; the old 6/9-only rule misclassified
+            // 5-prefix SH ETFs (511660 etc., whose CSVs live in sse/daily/) as szse.
             var ticker = symbol.ID.Symbol;
-            var c = ticker.Length > 0 ? ticker[0] : '0';
-            var market = (c == '6' || c == '9') ? "sse" : "szse";
+            var market = (ticker.StartsWith("6") || ticker.StartsWith("51")) ? "sse" : "szse";
             return (market, ticker);
         }
     }

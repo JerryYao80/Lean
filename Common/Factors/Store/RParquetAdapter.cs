@@ -60,17 +60,19 @@ namespace QuantConnect.Factors.Store
         /// <summary>Expose roots for FactorStore.FreshnessReport (read-only).</summary>
         public (string FactorRoot, string ResultRoot) Describe() => (_factorRoot, _resultRoot);
 
-        /// <summary>A-share Symbol -> tushare ts_code (6/9-prefix .SH else .SZ).</summary>
+        /// <summary>A-share Symbol -> tushare ts_code. Mirrors CrowdingFactorZooAlphaModel.SymbolToTsCode:
+        /// 6-prefix (SH main board) or 51-prefix (SH ETF: 510xxx-518xxx) -> .SH; else .SZ.</summary>
         internal static string SymbolToTsCode(Symbol symbol)
         {
             var ticker = symbol.ID.Symbol;
-            var c = ticker.Length > 0 ? ticker[0] : '0';
-            return (c == '6' || c == '9') ? $"{ticker}.SH" : $"{ticker}.SZ";
+            return (ticker.StartsWith("6") || ticker.StartsWith("51")) ? $"{ticker}.SH" : $"{ticker}.SZ";
         }
 
         private static string DefaultResultRoot()
         {
-            try { return Path.GetFullPath(Path.Combine(Globals.DataFolder, "..", "..", "result")); }
+            // result/ is a sibling of Data/ under the Lean root (one level up from DataFolder).
+            // Two ".." would escape to /home/project/hope/result (nonexistent); one ".." lands on Lean/result.
+            try { return Path.GetFullPath(Path.Combine(Globals.DataFolder, "..", "result")); }
             catch { return "result"; }
         }
 

@@ -15,8 +15,11 @@ namespace QuantConnect.Factors.Store
 {
     /// <summary>
     /// Read-only wrapper for FactorRegistry Runtime factors (hv_20d, momentum_20d,
-    /// ma_cross_5_20, rsi_14d, amihud_20d, iv_hv_spread). These Compute() from
-    /// history with no InjectValue. Precomputed factors are owned by RParquetAdapter.
+    /// ma_cross_5_20, rsi_14d, amihud_20d). These Compute() from history with no
+    /// InjectValue. Precomputed factors are owned by RParquetAdapter. iv_hv_spread
+    /// is also Runtime but is registered by VaRFactors.Register() (not
+    /// FactorRegistry.Initialize), so it is not default-registered in FactorStoreConfig;
+    /// a strategy may Register(new RRegistryAdapter("iv_hv_spread")) after VaRFactors.Register().
     /// </summary>
     public class RRegistryAdapter : IFactorAdapter
     {
