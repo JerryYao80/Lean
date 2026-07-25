@@ -121,3 +121,17 @@ def test_freshness_json_influx_skipped_without_token(isolated_fw, monkeypatch):
     fresh = json.loads(fw.FRESHNESS_FILE.read_text(encoding="utf-8"))
     assert fresh["alpha"]["lag_days"] == 0
     assert influx == []
+
+
+def test_phase5_seven_factor_builders_registered():
+    """Phase 5: factor_worker.BUILDERS must include the 7 new factor ids."""
+    ids = {b.factor_id for b in fw.BUILDERS}
+    expected = {
+        "accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
+        "ivol_20d", "max_ret_20d", "short_term_reversal",
+    }
+    assert expected.issubset(ids), f"missing: {expected - ids}"
+    # financial (annual) factors capped at 1 backfill day; price-volume at 60.
+    by_id = {b.factor_id: b for b in fw.BUILDERS}
+    assert by_id["accruals_sloan"].max_backfill_days == 1
+    assert by_id["ivol_20d"].max_backfill_days == 60

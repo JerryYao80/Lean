@@ -193,6 +193,70 @@ def _build_forward(date_compact: str) -> dict:
     return summary
 
 
+# ── Phase 5: 7 new factor builders (parquet to result/factor-zoo/<id>/) ─────
+# Each _build_X wires the matching factor_builders.<id>_builder.build_day; the
+# _resolve_X_latest scans result/factor-zoo/<id>/ for the max yyyy-MM-dd dir.
+# Financial (annual PIT) factors use max_backfill_days=1 (value changes only on
+# new annual disclosure); price-volume daily factors use the default 60.
+
+def _make_factorzoo_builder(module_name: str, factor_id: str):
+    """Build a (build_callable, latest_date_resolver) pair for a Phase 5 factor.
+
+    factor_id is the on-disk subdir under result/factor-zoo/. The builder module
+    must expose build_day(date_yyyy_mm_dd, ts_codes, data_root, result_root,
+    write_influxdb, influx_*). Date is compact YYYYMMDD -> converted to YYYY-MM-DD.
+    """
+    from barra_cne5_data_loader import BarraCNE5DataLoader
+
+    def _build(date_compact: str) -> dict:
+        import importlib
+        mod = importlib.import_module(f"factor_builders.{module_name}")
+        date_yyyy_mm_dd = f"{date_compact[0:4]}-{date_compact[4:6]}-{date_compact[6:8]}"
+        loader = BarraCNE5DataLoader(TUSHARE_DATA_PATH)
+        ts_codes = loader.load_index_constituents(asof_date=date_compact, index_code="000300.SH")
+        started = time.perf_counter()
+        df = mod.build_day(
+            date_yyyy_mm_dd=date_yyyy_mm_dd,
+            ts_codes=ts_codes,
+            data_root=TUSHARE_DATA_PATH,
+            result_root=CROWDING_RESULT_ROOT,
+            write_influxdb=bool(INFLUX_TOKEN),
+            influx_url=INFLUX_URL, influx_org=INFLUX_ORG,
+            influx_bucket=INFLUX_BUCKET, influx_token=INFLUX_TOKEN,
+        )
+        return {"rows": int(len(df)), "duration_ms": int((time.perf_counter() - started) * 1000)}
+
+    def _resolve() -> str | None:
+        root = Path(CROWDING_RESULT_ROOT) / "factor-zoo" / factor_id
+        if not root.exists():
+            return None
+        best: str | None = None
+        for sub in root.iterdir():
+            if not sub.is_dir():
+                continue
+            try:
+                datetime.strptime(sub.name, "%Y-%m-%d")
+            except ValueError:
+                continue
+            compact = sub.name.replace("-", "")
+            if best is None or compact > best:
+                best = compact
+        return best
+
+    return _build, _resolve
+
+
+# Financial (annual PIT) factors — value changes only on new annual disclosure.
+_BLD_ACCRUALS, _RES_ACCRUALS = _make_factorzoo_builder("accruals_sloan_builder", "accruals_sloan")
+_BLD_GP, _RES_GP = _make_factorzoo_builder("gross_profitability_builder", "gross_profitability")
+_BLD_AG, _RES_AG = _make_factorzoo_builder("asset_growth_builder", "asset_growth")
+_BLD_ROECH, _RES_ROECH = _make_factorzoo_builder("roe_change_builder", "roe_change")
+# Price-volume daily factors.
+_BLD_IVOL, _RES_IVOL = _make_factorzoo_builder("ivol_20d_builder", "ivol_20d")
+_BLD_MAXRET, _RES_MAXRET = _make_factorzoo_builder("max_ret_20d_builder", "max_ret_20d")
+_BLD_REVERSAL, _RES_REVERSAL = _make_factorzoo_builder("short_term_reversal_builder", "short_term_reversal")
+
+
 def _resolve_forward_latest() -> str | None:
     """No parquet on disk; resolve from factor_worker's own state file (crash-resume)."""
     state = _load_state()
@@ -277,6 +341,42 @@ BUILDERS: list[FactorBuilder] = [
                     "cashflow", "fina_indicator", "index_weight", "moneyflow",
                     "hsgt_top10", "margin_detail", "cyq_perf"),
         max_backfill_days=5,
+    ),
+    # ── Phase 5: 7 new factors (parquet result/factor-zoo/<id>/) ──
+    FactorBuilder(
+        factor_id="accruals_sloan",
+        build_callable=_BLD_ACCRUALS, latest_date_resolver=_RES_ACCRUALS,
+        depends_on=("balancesheet", "cashflow"), max_backfill_days=1,
+    ),
+    FactorBuilder(
+        factor_id="gross_profitability",
+        build_callable=_BLD_GP, latest_date_resolver=_RES_GP,
+        depends_on=("income", "balancesheet"), max_backfill_days=1,
+    ),
+    FactorBuilder(
+        factor_id="asset_growth",
+        build_callable=_BLD_AG, latest_date_resolver=_RES_AG,
+        depends_on=("balancesheet", "stock_basic"), max_backfill_days=1,
+    ),
+    FactorBuilder(
+        factor_id="roe_change",
+        build_callable=_BLD_ROECH, latest_date_resolver=_RES_ROECH,
+        depends_on=("fina_indicator",), max_backfill_days=1,
+    ),
+    FactorBuilder(
+        factor_id="ivol_20d",
+        build_callable=_BLD_IVOL, latest_date_resolver=_RES_IVOL,
+        depends_on=("daily", "adj_factor", "index_daily"), max_backfill_days=60,
+    ),
+    FactorBuilder(
+        factor_id="max_ret_20d",
+        build_callable=_BLD_MAXRET, latest_date_resolver=_RES_MAXRET,
+        depends_on=("daily",), max_backfill_days=60,
+    ),
+    FactorBuilder(
+        factor_id="short_term_reversal",
+        build_callable=_BLD_REVERSAL, latest_date_resolver=_RES_REVERSAL,
+        depends_on=("daily", "adj_factor"), max_backfill_days=60,
     ),
 ]
 

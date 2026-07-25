@@ -10,11 +10,9 @@ writes Results/factor-zoo/factor-catalog.yaml. Consumed by:
 Why a static Python table (not a C# AllMetadata() call): FactorStore.AllMetadata() is
 C#-only and not callable from Python; no existing Python module holds factor metadata.
 The table below is the authoritative Python mirror of the C# registrations in
-Common/Factors/Core/FactorRegistry.cs and Common/Factors/Store/FactorStoreConfig.cs.
-
-TODO(Phase 5): the 7 new factors (accruals_sloan, gross_profitability, asset_growth,
-ivol_20d, max_ret_20d, short_term_reversal, roe_change) are not yet built — append
-them to FACTOR_METADATA once their build_day modules land.
+Common/Factors/Core/FactorRegistry.cs and Common/Factors/Store/FactorStoreConfig.cs,
+plus the 7 Phase 5 factor_builders (accruals_sloan, gross_profitability, asset_growth,
+ivol_20d, max_ret_20d, short_term_reversal, roe_change).
 """
 from __future__ import annotations
 
@@ -125,6 +123,15 @@ FACTOR_METADATA: list[dict] = [
     {"id": "barra_northbound", "name": "Barra Northbound", "category": "Barra", "compute_mode": "Precomputed", "storage": _csv("Data/alternative/barra-cne5v2-factors/<mkt>/daily/<ticker>.csv"), "tushare_deps": ["hsgt_top10"], "selection_hint": "北向暴露, 高=外资偏好, 正向", "parameters": {}},
     {"id": "barra_margin", "name": "Barra Margin", "category": "Barra", "compute_mode": "Precomputed", "storage": _csv("Data/alternative/barra-cne5v2-factors/<mkt>/daily/<ticker>.csv"), "tushare_deps": ["margin_detail"], "selection_hint": "融资融券, 高=杠杆资金活跃, 反向", "parameters": {}},
     {"id": "barra_chipcost", "name": "Barra Chip Cost", "category": "Barra", "compute_mode": "Precomputed", "storage": _csv("Data/alternative/barra-cne5v2-factors/<mkt>/daily/<ticker>.csv"), "tushare_deps": ["cyq_perf"], "selection_hint": "筹码成本, 高=成本偏离, 反向", "parameters": {}},
+
+    # ── Phase 5: 7 new factors (parquet result/factor-zoo/<id>/) ──
+    {"id": "accruals_sloan", "name": "Accruals (Sloan 1996)", "category": "Quality", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/accruals_sloan", "accruals_sloan", "lean_factor_accruals_sloan"), "tushare_deps": ["balancesheet", "cashflow"], "selection_hint": "Sloan 应计, 高应计=盈余质量差, 通常反向", "parameters": {}},
+    {"id": "gross_profitability", "name": "Gross Profitability (Novy-Marx)", "category": "Quality", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/gross_profitability", "gross_profitability", "lean_factor_gross_profitability"), "tushare_deps": ["income", "balancesheet"], "selection_hint": "毛利盈利能力, 高=盈利强, 正向", "parameters": {}},
+    {"id": "asset_growth", "name": "Asset Growth (Cooper-Gulen-Schill)", "category": "Investment", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/asset_growth", "asset_growth", "lean_factor_asset_growth"), "tushare_deps": ["balancesheet", "stock_basic"], "selection_hint": "资产增长率, 高=过度扩张, 反向", "parameters": {}},
+    {"id": "roe_change", "name": "ROE YoY Change", "category": "Quality", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/roe_change", "roe_change", "lean_factor_roe_change"), "tushare_deps": ["fina_indicator"], "selection_hint": "ROE 同比变化, 正=质量改善, 正向(质量动量)", "parameters": {}},
+    {"id": "ivol_20d", "name": "20d Idiosyncratic Volatility", "category": "Volatility", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/ivol_20d", "ivol_20d", "lean_factor_ivol_20d"), "tushare_deps": ["daily", "adj_factor", "index_daily"], "selection_hint": "特异性波动(市场模型残差), 高=特质风险大, 反向(低波动异象)", "parameters": {}},
+    {"id": "max_ret_20d", "name": "20d MAX Return (Bali)", "category": "Trend", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/max_ret_20d", "max_ret_20d", "lean_factor_max_ret_20d"), "tushare_deps": ["daily"], "selection_hint": "20日最大日收益(取负), 高MAX=彩票偏好过热, 反向", "parameters": {}},
+    {"id": "short_term_reversal", "name": "20d Short-Term Reversal", "category": "Reversal", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/short_term_reversal", "short_term_reversal", "lean_factor_short_term_reversal"), "tushare_deps": ["daily", "adj_factor"], "selection_hint": "1月反转(取负), 短期超涨回调, 反向", "parameters": {}},
 ]
 # fmt: on
 

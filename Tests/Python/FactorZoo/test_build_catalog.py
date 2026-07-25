@@ -61,10 +61,12 @@ def test_every_factor_has_nonempty_selection_hint(tmp_path):
         assert f.get("selection_hint"), f"factor {f['id']} missing selection_hint"
 
 
-def test_catalog_has_51_factors(tmp_path):
+def test_catalog_has_58_factors(tmp_path):
     out = tmp_path / "factor-catalog.yaml"
     bc.build_catalog(freshness_path=None, out_path=out)
     factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
-    # 36 FactorRegistry factors (Volatility 5 + Trend 3 + Value 3 + Quality 3 + Sentiment 3
-    # + Liquidity 2 + Chip 5 + Forward 12) + 15 Barra = 51.
-    assert len(factors) == 51, f"expected 51 factors, got {len(factors)}"
+    # 36 FactorRegistry + 15 Barra + 7 Phase 5 = 58.
+    assert len(factors) == 58, f"expected 58 factors, got {len(factors)}"
+    ids = {f["id"] for f in factors}
+    assert {"accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
+            "ivol_20d", "max_ret_20d", "short_term_reversal"}.issubset(ids)
