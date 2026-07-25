@@ -33,6 +33,18 @@ from zoneinfo import ZoneInfo
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
+# Ensure the repo's importable dirs are on sys.path so the lazy builder imports
+# resolve under any cwd (the daemon runs with directory=data-source/tushare, but
+# the builders reach into Algorithm.Python/ + Scripts/factor_zoo/ + Scripts/).
+# crowding_factor_builder imports CrowdingFactors (Algorithm.Python/); the Phase 5
+# builders import pit_financials (Scripts/factor_zoo/) + their sibling modules.
+_REPO = Path(__file__).resolve().parents[2]  # /home/project/hope/Lean
+for _p in (str(_REPO), str(_REPO / "Algorithm.Python"),
+           str(_REPO / "Scripts"), str(_REPO / "Scripts" / "factor_zoo"),
+           str(_REPO / "data-source" / "tushare")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 # ── module-level config (env-overridable; tests monkeypatch these) ──────────
 TUSHARE_DATA_PATH = os.environ.get(
     "TUSHARE_DATA_PATH", "/home/project/tushare-downloader/tushare_data_v2"
@@ -186,6 +198,11 @@ def _resolve_crowding_latest() -> str | None:
 
 def _build_forward(date_compact: str) -> dict:
     """Wire to export_forward_factors.run. date_compact is YYYYMMDD (forward wants compact)."""
+    # export_forward_factors.py lives in Scripts/, not data-source/tushare/, so it is
+    # not on sys.path under the daemon's cwd. Add Scripts/ before importing.
+    scripts_dir = str(REPO_ROOT / "Scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
     from export_forward_factors import run, DEFAULT_TS_PATH
     started = time.perf_counter()
     summary = run(trade_date=date_compact, ts_path=TUSHARE_DATA_PATH or DEFAULT_TS_PATH, dry_run=False)
