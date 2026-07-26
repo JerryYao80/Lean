@@ -1,0 +1,1189 @@
+# Alpha101 C# 读路径 + 内涵说明 — 实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 接通 alpha101 因子的 C# 单点读路径（101 个独立 FactorStore id）+ 为每个因子补内涵说明（intent/scenarios/direction/family）并注入 LLM 重构提示。
+
+**Architecture:** 101 个 `alphaNNN` 各注册一个 `RParquetAdapter`（复用，不改），`FactorStore.Get("alphaNNN")` 单点读 1 个 parquet。内涵说明存独立 yaml，`build_catalog.py` 合并进 catalog，`hypothesize.py` 把 intent/direction/family 拼进 LLM 提示。
+
+**Tech Stack:** C# (.NET 10) + pythonnet+pandas + Python yaml + pytest + NUnit。
+
+**Spec:** `docs/superpowers/specs/2026-07-26-alpha101-csharp-read-design.md`
+
+---
+
+## 文件结构
+
+| 文件 | 操作 | 职责 |
+|---|---|---|
+| `Common/Factors/Store/Alpha101FactorRegistration.cs` | 新建 | 101 id 注册循环（唯一 C# 新文件） |
+| `Common/Factors/Store/FactorStoreConfig.cs` | 改（加 1 行） | 调用注册 |
+| `Scripts/factor_zoo/alpha101_descriptions.yaml` | 新建 | 101 条内涵说明 |
+| `Scripts/factor_zoo/build_catalog.py` | 改 | 加载 yaml + 合并进 _alpha_entry |
+| `Scripts/inspiration/hypothesize.py` | 改 | 投影 + 拼接 intent/direction/family |
+| `Tests/Common/Factors/Store/Alpha101FactorRegistrationTests.cs` | 新建 | C# 单元+集成 |
+| `Tests/Common/Factors/Store/FactorStoreTests.cs` | 改（加 1） | 路由测试 |
+| `Tests/Common/Factors/Store/FactorStoreIntegrationTests.cs` | 改（加 1） | 缺失契约 |
+| `Tests/Python/FactorZoo/test_alpha101_descriptions.py` | 新建 | 描述验证 |
+| `Tests/Python/FactorZoo/test_build_catalog.py` | 改（加 1） | 描述字段断言 |
+| `Tests/Python/Scripts/test_hypothesize_prompt.py` | 新建 | 提示注入验证 |
+
+---
+
+## Task 1: Alpha101FactorRegistration.cs — 101 个独立 id 注册
+
+**Files:**
+- Create: `Common/Factors/Store/Alpha101FactorRegistration.cs`
+- Modify: `Common/Factors/Store/FactorStoreConfig.cs` (末尾加 1 行)
+- Test: `Tests/Common/Factors/Store/Alpha101FactorRegistrationTests.cs`
+
+- [ ] **Step 1: 写失败测试 `Tests/Common/Factors/Store/Alpha101FactorRegistrationTests.cs`**
+
+```csharp
+using System;
+using NUnit.Framework;
+using QuantConnect.Factors.Core;
+using QuantConnect.Factors.Store;
+using QuantConnect.Securities;
+
+namespace QuantConnect.Tests.Common.Factors.Store
+{
+    [TestFixture]
+    public class Alpha101FactorRegistrationTests
+    {
+        [Test]
+        public void Register_RegistersAll101Ids()
+        {
+            // 注册后所有 alphaNNN 应出现在 FreshnessReport (parquet adapter 进报告)。
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            var rep = store.FreshnessReport();
+            Assert.IsTrue(rep.ContainsKey("alpha001"), "alpha001 not registered");
+            Assert.IsTrue(rep.ContainsKey("alpha042"), "alpha042 not registered");
+            Assert.IsTrue(rep.ContainsKey("alpha101"), "alpha101 not registered");
+        }
+
+        [Test]
+        public void Register_Alpha042_PathResolutionMatchesBuilder()
+        {
+            // 注入 fake reader 捕获 path, 验证与 builder.py 输出路径一致。
+            string seenPath = null, seenCol = null;
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            store.Register("alpha042", new RParquetAdapter(
+                factorRoot: "factor-zoo/alpha042", valueColumn: "alpha042",
+                readScalar: (p, c) => { seenPath = p; seenCol = c; return 0.42m; }));
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(2026, 7, 24));
+            Assert.AreEqual(FactorDataQuality.Valid, r.Quality);
+            Assert.AreEqual(0.42m, r.Value);
+            Assert.IsTrue(seenPath.Contains("factor-zoo/alpha042"), $"path={seenPath}");
+            Assert.IsTrue(seenPath.EndsWith("/2026-07-24/600519.SH.parquet"), $"path={seenPath}");
+            Assert.AreEqual("alpha042", seenCol);
+        }
+
+        [Test]
+        public void Register_TsCode_SH_SZ_ETF()
+        {
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            // SH main board 600519 -> .SH
+            string shPath = null;
+            store.Register("alpha001", new RParquetAdapter("factor-zoo/alpha001", "alpha001",
+                readScalar: (p, c) => { shPath = p; return 0.1m; }));
+            store.Get("alpha001", Symbol.Create("600519", SecurityType.Equity, Market.SSE),
+                new DateTime(2026, 7, 24));
+            Assert.IsTrue(shPath.EndsWith("/600519.SH.parquet"), shPath);
+            // SZ 000001 -> .SZ
+            string szPath = null;
+            store.Register("alpha002", new RParquetAdapter("factor-zoo/alpha002", "alpha002",
+                readScalar: (p, c) => { szPath = p; return 0.1m; }));
+            store.Get("alpha002", Symbol.Create("000001", SecurityType.Equity, Market.SZSE),
+                new DateTime(2026, 7, 24));
+            Assert.IsTrue(szPath.EndsWith("/000001.SZ.parquet"), szPath);
+            // SH ETF 518880 (51-prefix) -> .SH
+            string etfPath = null;
+            store.Register("alpha003", new RParquetAdapter("factor-zoo/alpha003", "alpha003",
+                readScalar: (p, c) => { etfPath = p; return 0.1m; }));
+            store.Get("alpha003", Symbol.Create("518880", SecurityType.Equity, Market.SSE),
+                new DateTime(2026, 7, 24));
+            Assert.IsTrue(etfPath.EndsWith("/518880.SH.parquet"), etfPath);
+        }
+
+        [Test]
+        public void Register_MissingParquet_ReturnsMissingNotThrow()
+        {
+            // 真实 adapter + 不存在的日期 -> 文件不存在 -> Missing, 不抛。
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(1900, 1, 1));
+            Assert.AreEqual(FactorDataQuality.Missing, r.Quality);
+            Assert.AreEqual(0m, r.Value);
+        }
+
+        [Test]
+        [Explicit]
+        public void Get_RealDisk_Alpha042_20260724()
+        {
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            var sym = Symbol.Create("603799", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(2026, 7, 24));
+            Assert.AreEqual(FactorDataQuality.Valid, r.Quality,
+                "alpha042 missing on disk — run factor_worker or dry-run first");
+            Assert.AreEqual(1.06993m, r.Value, 0.01m);
+        }
+
+        [Test]
+        [Explicit]
+        public void Get_RealDisk_Alpha001_20260724()
+        {
+            var store = new FactorStore();
+            Alpha101FactorRegistration.Register(store);
+            var sym = Symbol.Create("600000", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha001", sym, new DateTime(2026, 7, 24));
+            Assert.AreEqual(FactorDataQuality.Valid, r.Quality,
+                "alpha001 missing on disk — run factor_worker or dry-run first");
+            Assert.AreEqual(0.396667m, r.Value, 0.01m);
+        }
+    }
+}
+```
+
+- [ ] **Step 2: 跑测试验证失败**
+
+Run: `dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~Alpha101FactorRegistrationTests" --logger "console;verbosity=detailed"`
+Expected: 编译失败（`Alpha101FactorRegistration` 不存在）。
+
+- [ ] **Step 3: 写 `Common/Factors/Store/Alpha101FactorRegistration.cs`**
+
+```csharp
+/*
+ * QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.
+ * Lean Algorithmic Trading Engine v2.0. Copyright 2014 QuantConnect Corporation.
+ *
+ * Factor Zoo — Alpha101 独立 id 注册 (C# 读路径)。
+ * 把 101 个 alphaNNN 各注册一个 RParquetAdapter，使 FactorStore.Get("alphaNNN")
+ * 能单点读取 result/factor-zoo/alphaNNN/<date>/<code>.parquet。RParquetAdapter
+ * 本就能读这种单行 shape，无需新适配器。
+ */
+using QuantConnect.Factors.Core;
+
+namespace QuantConnect.Factors.Store
+{
+    /// <summary>
+    /// Registers alpha001..alpha101 as 101 independent FactorStore ids, each backed
+    /// by an RParquetAdapter reading result/factor-zoo/alphaNNN/&lt;date&gt;/&lt;code&gt;.parquet.
+    /// Single-alpha reads: Get("alphaNNN") does 1 GIL + 1 parquet read.
+    /// </summary>
+    internal static class Alpha101FactorRegistration
+    {
+        public static void Register(FactorStore store)
+        {
+            for (int n = 1; n <= 101; n++)
+            {
+                var aid = $"alpha{n:03d}";
+                // factorRoot 含 "factor-zoo/" 前缀 (与 builder.py 输出路径一致):
+                //   {resultRoot}/factor-zoo/alphaNNN/<date>/<code>.parquet
+                // valueColumn = "alphaNNN" (parquet 单行 schema {ts_code, alphaNNN:float})
+                // resultRoot 用 RParquetAdapter 默认值 (Lean/result，与 crowding 一致)。
+                store.Register(aid, new RParquetAdapter($"factor-zoo/{aid}", aid));
+            }
+        }
+    }
+}
+```
+
+- [ ] **Step 4: 在 `FactorStoreConfig.RegisterDefaults` 末尾加 1 行**
+
+`Common/Factors/Store/FactorStoreConfig.cs` — 在 `store.Register("crowding", ...)` 那行之后加:
+```csharp
+            // Alpha101: 101 个独立 id (单点读, LLM/人工点名哪个读哪个)
+            Alpha101FactorRegistration.Register(store);
+```
+
+- [ ] **Step 5: 跑测试验证通过**
+
+Run: `dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~Alpha101FactorRegistrationTests" --logger "console;verbosity=detailed"`
+Expected: 4 个非 Explicit 测试 PASS（`Register_RegistersAll101Ids`、`Register_Alpha042_PathResolutionMatchesBuilder`、`Register_TsCode_SH_SZ_ETF`、`Register_MissingParquet_ReturnsMissingNotThrow`）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add Common/Factors/Store/Alpha101FactorRegistration.cs Common/Factors/Store/FactorStoreConfig.cs Tests/Common/Factors/Store/Alpha101FactorRegistrationTests.cs
+git commit -m "feat(alpha101-csharp-read): register 101 independent FactorStore ids
+
+Each alphaNNN gets an RParquetAdapter reading result/factor-zoo/alphaNNN/.
+Get(\"alphaNNN\") does 1 GIL + 1 parquet read. RParquetAdapter unchanged.
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 2: FactorStoreTests + IntegrationTests 加 2 个测试
+
+**Files:**
+- Modify: `Tests/Common/Factors/Store/FactorStoreTests.cs` (加 1 个测试方法)
+- Modify: `Tests/Common/Factors/Store/FactorStoreIntegrationTests.cs` (加 1 个测试方法)
+
+- [ ] **Step 1: 在 `FactorStoreTests.cs` 加测试 `Get_Alpha101IndependentId_RoutesToParquetAdapter`**
+
+在 `FactorStoreTests` 类内（`AllMetadata_AggregatesFromFactorRegistry` 方法之后）加:
+```csharp
+        [Test]
+        public void Get_Alpha101IndependentId_RoutesToParquetAdapter()
+        {
+            // alpha042 由 RegisterDefaults 注册。注入 fake reader 替换它, 验证端到端路由。
+            var store = new FactorStore();
+            store.Register("alpha042", new RParquetAdapter(
+                factorRoot: "factor-zoo/alpha042", valueColumn: "alpha042",
+                readScalar: (path, column) => 0.55m));
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(2026, 7, 24));
+            Assert.AreEqual(FactorDataQuality.Valid, r.Quality);
+            Assert.AreEqual(0.55m, r.Value);
+        }
+```
+
+- [ ] **Step 2: 跑验证通过（应直接通过，因为 Task 1 已实现）**
+
+Run: `dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~FactorStoreTests.Get_Alpha101IndependentId" --logger "console;verbosity=detailed"`
+Expected: PASS。
+
+- [ ] **Step 3: 在 `FactorStoreIntegrationTests.cs` 加测试 `Get_Alpha101Id_ReturnsMissingWhenNoParquet`**
+
+在 `FactorStoreIntegrationTests` 类内（`Get_RoutesParquetFactorThroughStoreWithInjectedReader` 之后）加:
+```csharp
+        [Test]
+        public void Get_Alpha101Id_ReturnsMissingWhenNoParquet()
+        {
+            // alpha042 已由 RegisterDefaults 注册 (真实 RParquetAdapter, 默认 reader)。
+            // 不存在的日期 -> 文件不存在 -> TryGet 返回 false -> Missing, 不抛。
+            var store = new FactorStore();
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(1900, 1, 1));
+            Assert.AreEqual(FactorDataQuality.Missing, r.Quality);
+            Assert.AreEqual(0m, r.Value);
+        }
+```
+
+- [ ] **Step 4: 跑验证通过**
+
+Run: `dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~FactorStoreIntegrationTests.Get_Alpha101Id" --logger "console;verbosity=detailed"`
+Expected: PASS。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add Tests/Common/Factors/Store/FactorStoreTests.cs Tests/Common/Factors/Store/FactorStoreIntegrationTests.cs
+git commit -m "test(alpha101-csharp-read): FactorStore route + missing-contract tests
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 3: alpha101_descriptions.yaml — 101 条内涵说明
+
+**Files:**
+- Create: `Scripts/factor_zoo/alpha101_descriptions.yaml`
+- Test: `Tests/Python/FactorZoo/test_alpha101_descriptions.py`
+
+内涵来源：每条对照 `docs/101.md` 附录 A.1 的公式。direction 标注原则：公式显式带 `-1 *` 前缀的标"反向"；显式带 `sign(...)` 或趋势计数且无负号的标"正向"；带 `indneutralize` 且符号复合的标"中性"；条件三元 (`? :`) 视结构标"中性"。
+
+13 个语义族：`量价反转`、`VWAP反转`、`量价相关`、`波动率`、`动量反转`、`开收结构`、`极值反转`、`趋势条件`、`行业中性`、`量能异动`、`价量协方差`、`高低量相关`、`复合时序`。
+
+- [ ] **Step 1: 写失败测试 `Tests/Python/FactorZoo/test_alpha101_descriptions.py`**
+
+```python
+# Tests/Python/FactorZoo/test_alpha101_descriptions.py
+"""Validate alpha101_descriptions.yaml: 101 entries x 4 fields."""
+from pathlib import Path
+import yaml
+
+REPO = Path(__file__).resolve().parents[3]
+DESC_PATH = REPO / "Scripts" / "factor_zoo" / "alpha101_descriptions.yaml"
+
+FAMILIES = {
+    "量价反转", "VWAP反转", "量价相关", "波动率", "动量反转", "开收结构",
+    "极值反转", "趋势条件", "行业中性", "量能异动", "价量协方差",
+    "高低量相关", "复合时序",
+}
+DIRECTIONS = {"正向", "反向", "中性"}
+
+
+def _load():
+    return yaml.safe_load(DESC_PATH.read_text(encoding="utf-8"))
+
+
+def test_descriptions_cover_all_101():
+    doc = _load()
+    missing = [n for n in range(1, 102) if f"alpha{n:03d}" not in doc]
+    assert not missing, f"missing alphas: {missing}"
+
+
+def test_each_entry_has_4_fields_nonempty():
+    doc = _load()
+    for aid, entry in doc.items():
+        assert entry.get("intent"), f"{aid} missing intent"
+        assert entry.get("scenarios"), f"{aid} missing scenarios"
+        assert entry.get("direction"), f"{aid} missing direction"
+        assert entry.get("family"), f"{aid} missing family"
+
+
+def test_direction_in_valid_set():
+    doc = _load()
+    for aid, entry in doc.items():
+        assert entry["direction"] in DIRECTIONS, f"{aid} bad direction {entry['direction']}"
+
+
+def test_family_in_13_families():
+    doc = _load()
+    for aid, entry in doc.items():
+        assert entry["family"] in FAMILIES, f"{aid} bad family {entry['family']}"
+
+
+def test_scenarios_is_list_nonempty():
+    doc = _load()
+    for aid, entry in doc.items():
+        s = entry.get("scenarios")
+        assert isinstance(s, list) and len(s) >= 1, f"{aid} scenarios not nonempty list"
+
+
+def test_no_extra_keys():
+    doc = _load()
+    allowed = {"intent", "scenarios", "direction", "family"}
+    for aid, entry in doc.items():
+        extra = set(entry.keys()) - allowed
+        assert not extra, f"{aid} has extra keys {extra}"
+```
+
+- [ ] **Step 2: 跑测试验证失败**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/FactorZoo/test_alpha101_descriptions.py -v`
+Expected: FAIL（`DESC_PATH` 不存在，`_load` 抛 FileNotFoundError）。
+
+- [ ] **Step 3: 写 `Scripts/factor_zoo/alpha101_descriptions.yaml`（101 条完整内容，对照 docs/101.md 附录 A.1 公式逐条标注）**
+
+```yaml
+# Alpha101 内涵说明 — 101 条，每条对照 docs/101.md 附录 A.1 公式。
+# direction: 正向(高值→多头)/反向(高值→空头)/中性(视结构)。
+# family: 13 族之一。
+alpha001:
+  intent: "Ts_ArgMax 反转动量。过去 5 日内收益最大日距今天数构造的反转信号。"
+  scenarios: ["短期反转选股:近期涨幅最大者倾向回调", "动量衰竭识别"]
+  direction: "反向"
+  family: "极值反转"
+alpha002:
+  intent: "量价相关性反转。rank(delta(log(volume),2)) 与 (close-open)/open 的 6 日时序相关性取负。"
+  scenarios: ["量价背离选股:量价同向时反向"]
+  direction: "反向"
+  family: "量价反转"
+alpha003:
+  intent: "开盘量价相关性反转。rank(open) 与 rank(volume) 的 10 日时序相关性取负。"
+  scenarios: ["开盘量价背离反转"]
+  direction: "反向"
+  family: "量价反转"
+alpha004:
+  intent: "低价股时序反转。rank(low) 的 9 日 Ts_Rank 取负。"
+  scenarios: ["低价股超跌反弹"]
+  direction: "反向"
+  family: "动量反转"
+alpha005:
+  intent: "VWAP 均值回归。开盘相对 10 日 VWAP 均值的偏离 × |close-vwap| rank 取负。"
+  scenarios: ["VWAP 偏离回归:开盘远离 VWAP 后回归"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha006:
+  intent: "开量负相关。open 与 volume 的 10 日时序相关性取负。"
+  scenarios: ["开盘量能背离反转"]
+  direction: "反向"
+  family: "量价反转"
+alpha007:
+  intent: "条件动量反转。量超 adv20 时用 7 日收益符号×60 日 abs 变化 rank,否则取负。"
+  scenarios: ["放量条件下的动量反转"]
+  direction: "反向"
+  family: "动量反转"
+alpha008:
+  intent: "5 日收益动量反转。(sum(open,5)*sum(returns,5)) 的 10 日 delay 差 rank 取负。"
+  scenarios: ["短期动量反转:5日动量衰减"]
+  direction: "反向"
+  family: "动量反转"
+alpha009:
+  intent: "极值条件动量。5 日内最小日收益>0 取当日收益,否则最大<0 取当日收益,否则反向。"
+  scenarios: ["趋势极值条件择时"]
+  direction: "中性"
+  family: "趋势条件"
+alpha010:
+  intent: "极值条件动量(rank 版)。同 alpha009 逻辑外包 rank。"
+  scenarios: ["趋势极值条件选股"]
+  direction: "中性"
+  family: "趋势条件"
+alpha011:
+  intent: "VWAP-收盘极值×量变。(vwap-close)3日极值 rank 之和 × delta(volume,3) rank。"
+  scenarios: ["VWAP 回归+量能配合"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha012:
+  intent: "量变×价反转。sign(delta(volume,1)) × (-1*delta(close,1))。"
+  scenarios: ["放量下跌反转:量增价跌后反弹"]
+  direction: "反向"
+  family: "量价反转"
+alpha013:
+  intent: "量价协方差反转。rank(close) 与 rank(volume) 的 5 日协方差 rank 取负。"
+  scenarios: ["量价协方差背离反转"]
+  direction: "反向"
+  family: "价量协方差"
+alpha014:
+  intent: "收益动量×开量相关。(-rank(delta(returns,3))) × correlation(open,volume,10)。"
+  scenarios: ["动量反转叠加开量相关"]
+  direction: "反向"
+  family: "价量协方差"
+alpha015:
+  intent: "高低量相关求和反转。rank(high)×rank(volume) 3 日相关性的 3 日求和 rank 取负。"
+  scenarios: ["高价量能相关性反转"]
+  direction: "反向"
+  family: "高低量相关"
+alpha016:
+  intent: "高低量协方差反转。rank(high)×rank(volume) 的 5 日协方差 rank 取负。"
+  scenarios: ["高价量能协方差反转"]
+  direction: "反向"
+  family: "高低量相关"
+alpha017:
+  intent: "复合时序反转。close 的10日 Ts_Rank rank × delta(delta(close,1),1) rank × (volume/adv20)5日 Ts_Rank rank,整体取负。"
+  scenarios: ["多周期复合反转"]
+  direction: "反向"
+  family: "复合时序"
+alpha018:
+  intent: "日内波动+开收相关。stddev(|close-open|,5)+(close-open)+correlation(close,open,10) rank 取负。"
+  scenarios: ["日内波动结构与开收相关反转"]
+  direction: "反向"
+  family: "开收结构"
+alpha019:
+  intent: "7 日趋势符号×长动量。-sign((close-delay(close,7))+delta(close,7)) × (1+rank(1+sum(returns,250)))。"
+  scenarios: ["中期趋势反转叠加长期动量权重"]
+  direction: "反向"
+  family: "趋势条件"
+alpha020:
+  intent: "开盘缺口反转。开盘相对昨高/昨收/昨低的偏离 rank 之积取负。"
+  scenarios: ["开盘跳空反转"]
+  direction: "反向"
+  family: "开收结构"
+alpha021:
+  intent: "均线条件反转。8 日均值±stddev 与 2 日均值比较 + 量比条件的复合三元。"
+  scenarios: ["均线突破/破位条件择时"]
+  direction: "中性"
+  family: "趋势条件"
+alpha022:
+  intent: "高低量相关变化。delta(correlation(high,volume,5),5) × rank(stddev(close,20)) 取负。"
+  scenarios: ["高价量能相关性变化反转"]
+  direction: "反向"
+  family: "高低量相关"
+alpha023:
+  intent: "新高反转。20 日 high 均值<今日 high 时取 -delta(high,2),否则 0。"
+  scenarios: ["创新高后的短期反转"]
+  direction: "反向"
+  family: "高低量相关"
+alpha024:
+  intent: "百日趋势条件。100 日均线变化率<5% 时取 -(close-ts_min(close,100)),否则 -delta(close,3)。"
+  scenarios: ["百日趋势条件下的反转"]
+  direction: "反向"
+  family: "趋势条件"
+alpha025:
+  intent: "收益×量×VWAP×振幅。(-returns)*adv20*vwap*(high-close) 的 rank。"
+  scenarios: ["多因子复合:收益量能VWAP振幅"]
+  direction: "反向"
+  family: "复合时序"
+alpha026:
+  intent: "量价时序相关极值。ts_rank(volume,5) 与 ts_rank(high,5) 的 5 日相关性的 3 日最大值取负。"
+  scenarios: ["量价时序相关性极值反转"]
+  direction: "反向"
+  family: "量价相关"
+alpha027:
+  intent: "量VWAP相关阈值。rank(volume)×rank(vwap) 6 日相关性的 2 日均值 rank>0.5 取负否则正。"
+  scenarios: ["量VWAP相关性阈值择时"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha028:
+  intent: "VWAP-收盘缩放。scale(correlation(adv20,low,5)+(high+low)/2-close)。"
+  scenarios: ["VWAP 偏离缩放反转"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha029:
+  intent: "嵌套 rank 极值。多层 rank(scale(log(sum(ts_min(...)))))+ts_rank(delay(-returns,6),5)。"
+  scenarios: ["多层 rank 嵌套的复合信号"]
+  direction: "中性"
+  family: "复合时序"
+alpha030:
+  intent: "趋势符号计数×量比。3 日收益符号计数 rank × (sum(volume,5)/sum(volume,20))。"
+  scenarios: ["趋势符号动量+量比"]
+  direction: "正向"
+  family: "趋势条件"
+alpha031:
+  intent: "复合动量反转。decay_linear(-rank(rank(delta(close,10))),10) rank + (-delta(close,3)) rank + sign(scale(correlation(adv20,low,12)))。"
+  scenarios: ["多周期动量反转复合"]
+  direction: "中性"
+  family: "复合时序"
+alpha032:
+  intent: "均线偏离+长相关。scale(sum(close,7)/7-close) + 20*scale(correlation(vwap,delay(close,5),230))。"
+  scenarios: ["短期均线偏离+长期 VWAP 相关"]
+  direction: "中性"
+  family: "复合时序"
+alpha033:
+  intent: "开收比反转。rank(-(1-open/close))。开盘低于收盘越多值越大,取负即反转。"
+  scenarios: ["开收结构反转"]
+  direction: "反向"
+  family: "开收结构"
+alpha034:
+  intent: "波动率比+动量。rank(1-rank(stddev(returns,2)/stddev(returns,5))) + rank(1-rank(delta(close,1)))。"
+  scenarios: ["波动率结构+短期动量"]
+  direction: "中性"
+  family: "波动率"
+alpha035:
+  intent: "量价时序反转。Ts_Rank(volume,32)×(1-Ts_Rank((close+high-low),16))×(1-Ts_Rank(returns,32))。"
+  scenarios: ["长周期量价时序反转"]
+  direction: "反向"
+  family: "量价反转"
+alpha036:
+  intent: "复合多因子。多个 rank 项加权求和(close-open 相关、开收差、returns Ts_Rank、vwap-adv20 相关、200 日均线偏离)。"
+  scenarios: ["多因子复合打分"]
+  direction: "中性"
+  family: "复合时序"
+alpha037:
+  intent: "开收延迟相关+开收。rank(correlation(delay(open-close,1),close,200)) + rank(open-close)。"
+  scenarios: ["长期开收相关+短期开收"]
+  direction: "中性"
+  family: "开收结构"
+alpha038:
+  intent: "收盘时序反转。(-rank(Ts_Rank(close,10))) × rank(close/open)。"
+  scenarios: ["收盘时序 rank+开收比反转"]
+  direction: "反向"
+  family: "动量反转"
+alpha039:
+  intent: "7 日动量×量比衰减。(-rank(delta(close,7)×(1-rank(decay_linear(volume/adv20,9)))))×(1+rank(sum(returns,250)))。"
+  scenarios: ["动量衰减叠加量比+长期动量权重"]
+  direction: "反向"
+  family: "量能异动"
+alpha040:
+  intent: "高波动×高低量相关。(-rank(stddev(high,10))) × correlation(high,volume,10)。"
+  scenarios: ["高波动+高价量能相关反转"]
+  direction: "反向"
+  family: "波动率"
+alpha041:
+  intent: "高低几何均值-VWAP。(high*low)^0.5 - vwap。几何均值高于 VWAP 偏多。"
+  scenarios: ["日内价格几何均值相对 VWAP 偏离"]
+  direction: "正向"
+  family: "VWAP反转"
+alpha042:
+  intent: "VWAP-收盘均值回归。rank(vwap-close)/rank(vwap+close)。VWAP 高于收盘越多值越大。"
+  scenarios: ["短期反转选股:VWAP 显著高于收盘后次日回落", "日内择时"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha043:
+  intent: "量比×价反转时序。ts_rank(volume/adv20,20) × ts_rank(-delta(close,7),8)。"
+  scenarios: ["量比时序+价格反转时序"]
+  direction: "反向"
+  family: "量能异动"
+alpha044:
+  intent: "高价量相关反转。-correlation(high,rank(volume),5)。"
+  scenarios: ["高价量能相关反转"]
+  direction: "反向"
+  family: "高低量相关"
+alpha045:
+  intent: "量价复合。-rank(delay(close,5)20日均值) × correlation(close,volume,2) × rank(correlation(sum(close,5),sum(close,20),2))。"
+  scenarios: ["延迟收盘+量价相关+均线相关复合"]
+  direction: "反向"
+  family: "价量协方差"
+alpha046:
+  intent: "10 日趋势阈值。(delay(close,20)-delay(close,10))/10 与 (delay(close,10)-close)/10 比较的三元条件。"
+  scenarios: ["10 日趋势条件择时"]
+  direction: "中性"
+  family: "趋势条件"
+alpha047:
+  intent: "量价复合。rank(1/close)*volume/adv20 × (high*rank(high-close))/(sum(high,5)/5) - rank(vwap-delay(vwap,5))。"
+  scenarios: ["多分量复合:量比+高价+VWAP变化"]
+  direction: "中性"
+  family: "复合时序"
+alpha048:
+  intent: "收益自相关行业中性。indneutralize(correlation(delta(close,1),delta(delay(close,1),1),250)×delta(close,1)/close, subindustry) / sum((delta(close,1)/delay(close,1))^2,250)。"
+  scenarios: ["行业中性收益自相关反转"]
+  direction: "中性"
+  family: "行业中性"
+alpha049:
+  intent: "10 日趋势阈值。(delay(close,20)-delay(close,10))/10 与 (delay(close,10)-close)/10 比较<-0.1 取正否则反向。"
+  scenarios: ["强趋势条件择时"]
+  direction: "中性"
+  family: "趋势条件"
+alpha050:
+  intent: "量VWAP相关极值。-ts_max(rank(correlation(rank(volume),rank(vwap),5)),5)。"
+  scenarios: ["量VWAP相关性极值反转"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha051:
+  intent: "10 日趋势阈值。同 alpha049 阈值<-0.05 版本。"
+  scenarios: ["趋势条件择时(阈值0.05)"]
+  direction: "中性"
+  family: "趋势条件"
+alpha052:
+  intent: "低价极值×长收益。(-ts_min(low,5)+delay(ts_min(low,5),5)) × rank((sum(returns,240)-sum(returns,20))/220) × ts_rank(volume,5)。"
+  scenarios: ["低价极值+长期收益+量时序"]
+  direction: "中性"
+  family: "极值反转"
+alpha053:
+  intent: "日内位置变化。-delta(((close-low)-(high-close))/(close-low),9)。日内位置变化的反转。"
+  scenarios: ["日内价格位置变化反转"]
+  direction: "反向"
+  family: "开收结构"
+alpha054:
+  intent: "开收高低幂比。-((low-close)*(open^5))/((low-high)*(close^5))。"
+  scenarios: ["开收高低幂比结构反转"]
+  direction: "反向"
+  family: "开收结构"
+alpha055:
+  intent: "价格位置×量相关。-correlation(rank((close-ts_min(low,12))/(ts_max(high,12)-ts_min(low,12))), rank(volume),6)。"
+  scenarios: ["价格位置+量能相关反转"]
+  direction: "反向"
+  family: "量价相关"
+alpha056:
+  intent: "收益动量×市值。-(rank(sum(returns,10)/sum(sum(returns,2),3)) × rank(returns×cap))。"
+  scenarios: ["短期收益动量×市值反转"]
+  direction: "反向"
+  family: "动量反转"
+alpha057:
+  intent: "VWAP-收盘/衰减argmax。-((close-vwap)/decay_linear(rank(ts_argmax(close,30)),2))。"
+  scenarios: ["VWAP 偏离叠加 argmax 衰减反转"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha058:
+  intent: "VWAP 行业中性×量。-Ts_Rank(decay_linear(correlation(IndNeutralize(vwap,sector),volume,3.93),7.89),5.50)。"
+  scenarios: ["行业中性 VWAP 量能相关反转"]
+  direction: "反向"
+  family: "行业中性"
+alpha059:
+  intent: "VWAP 行业中性×量。-Ts_Rank(decay_linear(correlation(IndNeutralize(vwap,industry),volume,4.25),16.23),8.20)。"
+  scenarios: ["行业中性 VWAP 量能相关反转(行业层)"]
+  direction: "反向"
+  family: "行业中性"
+alpha060:
+  intent: "日内位置×量缩放。-(2×scale(rank(((close-low)-(high-close))/(high-low)×volume)) - scale(rank(ts_argmax(close,10))))。"
+  scenarios: ["日内位置+量缩放+argmax"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha061:
+  intent: "VWAP 极值<量相关。rank(vwap-ts_min(vwap,16.12)) < rank(correlation(vwap,adv180,17.93))。"
+  scenarios: ["VWAP 极值与长期量相关比较"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha062:
+  intent: "VWAP 量相关<开高低。rank(correlation(vwap,sum(adv20,22.41),9.91)) < rank((rank(open)+rank(open))<(rank((high+low)/2)+rank(high)))。"
+  scenarios: ["VWAP量相关与开高低结构比较"]
+  direction: "中性"
+  family: "高低量相关"
+alpha063:
+  intent: "行业中性收盘动量。(rank(decay_linear(delta(IndNeutralize(close,industry),2.25),8.22))-rank(decay_linear(correlation(vwap×0.318+open×0.682,sum(adv180,37.25),13.56),12.29)))×-1。"
+  scenarios: ["行业中性收盘动量+VWAP量相关"]
+  direction: "中性"
+  family: "行业中性"
+alpha064:
+  intent: "量相关<位置变化。rank(correlation(open×0.178+low×0.822,sum(adv120,12.7),16.6)) < rank(delta(((high+low)/2)×0.178+vwap×0.822,3.70))。"
+  scenarios: ["量相关与位置变化比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha065:
+  intent: "量相关<开盘极值。rank(correlation(open×0.008+vwap×0.992,sum(adv60,8.69),6.40)) < rank(open-ts_min(open,13.64))。"
+  scenarios: ["量相关与开盘极值比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha066:
+  intent: "VWAP 动量+日内位置。(rank(decay_linear(delta(vwap,3.51),7.23))+Ts_Rank(decay_linear((((low-vwap)/(open-(high+low)/2))),11.42),6.73))×-1。"
+  scenarios: ["VWAP动量+日内位置复合反转"]
+  direction: "反向"
+  family: "VWAP反转"
+alpha067:
+  intent: "高价极值^行业中性相关。rank((high-ts_min(high,2.15)))^rank(correlation(IndNeutralize(vwap,sector),IndNeutralize(adv20,subindustry),6.03))×-1。"
+  scenarios: ["高价极值×行业中性量相关(双行业层)"]
+  direction: "中性"
+  family: "行业中性"
+alpha068:
+  intent: "量相关<价变化。Ts_Rank(correlation(rank(high),rank(adv15),8.92),13.93) < rank(delta((close×0.518+low×0.482),1.06))。"
+  scenarios: ["高价量相关与价格变化比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha069:
+  intent: "行业中性VWAP动量^相关。(rank(ts_max(delta(IndNeutralize(vwap,industry),2.72),4.79))^Ts_Rank(correlation(close×0.491+vwap×0.509,adv20,4.92),9.06))×-1。"
+  scenarios: ["行业中性 VWAP 动量×量相关"]
+  direction: "中性"
+  family: "行业中性"
+alpha070:
+  intent: "VWAP变化^行业中性相关。(rank(delta(vwap,1.29))^Ts_Rank(correlation(IndNeutralize(close,industry),adv50,17.83),17.92))×-1。"
+  scenarios: ["VWAP变化×行业中性量相关"]
+  direction: "中性"
+  family: "行业中性"
+alpha071:
+  intent: "复合时序最大。max(Ts_Rank(decay_linear(correlation(Ts_Rank(close,3.44),Ts_Rank(adv180,12.06),18.02),4.21),15.69), Ts_Rank(decay_linear((rank(((low+open)-(vwap+vwap))^2),16.47),4.44))。"
+  scenarios: ["多周期复合时序取最大"]
+  direction: "中性"
+  family: "复合时序"
+alpha072:
+  intent: "高低量相关/时序相关。rank(decay_linear(correlation((high+low)/2,adv40,8.93),10.15)) / rank(decay_linear(correlation(Ts_Rank(vwap,3.72),Ts_Rank(volume,18.52),6.87),2.95))。"
+  scenarios: ["高低量相关与时序相关比值"]
+  direction: "中性"
+  family: "高低量相关"
+alpha073:
+  intent: "VWAP动量最大。max(rank(decay_linear(delta(vwap,4.73),2.92)), Ts_Rank(decay_linear((delta(open×0.147+low×0.853,2.04)/(open×0.147+low×0.853))×-1,3.34),16.74))×-1。"
+  scenarios: ["VWAP动量与开盘极值取最大"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha074:
+  intent: "量相关<高低量相关。rank(correlation(close,sum(adv30,37.48),15.14)) < rank(correlation(rank(high×0.026+vwap×0.974),rank(volume),11.48))。"
+  scenarios: ["收盘量相关与高低量相关比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha075:
+  intent: "VWAP量相关<低价量相关。rank(correlation(vwap,volume,4.24)) < rank(correlation(rank(low),rank(adv50),12.44))。"
+  scenarios: ["VWAP量相关与低价量相关比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha076:
+  intent: "VWAP动量最大。max(rank(decay_linear(delta(vwap,1.24),11.83)), Ts_Rank(decay_linear(Ts_Rank(correlation(IndNeutralize(low,sector),adv81,8.15),19.57),17.15),19.38))×-1。"
+  scenarios: ["VWAP动量与行业中性低价量相关取最大"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha077:
+  intent: "VWAP偏离最小。min(rank(decay_linear((((high+low)/2+high)-(vwap+high)),20.05)), rank(decay_linear(correlation((high+low)/2,adv40,3.16),5.64)))。"
+  scenarios: ["VWAP偏离与高低量相关取最小"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha078:
+  intent: "量相关^VWAP量相关。rank(correlation(sum(low×0.352+vwap×0.648,19.74),sum(adv40,19.74),6.83))^rank(correlation(rank(vwap),rank(volume),5.77))。"
+  scenarios: ["量相关与VWAP量相关幂复合"]
+  direction: "中性"
+  family: "量价相关"
+alpha079:
+  intent: "行业中性变化<时序相关。rank(delta(IndNeutralize(close×0.607+open×0.393,sector),1.23)) < rank(correlation(Ts_Rank(vwap,3.61),Ts_Rank(adv150,9.19),14.66))。"
+  scenarios: ["行业中性价格变化与时序相关比较"]
+  direction: "中性"
+  family: "行业中性"
+alpha080:
+  intent: "行业中性符号^相关。(rank(Sign(delta(IndNeutralize(open×0.868+high×0.132,industry),4.05)))^Ts_Rank(correlation(high,adv10,5.11),5.54))×-1。"
+  scenarios: ["行业中性符号变化与量相关幂"]
+  direction: "中性"
+  family: "行业中性"
+alpha081:
+  intent: "量相关对数<时序相关。rank(Log(product(rank((rank(correlation(vwap,sum(adv10,49.61),8.48))^4)),14.97))) < rank(correlation(rank(vwap),rank(volume),5.08))。"
+  scenarios: ["量相关对数与时序相关比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha082:
+  intent: "开盘动量最小。min(rank(decay_linear(delta(open,1.46),14.87)), Ts_Rank(decay_linear(correlation(IndNeutralize(volume,sector),open×0.634+open×0.366,17.48),6.92),13.43))×-1。"
+  scenarios: ["开盘动量与行业中性量相关取最小"]
+  direction: "中性"
+  family: "开收结构"
+alpha083:
+  intent: "振幅延迟×量/位置。rank(delay(((high-low)/(sum(close,5)/5)),2))×rank(rank(volume)) / (((high-low)/(sum(close,5)/5))/(vwap-close))。"
+  scenarios: ["振幅延迟×量×位置复合"]
+  direction: "中性"
+  family: "波动率"
+alpha084:
+  intent: "VWAP时序幂。SignedPower(Ts_Rank((vwap-ts_max(vwap,15.32)),20.71), delta(close,4.97))。"
+  scenarios: ["VWAP时序rank×收盘变化幂"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha085:
+  intent: "量相关^时序相关。rank(correlation(high×0.877+close×0.123,adv30,9.61))^rank(correlation(Ts_Rank((high+low)/2,3.71),Ts_Rank(volume,10.16),7.11))。"
+  scenarios: ["量相关与时序相关幂复合"]
+  direction: "中性"
+  family: "量价相关"
+alpha086:
+  intent: "量相关<开盘收盘。Ts_Rank(correlation(close,sum(adv20,14.74),6.00),20.42) < rank(((open+close)-(vwap+open)))。"
+  scenarios: ["量相关与开盘收盘结构比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha087:
+  intent: "VWAP动量最大。max(rank(decay_linear(delta(close×0.370+vwap×0.630,1.91),2.65)), Ts_Rank(decay_linear(abs(correlation(IndNeutralize(adv81,industry),close,13.41)),4.90),14.45))×-1。"
+  scenarios: ["VWAP动量与行业中性量相关取最大"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha088:
+  intent: "rank差最小。min(rank(decay_linear(((rank(open)+rank(low))-(rank(high)+rank(close))),8.07)), Ts_Rank(decay_linear(correlation(Ts_Rank(close,8.45),Ts_Rank(adv60,20.70),8.01),6.65),2.62))。"
+  scenarios: ["开盘低价与高价收盘rank差取最小"]
+  direction: "中性"
+  family: "复合时序"
+alpha089:
+  intent: "量相关-行业中性VWAP。Ts_Rank(decay_linear(correlation(low×0.967+low×0.033,adv10,6.94),5.52),3.80) - Ts_Rank(decay_linear(delta(IndNeutralize(vwap,industry),3.48),10.15),15.30)。"
+  scenarios: ["量相关与行业中性VWAP动量差"]
+  direction: "中性"
+  family: "行业中性"
+alpha090:
+  intent: "收盘极值^行业中性相关。(rank((close-ts_max(close,4.67)))^Ts_Rank(correlation(IndNeutralize(adv40,subindustry),low,5.38),3.22))×-1。"
+  scenarios: ["收盘极值×行业中性量相关幂"]
+  direction: "中性"
+  family: "行业中性"
+alpha091:
+  intent: "行业中性嵌套衰减。Ts_Rank(decay_linear(decay_linear(correlation(IndNeutralize(close,industry),volume,9.75),16.40),3.83),4.87) - rank(decay_linear(correlation(vwap,adv30,4.01),2.68))×-1。"
+  scenarios: ["行业中性双层衰减与VWAP量相关差"]
+  direction: "中性"
+  family: "行业中性"
+alpha092:
+  intent: "条件rank最小。min(Ts_Rank(decay_linear((((high+low)/2+close)<(low+open)),14.72),18.87), Ts_Rank(decay_linear(correlation(rank(low),rank(adv30),7.59),6.94),6.81))。"
+  scenarios: ["条件rank与低价量相关取最小"]
+  direction: "中性"
+  family: "复合时序"
+alpha093:
+  intent: "行业中性VWAP相关/动量。Ts_Rank(decay_linear(correlation(IndNeutralize(vwap,industry),adv81,17.42),19.85),7.54) / rank(decay_linear(delta(close×0.524+vwap×0.476,2.77),16.27))。"
+  scenarios: ["行业中性VWAP量相关与动量比值"]
+  direction: "中性"
+  family: "行业中性"
+alpha094:
+  intent: "VWAP极值^时序相关。(rank((vwap-ts_min(vwap,11.58)))^Ts_Rank(correlation(Ts_Rank(vwap,19.65),Ts_Rank(adv60,4.03),18.09),2.71))×-1。"
+  scenarios: ["VWAP极值×时序量相关幂"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha095:
+  intent: "开盘极值<量相关时序。rank((open-ts_min(open,12.41))) < Ts_Rank((rank(correlation(sum((high+low)/2,19.14),sum(adv40,19.14),12.87))^5),11.76)。"
+  scenarios: ["开盘极值与量相关时序比较"]
+  direction: "中性"
+  family: "开收结构"
+alpha096:
+  intent: "量相关最大。max(Ts_Rank(decay_linear(correlation(rank(vwap),rank(volume),3.84),4.17),8.38), Ts_Rank(decay_linear(Ts_ArgMax(correlation(Ts_Rank(close,7.45),Ts_Rank(adv60,4.13),3.65),12.66),14.04),13.41))×-1。"
+  scenarios: ["VWAP量相关与收盘argmax取最大"]
+  direction: "中性"
+  family: "量价相关"
+alpha097:
+  intent: "行业中性动量-时序相关。(rank(decay_linear(delta(IndNeutralize(low×0.721+vwap×0.279,industry),3.37),20.45)) - Ts_Rank(decay_linear(Ts_Rank(correlation(Ts_Rank(low,7.88),Ts_Rank(adv60,17.26),4.98),18.59),15.72),6.72))×-1。"
+  scenarios: ["行业中性动量与时序量相关差"]
+  direction: "中性"
+  family: "行业中性"
+alpha098:
+  intent: "VWAP量相关-argmin。rank(decay_linear(correlation(vwap,sum(adv5,26.47),4.58),7.18)) - rank(decay_linear(Ts_Rank(Ts_ArgMin(correlation(rank(open),rank(adv15),20.82),8.63),6.96),8.07))。"
+  scenarios: ["VWAP量相关与开盘argmin差"]
+  direction: "中性"
+  family: "VWAP反转"
+alpha099:
+  intent: "量相关<低价量相关。rank(correlation(sum((high+low)/2,19.90),sum(adv60,19.90),8.81)) < rank(correlation(low,volume,6.28))。"
+  scenarios: ["高价量相关与低价量相关比较"]
+  direction: "中性"
+  family: "量价相关"
+alpha100:
+  intent: "行业中性复合。1.5×scale(indneutralize(indneutralize(rank(((close-low)-(high-close))/(high-low)×volume),subindustry),subindustry)) - scale(indneutralize((correlation(close,rank(adv20),5)-rank(ts_argmin(close,30))),subindustry))×(volume/adv20)。"
+  scenarios: ["行业中性双层嵌套复合信号"]
+  direction: "中性"
+  family: "行业中性"
+alpha101:
+  intent: "日内动量(close-open)/(high-low+0.001)。当日收盘相对开盘的动量占日内振幅比例。"
+  scenarios: ["日内动量选股:收盘高于开盘且振幅适中者偏多"]
+  direction: "正向"
+  family: "开收结构"
+```
+
+- [ ] **Step 4: 跑测试验证通过**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/FactorZoo/test_alpha101_descriptions.py -v`
+Expected: 6 个测试全 PASS。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add Scripts/factor_zoo/alpha101_descriptions.yaml Tests/Python/FactorZoo/test_alpha101_descriptions.py
+git commit -m "feat(alpha101-csharp-read): 101 factor descriptions (intent/scenarios/direction/family)
+
+Per-alpha capability notes grounded in docs/101.md formulas, for LLM/human
+callers. direction: 正向/反向/中性; family: 13 semantic groups.
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 4: build_catalog.py 合并描述 + 测试更新
+
+**Files:**
+- Modify: `Scripts/factor_zoo/build_catalog.py` (加 `_load_alpha101_descriptions` + 升级 `_alpha_entry`)
+- Modify: `Tests/Python/FactorZoo/test_build_catalog.py` (加 1 个测试)
+
+- [ ] **Step 1: 写失败测试 `test_alpha101_entries_have_description_fields`**
+
+在 `Tests/Python/FactorZoo/test_build_catalog.py` 末尾加:
+```python
+def test_alpha101_entries_have_description_fields(tmp_path):
+    out = tmp_path / "factor-catalog.yaml"
+    bc.build_catalog(freshness_path=None, out_path=out)
+    factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
+    alpha042 = next(f for f in factors if f["id"] == "alpha042")
+    assert alpha042.get("intent"), "alpha042 missing intent"
+    assert alpha042.get("direction") in {"正向", "反向", "中性"}
+    assert alpha042.get("family"), "alpha042 missing family"
+    assert isinstance(alpha042.get("scenarios"), list)
+    # 全部 101 条都有
+    alpha_ids = {f["id"] for f in factors if f["id"].startswith("alpha")}
+    assert len(alpha_ids) == 101
+    for f in factors:
+        if f["id"].startswith("alpha"):
+            assert f.get("intent"), f"{f['id']} missing intent"
+            assert f.get("direction"), f"{f['id']} missing direction"
+            assert f.get("family"), f"{f['id']} missing family"
+```
+
+- [ ] **Step 2: 跑测试验证失败**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/FactorZoo/test_build_catalog.py::test_alpha101_entries_have_description_fields -v`
+Expected: FAIL（`alpha042` 无 `intent` 字段）。
+
+- [ ] **Step 3: 改 `build_catalog.py`**
+
+在 `ALPHA101_HINTS` dict 定义之后（`def _alpha_entry` 之前）加:
+```python
+_ALPHA101_DESCRIPTIONS = None  # lazy cache
+
+
+def _load_alpha101_descriptions() -> dict:
+    """Load Scripts/factor_zoo/alpha101_descriptions.yaml (101 entries).
+    Returns {} if missing/corrupt (graceful degrade; catalog then omits the
+    4 description fields for alphas, keeping only selection_hint).
+    """
+    global _ALPHA101_DESCRIPTIONS
+    if _ALPHA101_DESCRIPTIONS is not None:
+        return _ALPHA101_DESCRIPTIONS
+    p = Path(__file__).parent / "alpha101_descriptions.yaml"
+    if not p.exists():
+        _ALPHA101_DESCRIPTIONS = {}
+        return {}
+    try:
+        _ALPHA101_DESCRIPTIONS = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        _ALPHA101_DESCRIPTIONS = {}
+    return _ALPHA101_DESCRIPTIONS
+```
+
+然后把 `_alpha_entry` 改为:
+```python
+def _alpha_entry(n: int, hint: str) -> dict:
+    aid = f"alpha{n:03d}"
+    entry = {
+        "id": aid,
+        "name": f"WorldQuant Alpha#{n}",
+        "category": "Alpha101",
+        "compute_mode": "Precomputed",
+        "storage": _parquet(f"result/factor-zoo/{aid}", aid, f"lean_factor_{aid}"),
+        "tushare_deps": ["daily", "adj_factor", "daily_basic", "index_member_all"],
+        "selection_hint": hint,
+        "parameters": {"n": n},
+    }
+    desc = _load_alpha101_descriptions().get(aid, {})
+    if desc:
+        entry["intent"] = desc.get("intent", "")
+        entry["scenarios"] = desc.get("scenarios", [])
+        entry["direction"] = desc.get("direction", "")
+        entry["family"] = desc.get("family", "")
+    return entry
+```
+
+- [ ] **Step 4: 跑测试验证通过**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/FactorZoo/test_build_catalog.py -v`
+Expected: 全部 PASS（含原有 + 新增）。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add Scripts/factor_zoo/build_catalog.py Tests/Python/FactorZoo/test_build_catalog.py
+git commit -m "feat(alpha101-csharp-read): merge descriptions into factor catalog
+
+_alpha_entry now joins intent/scenarios/direction/family from
+alpha101_descriptions.yaml. Catalog count unchanged (159).
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 5: hypothesize.py 提示注入 intent/direction/family
+
+**Files:**
+- Modify: `Scripts/inspiration/hypothesize.py` (`_load_available_factors` 投影 + `build_prompt` 拼接)
+- Test: `Tests/Python/Scripts/test_hypothesize_prompt.py`
+
+- [ ] **Step 1: 写失败测试 `Tests/Python/Scripts/test_hypothesize_prompt.py`**
+
+```python
+# Tests/Python/Scripts/test_hypothesize_prompt.py
+"""Verify hypothesize LLM prompt includes alpha101 intent/direction/family
+(and excludes scenarios list — too verbose for prompt)."""
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / "Scripts" / "inspiration"))
+import hypothesize as h  # noqa: E402
+
+
+def _fake_factors():
+    return [{
+        "id": "alpha042",
+        "name": "WorldQuant Alpha#42",
+        "category": "Alpha101",
+        "selection_hint": "VWAP-收盘均值回归",
+        "intent": "VWAP-收盘均值回归。衡量当日 VWAP 相对收盘价的偏离。",
+        "direction": "反向",
+        "family": "VWAP反转",
+        "scenarios": ["短期反转选股", "日内择时"],
+    }]
+
+
+def test_prompt_includes_intent_direction_family():
+    prompt = h.build_prompt("S", "L", {}, [], "L", 0.15,
+                            available_factors=_fake_factors())
+    assert "VWAP-收盘均值回归。衡量当日 VWAP" in prompt, "intent missing"
+    assert "反向" in prompt, "direction missing"
+    assert "VWAP反转" in prompt, "family missing"
+
+
+def test_prompt_excludes_scenarios():
+    prompt = h.build_prompt("S", "L", {}, [], "L", 0.15,
+                            available_factors=_fake_factors())
+    # scenarios 列表内容不应进提示
+    assert "短期反转选股" not in prompt, "scenarios leaked into prompt"
+    assert "日内择时" not in prompt, "scenarios leaked into prompt"
+
+
+def test_prompt_omits_factors_section_when_empty():
+    prompt = h.build_prompt("S", "L", {}, [], "L", 0.15, available_factors=[])
+    assert "可选用因子" not in prompt
+```
+
+- [ ] **Step 2: 跑测试验证失败**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/Scripts/test_hypothesize_prompt.py -v`
+Expected: `test_prompt_includes_intent_direction_family` FAIL（当前 `build_prompt` 只拼 `id/category/selection_hint`）。
+
+- [ ] **Step 3: 改 `hypothesize.py`**
+
+`_load_available_factors` 投影加 intent/direction/family:
+```python
+def _load_available_factors(catalog_path=None) -> list:
+    """Phase 4: read FactorCatalog yaml -> factor projections.
+
+    Returns [] if the catalog is missing/corrupt (graceful degrade; the prompt
+    then omits the available-factors section entirely).
+    """
+    import yaml
+    p = Path(catalog_path) if catalog_path else CATALOG_PATH
+    if not p.exists():
+        return []
+    try:
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    out = []
+    for f in doc.get("factors", []):
+        out.append({
+            "id": f.get("id"),
+            "name": f.get("name"),
+            "category": f.get("category"),
+            "selection_hint": f.get("selection_hint"),
+            "intent": f.get("intent"),
+            "direction": f.get("direction"),
+            "family": f.get("family"),
+        })
+    return out
+```
+
+`build_prompt` 的 factors_str 拼接改为（加 intent/direction/family，不进 scenarios）:
+```python
+    factors_str = ""
+    if available_factors:
+        factors_str = "\n\n## 可选用因子 (factor zoo)\n" + "\n".join(
+            f"  - {f.get('id')} ({f.get('category')}) [{f.get('direction')}/{f.get('family')}]: "
+            f"{f.get('selection_hint')} — {f.get('intent')}"
+            for f in available_factors
+        ) + "\n\n重构假设可指定 factor-include: [<id>, ...] 选用这些因子。"
+```
+
+- [ ] **Step 4: 跑测试验证通过**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/Scripts/test_hypothesize_prompt.py -v`
+Expected: 3 个测试全 PASS。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add Scripts/inspiration/hypothesize.py Tests/Python/Scripts/test_hypothesize_prompt.py
+git commit -m "feat(alpha101-csharp-read): inject intent/direction/family into LLM prompt
+
+hypothesize build_prompt now shows [direction/family]: hint — intent per
+factor. scenarios excluded (too verbose; kept in catalog for optimizer).
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 6: 端到端验证 + 重启 daemon
+
+**Files:** 无新文件（验证 + 操作）
+
+- [ ] **Step 1: 重新生成 catalog（合并描述后）**
+
+Run: `cd /home/project/hope/Lean && python Scripts/factor_zoo/build_catalog.py --print 2>&1 | head -50`
+Expected: 输出 `Wrote 159 factors to ...`；抽查 alpha042 含 intent/direction/family。
+
+- [ ] **Step 2: 跑 C# 全套 alpha101 + FactorStore 测试**
+
+Run: `cd /home/project/hope/Lean && dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~Alpha101FactorRegistration|FactorStoreTests|FactorStoreIntegrationTests" --logger "console;verbosity=detailed"`
+Expected: 全 PASS（Explicit 测试跳过）。
+
+- [ ] **Step 3: 跑 Python 全套 FactorZoo 测试**
+
+Run: `cd /home/project/hope/Lean && python -m pytest Tests/Python/FactorZoo/ Tests/Python/Scripts/test_hypothesize_prompt.py -v`
+Expected: 全 PASS。
+
+- [ ] **Step 4: 真实磁盘集成验证（Explicit）**
+
+Run: `cd /home/project/hope/Lean && dotnet test Tests/QuantConnect.Tests.csproj --filter "FullyQualifiedName~Alpha101FactorRegistrationTests.Get_RealDisk" --logger "console;verbosity=detailed"`
+Expected: 2 个 Explicit 测试 PASS（alpha042≈1.06993, alpha001≈0.396667）。
+若 FAIL（磁盘无数据）: 跑 `cd data-source/tushare/alpha101 && python -m builder --date 2026-07-24 --influx` 重新生成。
+
+- [ ] **Step 5: 重启 factor_worker（catalog 变了，确保 freshness 对齐）**
+
+Run: `supervisorctl restart factor_worker && sleep 3 && supervisorctl status factor_worker`
+Expected: `factor_worker RUNNING pid <new>, uptime 0:00:03`。
+
+- [ ] **Step 6: 端到端冒烟 — 验证 catalog yaml 含 alpha042 4 字段**
+
+Run: `cd /home/project/hope/Lean && python -c "import yaml; doc=yaml.safe_load(open('Results/factor-zoo/factor-catalog.yaml')); a=next(f for f in doc['factors'] if f['id']=='alpha042'); print('intent:', a.get('intent','')[:40]); print('direction:', a.get('direction')); print('family:', a.get('family'))"`
+Expected: 打印 alpha042 的 intent/direction/family。
+
+- [ ] **Step 7: 提交验证记录（如有 catalog 重建产物变化）**
+
+```bash
+git add -A
+git status  # 检查无意外变化
+# 若 Results/factor-zoo/factor-catalog.yaml 有变化:
+git commit -m "chore(alpha101-csharp-read): regenerate catalog with descriptions
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Self-Review 检查
+
+**Spec 覆盖**:
+- §3 组件 A (101 独立 id) → Task 1 ✓
+- §3.2 FactorStoreConfig 1 行 → Task 1 Step 4 ✓
+- §4 组件 B (101 描述) → Task 3 ✓
+- §4.3 build_catalog 合并 → Task 4 ✓
+- §4.3 hypothesize 提示注入 → Task 5 ✓
+- §5.1 C# 测试 → Task 1 ✓
+- §5.2 FactorStoreTests → Task 2 ✓
+- §5.3 IntegrationTests → Task 2 ✓
+- §5.4 Python 描述测试 → Task 3 ✓
+- §5.4b hypothesize 提示测试 → Task 5 ✓
+- §5.5 test_build_catalog 更新 → Task 4 ✓
+- §8 验收标准 → Task 6 ✓
+
+**Placeholder 扫描**: 无 TBD/TODO；101 条描述全部完整写出（Task 3 Step 3）。
+
+**类型一致性**: `Alpha101FactorRegistration.Register(FactorStore)` 在 Task 1 定义、Task 1 Step 4 调用、Task 6 不直接用（经 RegisterDefaults）一致。`_load_alpha101_descriptions` 在 Task 4 定义、Task 4 `_alpha_entry` 调用一致。`build_prompt` 的 `available_factors` 参数签名不变（Task 5 只改拼接 + 投影），向后兼容。
