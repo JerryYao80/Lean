@@ -197,7 +197,11 @@ def _alpha_entry(n: int, hint: str) -> dict:
     return entry
 ```
 
-**`hypothesize.py` 不改**——它已遍历 catalog 的每个 factor 字段，新加的 4 个字段会自动出现在 LLM 提示里。如果当前 `build_prompt` 只投影了 `{id,category,selection_hint}`，实施时确认是否需要把 intent/direction/family 也拼进提示——这是实施细节，spec 层面只要求"catalog 带这 4 字段且 LLM 提示能用到"。
+**`hypothesize.py` 最小改（必需，非可选）**: 调研已确认 `_load_available_factors` 当前只投影 `{id,name,category,selection_hint}`（显式丢弃其他字段）。要让新 4 字段进 LLM 提示，**必须**改两处：
+1. `_load_available_factors` 的投影字典加 `intent/direction/family`（scenarios 太长，不进投影）。
+2. `build_prompt` 的 `## 可选用因子` 节把这 3 个字段拼进每行（如 `alpha042 (Alpha101) [反向/VWAP反转]: <hint> — <intent>`）。
+
+这是 spec 的硬性要求（§1 “LLM 提示带上内涵”），不是实施细节。`scenarios` 列表留给 catalog yaml 供人读 + 优化器用，不进 LLM 提示（避免 prompt 膨胀）。
 
 ## 5. 测试计划
 
@@ -229,6 +233,11 @@ def _alpha_entry(n: int, hint: str) -> dict:
 - `test_build_catalog_merges_descriptions`: `build_catalog()` 后 alpha042 的 entry 含 intent/scenarios/direction/family。
 - `test_build_catalog_count_unchanged`: catalog 仍 159 条（描述是字段加法, 不增量）。
 
+### 5.4b `Tests/Python/` — hypothesize 提示注入验证 (新)
+
+- `test_hypothesize_prompt_includes_intent_direction_family`: mock catalog 后调 `build_prompt`, 断言提示里出现 `intent` 文本 + `direction` 标签 + `family` 标签（验 §4.3 的 LLM 提示改动生效）。
+- `test_hypothesize_prompt_excludes_scenarios`: 同提示里**不**含 scenarios 列表内容（验 scenarios 不进提示）。
+
 ### 5.5 `Tests/Python/FactorZoo/test_build_catalog.py` (既有, 更新)
 
 - 现有计数断言保持 159（不增）。
@@ -242,6 +251,7 @@ def _alpha_entry(n: int, hint: str) -> dict:
 | `Common/Factors/Store/FactorStoreConfig.cs` | 改 (加 1 行) | 调用 `Alpha101FactorRegistration.Register(store)` |
 | `Scripts/factor_zoo/alpha101_descriptions.yaml` | 新建 | 101 条内涵说明 |
 | `Scripts/factor_zoo/build_catalog.py` | 改 (加载+合并) | `_load_alpha101_descriptions` + `_alpha_entry` 升级 |
+| `Scripts/inspiration/hypothesize.py` | 改 (最小改) | `_load_available_factors` 投影 + `build_prompt` 拼接 intent/direction/family |
 | `Tests/Common/Factors/Store/Alpha101FactorRegistrationTests.cs` | 新建 | C# 单元+集成 |
 | `Tests/Common/Factors/Store/FactorStoreTests.cs` | 改 (加 1) | `Get_Alpha101IndependentId_*` |
 | `Tests/Common/Factors/Store/FactorStoreIntegrationTests.cs` | 改 (加 1) | `Get_Alpha101Id_*Missing*` |
@@ -255,7 +265,7 @@ def _alpha_entry(n: int, hint: str) -> dict:
 - 不注册向量 group id（批量场景罕见, YAGNI）。
 - 不接 InfluxDB 读路径（parquet 直读已够; InfluxDB 是监控用）。
 - 不重算 101 个 alpha 的 direction（用论文已知语义 + 公式结构推断, 不确定标中性）。
-- 不改 `hypothesize.py` 的提示模板逻辑（除非实施时发现 build_prompt 没投影新字段, 届时按最小改处理）。
+- 不把 `scenarios` 列表拼进 LLM 提示（避免 prompt 膨胀; scenarios 留在 catalog yaml 供人读 + 优化器用, 仅 intent/direction/family 进提示）。
 
 ## 8. 验收标准
 
@@ -268,7 +278,7 @@ def _alpha_entry(n: int, hint: str) -> dict:
 ## 9. 风险与对策
 
 - **风险**: `hypothesize.py::build_prompt` 当前只投影 `{id,category,selection_hint}`, 新 4 字段进不了 LLM 提示。
-  **对策**: 实施时先读 `build_prompt`, 若未投影新字段则最小改把 `intent/direction/family` 拼进 `## 可选用因子` 节（scenarios 太长可只取首条）。属实施细节, 不另开 spec。
+  **对策**: 已在 §4.3 明确为硬性改动（投影加 intent/direction/family + 拼进提示节）。`scenarios` 不进提示。属本 spec 范围, 非实施细节。
 - **风险**: 101 条描述的 direction 标注主观性。
   **对策**: 对照 `docs/101.md` 原公式 + 论文; 不确定标"中性"; 实施时每条标注附依据（公式结构或论文段落）写入 yaml 注释。
 - **风险**: 真实磁盘集成测试依赖 `result/factor-zoo/` 已生成。
