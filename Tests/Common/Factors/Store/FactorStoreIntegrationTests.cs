@@ -60,6 +60,18 @@ namespace QuantConnect.Tests.Common.Factors.Store
             Assert.AreEqual(0.55m, r.Value);
         }
 
+        [Test]
+        public void Get_Alpha101Id_ReturnsMissingWhenNoParquet()
+        {
+            // alpha042 已由 RegisterDefaults 注册 (真实 RParquetAdapter, 默认 reader)。
+            // 不存在的日期 -> 文件不存在 -> TryGet 返回 false -> Missing, 不抛。
+            var store = new FactorStore();
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(1900, 1, 1));
+            Assert.AreEqual(FactorDataQuality.Missing, r.Quality);
+            Assert.AreEqual(0m, r.Value);
+        }
+
         private static IEnumerable<BaseData> MakeHistory(Symbol sym, int bars, decimal start, decimal end)
         {
             for (int i = 0; i < bars; i++)

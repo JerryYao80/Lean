@@ -44,6 +44,20 @@ namespace QuantConnect.Tests.Common.Factors.Store
             Assert.IsTrue(meta.ContainsKey("hv_20d"));
         }
 
+        [Test]
+        public void Get_Alpha101IndependentId_RoutesToParquetAdapter()
+        {
+            // alpha042 由 RegisterDefaults 注册。注入 fake reader 替换它, 验证端到端路由。
+            var store = new FactorStore();
+            store.Register("alpha042", new RParquetAdapter(
+                factorRoot: "factor-zoo/alpha042", valueColumn: "alpha042",
+                readScalar: (path, column) => 0.55m));
+            var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
+            var r = store.Get("alpha042", sym, new DateTime(2026, 7, 24));
+            Assert.AreEqual(FactorDataQuality.Valid, r.Quality);
+            Assert.AreEqual(0.55m, r.Value);
+        }
+
         private class FakeAdapter : IFactorAdapter
         {
             public bool Called;
