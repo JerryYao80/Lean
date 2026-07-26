@@ -1,4 +1,5 @@
 """Tests for the tushare coverage audit script (Phase 1, spec §6)."""
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -81,22 +82,54 @@ def test_audit_table_skips_corrupt_parquet_without_crashing(tmp_path):
 def test_resolve_latest_trade_date_excludes_future_dates(tmp_path):
     """trade_cal is pre-populated for the full year with is_open=1 even on
     FUTURE dates. _resolve_latest_trade_date must filter cal_date <= today
-    before taking the max, otherwise it returns a future date (e.g. 20261231)
+    before taking the max, otherwise it returns a future date (e.g. today+60d)
     and misdiagnoses fresh tables as STALE.
 
-    Synthetic trade_cal has a past open date (20260720) and a future open
-    date (20261231). For any run-date in (20260720, 20261231) the function
-    must return 20260720 (latest PAST open date), not 20261231.
+    Synthetic trade_cal has a past open date (today-5d) and a future open
+    date (today+60d). For any run-date in (today-5d, today+60d) the function
+    must return today-5d (latest PAST open date), not today+60d.
+
+    Dates are derived from dt.date.today() so the test is date-stable and
+    won't silently start failing after a fixed calendar date.
     """
     import pyarrow as pa, pyarrow.parquet as pq
+    past = (dt.date.today() - dt.timedelta(days=5)).strftime("%Y%m%d")
+    future = (dt.date.today() + dt.timedelta(days=60)).strftime("%Y%m%d")
     d = tmp_path / "trade_cal"
     d.mkdir(parents=True)
     tbl = pa.table({
-        "cal_date": ["20260720", "20261231"],
+        "cal_date": [past, future],
         "is_open": [1, 1],
     })
     pq.write_table(tbl, d / "data.parquet")
     resolved = _resolve_latest_trade_date(str(tmp_path))
-    assert resolved == "20260720", (
-        f"expected future date 20261231 to be filtered out, got {resolved}"
+    assert resolved == past, (
+        f"expected future date {future} to be filtered out, got {resolved}"
+    )
+
+
+def test_resolve_latest_trade_date_accepts_string_true_is_open(tmp_path):
+    """_resolve_latest_trade_date must accept is_open values of "True"/"true"
+    (string), not just "1"/1. This aligns the shared matcher with
+    BarraCNE5DataLoader.get_trading_dates
+    (data-source/tushare/barra_cne5_data_loader.py:161), which uses
+    `.isin({"1","True","true"})`. Real tushare trade_cal stores int 0/1, but
+    the shared matcher must not regress to strict `== "1"` (commit ddce943c0
+    had aligned to the isin set, then a later dedup reverted it).
+    """
+    import pyarrow as pa, pyarrow.parquet as pq
+    past = (dt.date.today() - dt.timedelta(days=5)).strftime("%Y%m%d")
+    d = tmp_path / "trade_cal"
+    d.mkdir(parents=True)
+    # is_open stored as the string "True" — the Barra loader accepts this;
+    # the shared matcher must too, or the two paths drift.
+    tbl = pa.table({
+        "cal_date": [past],
+        "is_open": ["True"],
+    })
+    pq.write_table(tbl, d / "data.parquet")
+    resolved = _resolve_latest_trade_date(str(tmp_path))
+    assert resolved == past, (
+        f"expected is_open='True' (string) to be accepted like Barra loader, "
+        f"got {resolved} (today fallback means matcher rejected it)"
     )

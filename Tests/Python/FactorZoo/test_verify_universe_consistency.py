@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from factor_zoo.verify_universe_consistency import (
     load_index_members,
     resolve_universe,
+    main,
     UniverseReport,
 )
 
@@ -87,3 +88,52 @@ def test_resolve_universe_skips_corrupt_parquet(tmp_path):
     # must not raise; must still resolve the good partition's member
     members = load_index_members("000300.SH", data_root=str(tmp_path), asof="20260121")
     assert members == ["600519.SH"]
+
+
+def _write_trade_cal(root, cal_dates, is_opens):
+    """Write a trade_cal parquet with the given cal_date / is_open rows."""
+    d = root / "trade_cal"
+    d.mkdir(parents=True)
+    tbl = pa.table({"cal_date": cal_dates, "is_open": is_opens})
+    pq.write_table(tbl, d / "data.parquet")
+
+
+def test_main_returns_nonzero_when_index_unresolved(tmp_path):
+    """Gate (STEP 0a) must exit non-zero when an index is unresolved.
+
+    This is a GATE (前置验收闸): CI/callers detect failure programmatically
+    via exit code. A unresolved index (e.g. 000905.SH missing) means the
+    gate FAILED and main() must return non-zero.
+    """
+    # trade_cal: a single past open date so _resolve_latest_trade_date succeeds
+    import datetime as dt
+    past = (dt.date.today() - dt.timedelta(days=5)).strftime("%Y%m%d")
+    _write_trade_cal(tmp_path, [past], [1])
+    # index_weight: only 000300.SH present; 000905.SH is unresolved
+    _write_index_weight_partition(tmp_path, past, {
+        "index_code": ["000300.SH"],
+        "con_code": ["600519.SH"],
+        "trade_date": [past],
+        "weight": [0.05],
+    })
+    rc = main(["--data-root", str(tmp_path), "--json"])
+    assert rc != 0, (
+        f"gate FAILED (000905.SH unresolved) but main() returned {rc} (expected non-zero)"
+    )
+
+
+def test_main_returns_zero_when_all_indices_resolve(tmp_path):
+    """Gate passes (all resolve) -> main() returns 0."""
+    import datetime as dt
+    past = (dt.date.today() - dt.timedelta(days=5)).strftime("%Y%m%d")
+    _write_trade_cal(tmp_path, [past], [1])
+    _write_index_weight_partition(tmp_path, past, {
+        "index_code": ["000300.SH", "000905.SH"],
+        "con_code": ["600519.SH", "000001.SZ"],
+        "trade_date": [past, past],
+        "weight": [0.05, 0.02],
+    })
+    rc = main(["--data-root", str(tmp_path), "--json"])
+    assert rc == 0, (
+        f"gate PASSED (all indices resolved) but main() returned {rc} (expected 0)"
+    )

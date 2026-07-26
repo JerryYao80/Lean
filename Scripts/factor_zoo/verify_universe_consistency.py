@@ -155,7 +155,7 @@ def main(argv=None) -> int:
             print("000905.SH resolved → §6 'missing' refuted (was a glob artifact).")
         if rep.unresolved:
             print(f"UNRESOLVED indices: {rep.unresolved}")
-    return 0
+    return 1 if rep.unresolved else 0
 
 
 if __name__ == "__main__":

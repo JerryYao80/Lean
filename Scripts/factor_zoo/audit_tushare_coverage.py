@@ -156,7 +156,14 @@ def audit_all(data_root: str, latest_trade_date: str) -> list[TableReport]:
 
 
 def _resolve_latest_trade_date(data_root: str) -> str:
-    """Use trade_cal max is_open=1 date <= today; fall back to today."""
+    """Use trade_cal max is_open=1 date <= today; fall back to today.
+
+    The `is_open` matcher uses `.isin({"1","True","true"})` to align with
+    BarraCNE5DataLoader.get_trading_dates
+    (data-source/tushare/barra_cne5_data_loader.py:161). Real tushare
+    trade_cal stores int 0/1, but the shared matcher tolerates the string
+    forms the Barra loader accepts, so the two paths never drift.
+    """
     cal = _table_dir("trade_cal", data_root)
     if cal.exists():
         last: Optional[str] = None
@@ -168,7 +175,8 @@ def _resolve_latest_trade_date(data_root: str) -> str:
             if "cal_date" in df.columns and "is_open" in df.columns:
                 today = dt.date.today().strftime("%Y%m%d")
                 open_dates = df.loc[
-                    (df["is_open"].astype(str) == "1") & (df["cal_date"].astype(str) <= today),
+                    (df["is_open"].astype(str).isin({"1", "True", "true"}))
+                    & (df["cal_date"].astype(str) <= today),
                     "cal_date",
                 ].astype(str)
                 if not open_dates.empty:
