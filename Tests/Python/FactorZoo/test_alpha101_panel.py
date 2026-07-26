@@ -7,7 +7,7 @@ import pyarrow as pa, pyarrow.parquet as pq, pandas as pd, pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "data-source" / "tushare"))
 
-from alpha101.panel_loader import Alpha101Panel, load_csi800_universe  # noqa: E402
+from alpha101.panel_loader import Alpha101Panel, load_csi800_universe, load_panel  # noqa: E402
 
 
 def test_alpha101_panel_fields():
@@ -52,3 +52,15 @@ def test_load_csi800_universe_dedup(tmp_data_root, monkeypatch):
             return ["000001.SZ", "600000.SH"] if index_code == "000300.SH" else ["600000.SH"]
     codes = load_csi800_universe(FakeLoader(), "20260105")
     assert sorted(codes) == ["000001.SZ", "600000.SH"]
+
+
+def test_industry_renames_l_levels(tmp_data_root):
+    p = load_panel(["000001.SZ", "600000.SH"], "20260105", data_root=str(tmp_data_root))
+    assert p is not None
+    for col in ("l1", "l2", "l3"):
+        assert col in p.industry.columns, f"missing {col} in industry columns: {list(p.industry.columns)}"
+    # l*_code columns retained (harmless; future callers may want codes)
+    for col in ("l1_code", "l2_code", "l3_code"):
+        assert col in p.industry.columns, f"missing {col} in industry columns: {list(p.industry.columns)}"
+    # l1 is the industry NAME label (e.g. "汽车"), not the code
+    assert p.industry.set_index("ts_code").loc["000001.SZ", "l1"] == "汽车"

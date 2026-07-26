@@ -114,6 +114,13 @@ def load_panel(ts_codes: list[str], asof: str, data_root: str | None = None,
         ind_df = pd.read_parquet(ind_path)
         ind_df["ts_code"] = ind_df["ts_code"].astype(str)
         ind_df = ind_df[ind_df["ts_code"].isin(ts_codes)]
+        # Expose l1/l2/l3 as the group LABEL (industry name) for indneutralize.
+        rename = {}
+        for lvl in ("l1", "l2", "l3"):
+            if f"{lvl}_name" in ind_df.columns:
+                rename[f"{lvl}_name"] = lvl
+        if rename:
+            ind_df = ind_df.rename(columns=rename)
         ind_df["in_date"] = ind_df["in_date"].astype(str)
         ind_df["out_date"] = ind_df["out_date"].fillna("29991231").astype(str)
 
