@@ -19,10 +19,14 @@ _SYSTEM_PROMPT = """你是量化策略研究员。任务:基于一个量化策�
 
 
 def _load_available_factors(catalog_path=None) -> list:
-    """Phase 4: read FactorCatalog yaml -> [{id,name,category,selection_hint}].
+    """Phase 4: read FactorCatalog yaml -> factor projections.
 
     Returns [] if the catalog is missing/corrupt (graceful degrade; the prompt
     then omits the available-factors section entirely).
+
+    Phase 5: project intent/direction/family (Task 5) so the reconstruction
+    LLM sees the alpha101 semantics. `scenarios` is intentionally NOT projected
+    (too verbose for the prompt — enforced by test_prompt_excludes_scenarios).
     """
     import yaml
     p = Path(catalog_path) if catalog_path else CATALOG_PATH
@@ -39,6 +43,9 @@ def _load_available_factors(catalog_path=None) -> list:
             "name": f.get("name"),
             "category": f.get("category"),
             "selection_hint": f.get("selection_hint"),
+            "intent": f.get("intent"),
+            "direction": f.get("direction"),
+            "family": f.get("family"),
         })
     return out
 
@@ -60,10 +67,13 @@ def build_prompt(strategy_name, inspired_layer, review_doc, gen_history, layer_s
     neg_trades_str = "\n".join(f"  {t.get('entry_time','?')}: {t.get('layer_contributions',{}).get(inspired_layer)}"
                                for t in neg_trades) or "  (无负贡献交易)"
     # Phase 4: only emit the available-factors section when a catalog was loaded.
+    # Phase 5 (Task 5): include intent/direction/family; scenarios intentionally
+    # excluded (too verbose — enforced by test_prompt_excludes_scenarios).
     factors_str = ""
     if available_factors:
         factors_str = "\n\n## 可选用因子 (factor zoo)\n" + "\n".join(
-            f"  - {f.get('id')} ({f.get('category')}): {f.get('selection_hint')}"
+            f"  - {f.get('id')} ({f.get('category')}) [{f.get('direction')}/{f.get('family')}]: "
+            f"{f.get('selection_hint')} — {f.get('intent')}"
             for f in available_factors
         ) + "\n\n重构假设可指定 factor-include: [<id>, ...] 选用这些因子。"
     return f"""## 策略
