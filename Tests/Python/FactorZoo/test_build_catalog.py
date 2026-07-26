@@ -83,3 +83,22 @@ def test_alpha101_entries_present(tmp_path):
     assert alpha042["storage"]["influx"] == "lean_factor_alpha042"
     assert alpha042["category"] == "Alpha101"
     assert alpha042["parameters"] == {"n": 42}
+
+
+def test_alpha101_entries_have_description_fields(tmp_path):
+    out = tmp_path / "factor-catalog.yaml"
+    bc.build_catalog(freshness_path=None, out_path=out)
+    factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
+    alpha042 = next(f for f in factors if f["id"] == "alpha042")
+    assert alpha042.get("intent"), "alpha042 missing intent"
+    assert alpha042.get("direction") in {"正向", "反向", "中性"}
+    assert alpha042.get("family"), "alpha042 missing family"
+    assert isinstance(alpha042.get("scenarios"), list)
+    # 全部 101 条都有
+    alpha_ids = {f["id"] for f in factors if f["id"].startswith("alpha")}
+    assert len(alpha_ids) == 101
+    for f in factors:
+        if f["id"].startswith("alpha"):
+            assert f.get("intent"), f"{f['id']} missing intent"
+            assert f.get("direction"), f"{f['id']} missing direction"
+            assert f.get("family"), f"{f['id']} missing family"

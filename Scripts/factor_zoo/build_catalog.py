@@ -83,9 +83,31 @@ ALPHA101_HINTS = {
 }
 
 
+_ALPHA101_DESCRIPTIONS = None  # lazy cache
+
+
+def _load_alpha101_descriptions() -> dict:
+    """Load Scripts/factor_zoo/alpha101_descriptions.yaml (101 entries).
+    Returns {} if missing/corrupt (graceful degrade; catalog then omits the
+    4 description fields for alphas, keeping only selection_hint).
+    """
+    global _ALPHA101_DESCRIPTIONS
+    if _ALPHA101_DESCRIPTIONS is not None:
+        return _ALPHA101_DESCRIPTIONS
+    p = Path(__file__).parent / "alpha101_descriptions.yaml"
+    if not p.exists():
+        _ALPHA101_DESCRIPTIONS = {}
+        return {}
+    try:
+        _ALPHA101_DESCRIPTIONS = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        _ALPHA101_DESCRIPTIONS = {}
+    return _ALPHA101_DESCRIPTIONS
+
+
 def _alpha_entry(n: int, hint: str) -> dict:
     aid = f"alpha{n:03d}"
-    return {
+    entry = {
         "id": aid,
         "name": f"WorldQuant Alpha#{n}",
         "category": "Alpha101",
@@ -95,6 +117,13 @@ def _alpha_entry(n: int, hint: str) -> dict:
         "selection_hint": hint,
         "parameters": {"n": n},
     }
+    desc = _load_alpha101_descriptions().get(aid, {})
+    if desc:
+        entry["intent"] = desc.get("intent", "")
+        entry["scenarios"] = desc.get("scenarios", [])
+        entry["direction"] = desc.get("direction", "")
+        entry["family"] = desc.get("family", "")
+    return entry
 
 
 # fmt: off
