@@ -35,6 +35,8 @@ namespace QuantConnect.Factors.Store
             }
             // Task 4: parquet factors -> RParquetAdapter
             store.Register("crowding", new RParquetAdapter("crowding-factor", "composite"));
+            // Alpha101: 101 个独立 id (单点读, LLM/人工点名哪个读哪个)
+            Alpha101FactorRegistration.Register(store);
         }
     }
 }
