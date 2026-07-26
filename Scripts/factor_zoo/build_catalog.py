@@ -137,8 +137,15 @@ FACTOR_METADATA: list[dict] = [
 
 
 def load_freshness(path) -> dict:
-    """Read Phase 3 freshness.json. Returns {} if missing/corrupt (never throws)."""
-    p = Path(path) if path else DEFAULT_FRESHNESS_PATH
+    """Read Phase 3 freshness.json. Returns {} if path is None/missing/corrupt (never throws).
+
+    None path means "no freshness data" — callers must opt in by passing an explicit
+    path. Falling back to a default path here would mask missing data as "fresh",
+    violating the honesty contract (test_missing_freshness_yields_unknown_status_null_date).
+    """
+    if not path:
+        return {}
+    p = Path(path)
     if not p.exists():
         return {}
     try:
@@ -160,7 +167,10 @@ def build_catalog(freshness_path=None, out_path=None) -> dict:
         fr = freshness.get(fid, {})
         entry = dict(meta)
         entry["last_date"] = fr.get("last_date")
-        entry["status"] = fr.get("status", "unknown") if fr else "unknown"
+        # Honesty contract: a factor with NO freshness entry is "unknown"
+        # (not evaluatable) — never masquerade as "fresh". Only an explicit
+        # freshness entry with status "fresh"/"stale" may carry that status.
+        entry["status"] = fr.get("status") if fr.get("status") else "unknown"
         factors.append(entry)
     catalog = {
         "version": datetime.now(timezone.utc).isoformat(),
