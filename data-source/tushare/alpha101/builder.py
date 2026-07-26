@@ -24,7 +24,7 @@ from alpha101.formulas import ALPHAS, INDCLASS_LEVELS  # noqa: E402
 from alpha101.panel_loader import load_panel, DEFAULT_TS_PATH  # noqa: E402
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
-DEFAULT_RESULT_ROOT = os.environ.get("ALPHA101_RESULT_ROOT", str(_HERE.parents[3] / "result"))
+DEFAULT_RESULT_ROOT = os.environ.get("ALPHA101_RESULT_ROOT", str(_HERE.parents[2] / "result"))
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
