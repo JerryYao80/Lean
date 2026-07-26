@@ -50,8 +50,55 @@ def _runtime() -> dict:
     return {"kind": "runtime", "path": "FactorRegistry.Compute(history)"}
 
 
+# WorldQuant Alpha101 — short Chinese selection hints per alpha number.
+# Sourced from the 101 formulaic alphas (Kakushadze 2015). Used by the
+# hypothesize LLM prompt to know each alpha's intent at a glance.
+ALPHA101_HINTS = {
+    1: "Ts_ArgMax 反转动量", 2: "量价相关性反转", 3: "开量相关性反转", 4: "低价股时序反转",
+    5: "VWAP 均值回归", 6: "开量负相关", 7: "条件动量反转", 8: "5日收益动量反转",
+    9: "极值条件动量", 10: "极值条件动量(rank)", 11: "VWAP-收盘极值×量变", 12: "量变×价反转",
+    13: "量价协方差反转", 14: "收益动量×开量相关", 15: "高低量相关求和反转", 16: "高低量协方差反转",
+    17: "复合时序反转", 18: "日内波动+开收相关", 19: "7日趋势符号×长动量", 20: "开盘缺口反转",
+    21: "均线条件反转", 22: "高低量相关变化", 23: "新高反转", 24: "百日趋势条件",
+    25: "收益×量×VWAP×振幅", 26: "量价时序相关极值", 27: "量VWAP相关阈值", 28: "VWAP-收盘缩放",
+    29: "嵌套rank极值", 30: "趋势符号计数×量比", 31: "复合动量反转", 32: "均线偏离+长相关",
+    33: "开收比反转", 34: "波动率比+动量", 35: "量价时序反转", 36: "复合多因子",
+    37: "开收延迟相关+开收", 38: "收盘时序反转", 39: "7日动量×量比衰减", 40: "高波动×高低量相关",
+    41: "高低几何均值-VWAP", 42: "VWAP-收盘均值回归", 43: "量比×价反转时序", 44: "高价量相关反转",
+    45: "延迟收盘相关", 46: "10日趋势阈值", 47: "量价复合", 48: "收益自相关行业中性",
+    49: "10日趋势阈值", 50: "量VWAP相关极值", 51: "10日趋势阈值", 52: "低价极值×长收益",
+    53: "日内位置变化", 54: "开收高低幂比", 55: "价格位置×量相关", 56: "收益动量×市值",
+    57: "VWAP-收盘/衰减argmax", 58: "VWAP行业中性×量", 59: "VWAP行业中性×量", 60: "日内位置×量缩放",
+    61: "VWAP极值<量相关", 62: "VWAP量相关<开高低", 63: "行业中性收盘动量", 64: "量相关<位置变化",
+    65: "量相关<开盘极值", 66: "VWAP动量+日内位置", 67: "高价极值^行业中性相关", 68: "高价量相关<价变化",
+    69: "行业中性VWAP动量^相关", 70: "VWAP变化^行业中性相关", 71: "复合时序最大", 72: "高低量相关/时序相关",
+    73: "VWAP动量最大", 74: "量相关<高低量相关", 75: "VWAP量相关<低价量相关", 76: "VWAP动量最大",
+    77: "VWAP偏离最小", 78: "量相关^VWAP量相关", 79: "行业中性变化<时序相关", 80: "行业中性符号^相关",
+    81: "量相关对数<时序相关", 82: "开盘动量最小", 83: "振幅延迟×量/位置", 84: "VWAP时序幂",
+    85: "量相关^时序相关", 86: "量相关<开盘收盘", 87: "VWAP动量最大", 88: "rank差最小",
+    89: "量相关-行业中性VWAP", 90: "收盘极值^行业中性相关", 91: "行业中性嵌套衰减", 92: "条件rank最小",
+    93: "行业中性VWAP相关/动量", 94: "VWAP极值^时序相关", 95: "开盘极值<量相关时序", 96: "量相关最大",
+    97: "行业中性动量-时序相关", 98: "VWAP量相关-argmin", 99: "量相关<低价量相关", 100: "行业中性复合",
+    101: "日内动量(close-open)/(high-low)",
+}
+
+
+def _alpha_entry(n: int, hint: str) -> dict:
+    aid = f"alpha{n:03d}"
+    return {
+        "id": aid,
+        "name": f"WorldQuant Alpha#{n}",
+        "category": "Alpha101",
+        "compute_mode": "Precomputed",
+        "storage": _parquet(f"result/factor-zoo/{aid}", aid, f"lean_factor_{aid}"),
+        "tushare_deps": ["daily", "adj_factor", "daily_basic", "index_member_all"],
+        "selection_hint": hint,
+        "parameters": {"n": n},
+    }
+
+
 # fmt: off
-# Static metadata table — 48 factors (33 FactorRegistry + 15 Barra).
+# Static metadata table — 159 factors (36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101).
 # Fields: id, name, category, compute_mode (Runtime|Precomputed), storage,
 # tushare_deps, selection_hint, parameters.
 FACTOR_METADATA: list[dict] = [
@@ -132,6 +179,9 @@ FACTOR_METADATA: list[dict] = [
     {"id": "ivol_20d", "name": "20d Idiosyncratic Volatility", "category": "Volatility", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/ivol_20d", "ivol_20d", "lean_factor_ivol_20d"), "tushare_deps": ["daily", "adj_factor", "index_daily"], "selection_hint": "特异性波动(市场模型残差), 高=特质风险大, 反向(低波动异象)", "parameters": {}},
     {"id": "max_ret_20d", "name": "20d MAX Return (Bali)", "category": "Trend", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/max_ret_20d", "max_ret_20d", "lean_factor_max_ret_20d"), "tushare_deps": ["daily"], "selection_hint": "20日最大日收益(取负), 高MAX=彩票偏好过热, 反向", "parameters": {}},
     {"id": "short_term_reversal", "name": "20d Short-Term Reversal", "category": "Reversal", "compute_mode": "Precomputed", "storage": _parquet("result/factor-zoo/short_term_reversal", "short_term_reversal", "lean_factor_short_term_reversal"), "tushare_deps": ["daily", "adj_factor"], "selection_hint": "1月反转(取负), 短期超涨回调, 反向", "parameters": {}},
+
+    # ── Alpha101 (101 WorldQuant formulaic alphas) ──
+    *[_alpha_entry(n, ALPHA101_HINTS[n]) for n in range(1, 102)],
 ]
 # fmt: on
 

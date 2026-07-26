@@ -61,12 +61,25 @@ def test_every_factor_has_nonempty_selection_hint(tmp_path):
         assert f.get("selection_hint"), f"factor {f['id']} missing selection_hint"
 
 
-def test_catalog_has_58_factors(tmp_path):
+def test_catalog_has_159_factors(tmp_path):
     out = tmp_path / "factor-catalog.yaml"
     bc.build_catalog(freshness_path=None, out_path=out)
     factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
-    # 36 FactorRegistry + 15 Barra + 7 Phase 5 = 58.
-    assert len(factors) == 58, f"expected 58 factors, got {len(factors)}"
+    # 36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101 = 159.
+    assert len(factors) == 159, f"expected 159 factors, got {len(factors)}"
     ids = {f["id"] for f in factors}
     assert {"accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
             "ivol_20d", "max_ret_20d", "short_term_reversal"}.issubset(ids)
+
+
+def test_alpha101_entries_present(tmp_path):
+    out = tmp_path / "factor-catalog.yaml"
+    bc.build_catalog(freshness_path=None, out_path=out)
+    factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
+    ids = {f["id"] for f in factors}
+    assert "alpha042" in ids
+    alpha042 = next(f for f in factors if f["id"] == "alpha042")
+    assert alpha042["storage"]["path"] == "result/factor-zoo/alpha042/<date>/<ts_code>.parquet"
+    assert alpha042["storage"]["influx"] == "lean_factor_alpha042"
+    assert alpha042["category"] == "Alpha101"
+    assert alpha042["parameters"] == {"n": 42}
