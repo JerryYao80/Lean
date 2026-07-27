@@ -155,11 +155,14 @@ namespace QuantConnect.Tests.Common.Algorithm.Models.Alpha
             var store = MakeFakeStore(vals);
 
             // topQuantile=0.20 over 5 securities => floor(5*0.2)=1 selected Insight.
+            // minValidPerAlpha=2 (test override) so the 5-symbol universe still
+            // produces z-scores; production default is 10 (spec §5.1).
             var model = new Alpha101CompositeAlphaModel(
                 rebalanceMonths: 1,
                 insightPeriodDays: 21,
                 topQuantile: 0.20m,
-                store: store);
+                store: store,
+                minValidPerAlpha: 2);
 
             // 2026-01-05 is a Monday — a real trading day for SSE/SZSE.
             var asOf = new DateTime(2026, 1, 5, 9, 30, 0);

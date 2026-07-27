@@ -66,6 +66,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
         private readonly int _rebalanceMonths;
         private readonly int _insightPeriodDays;
         private readonly decimal _topQuantile;
+        private readonly int _minValidPerAlpha;   // z-score needs >=2; production 10 (spec §5.1)
         private readonly FactorStore _store;   // ctor once — immutable post-ctor
 
         private int _lastRebalanceYear = -1;
@@ -79,16 +80,23 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
         /// calls FactorStoreConfig.RegisterDefaults which registers the 101 alpha
         /// RParquetAdapters + barra + runtime + crowding. Tests pass a fake store
         /// that overrides the 8 used alphas with deterministic readScalar delegates.
+        /// <paramref name="minValidPerAlpha"/> defaults to 10 (spec §5.1: skip an
+        /// alpha when fewer than 10 symbols have Valid values that day); tests pass
+        /// 2 (the mathematical minimum for a non-degenerate z-score) to exercise
+        /// the path with a small universe.
         /// </summary>
         public Alpha101CompositeAlphaModel(
             int rebalanceMonths = 1,
             int insightPeriodDays = 21,
             decimal topQuantile = 0.10m,
-            FactorStore store = null)
+            FactorStore store = null,
+            int minValidPerAlpha = 10)
         {
             _rebalanceMonths = Math.Max(1, rebalanceMonths);
             _insightPeriodDays = Math.Max(1, insightPeriodDays);
             _topQuantile = topQuantile;
+            // z-score requires at least 2 points for non-zero std; floor at 2.
+            _minValidPerAlpha = Math.Max(2, minValidPerAlpha);
             _store = store ?? new FactorStore();   // ctor once — auto RegisterDefaults.
         }
 
@@ -157,9 +165,10 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                     raw.Add((sym, (double)fr.Value));
                 }
 
-                // Need at least 2 valid values to compute a meaningful z-score;
-                // also skip if all values identical (std==0 → division by zero).
-                if (raw.Count < 2) continue;
+                // Spec §5.1: skip this alpha when fewer than minValidPerAlpha (default
+                // 10) symbols have Valid values that day; also skip if all values
+                // identical (std==0 → division by zero).
+                if (raw.Count < _minValidPerAlpha) continue;
 
                 var mean = raw.Average(x => x.v);
                 var std = Math.Sqrt(raw.Sum(x => (x.v - mean) * (x.v - mean)) / raw.Count);
