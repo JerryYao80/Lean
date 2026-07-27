@@ -1,0 +1,780 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "CSI300 Alpha101 Composite Strategy Development Loop — per-stage Sharpe/drawdown/net profit evolution, per-alpha contribution heatmap, 8-alpha weight evolution, DSR gate status. Backed by csi300_alpha101_stage + csi300_alpha101_alpha_attribution measurements (written by stage_bridge.py).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "Backtest Overview",
+      "url": "/d/lean-backtest-overview",
+      "type": "link",
+      "targetBlank": true
+    },
+    {
+      "title": "Strategy Review",
+      "url": "/d/strategy-review",
+      "type": "link",
+      "targetBlank": true
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "策略开发环路总览",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "baseline"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "optimize"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "optimize_champion"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "refactor"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"sharpe\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"stage_type\", \"variant_id\" fill(linear)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "阶段 Sharpe 演化",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "axisPlacement": "auto",
+            "axisLabel": ""
+          },
+          "unit": "percent",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyCNY"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Net Profit"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "Drawdown"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"drawdown\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "drawdown"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"net_profit\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "net_profit"
+        }
+      ],
+      "title": "阶段回撤/净收益",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "invert": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "cellGap": 1,
+            "cellValues": {},
+            "yAxisTickFormatting": "none"
+          },
+          "unit": "percent",
+          "color": {
+            "mode": "scheme",
+            "scheme": "RdYlGn"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 3,
+      "options": {
+        "calculate": false,
+        "cellValues": {},
+        "color": {
+          "scheme": "RdYlGn"
+        },
+        "colDimensions": [],
+        "colWidth": 1.5,
+        "yAxis": {
+          "axisPlacement": "left",
+          "sort": "none",
+          "reverse": false,
+          "unit": "none"
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "showValues": "never",
+        "tooltip": {
+          "mode": "multi",
+          "yHistogram": false,
+          "showColorScale": true
+        },
+        "legend": {
+          "show": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"pnl_pct_of_total\") FROM \"csi300_alpha101_alpha_attribution\" WHERE $timeFilter GROUP BY \"alpha_id\", \"variant_id\"",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "每 alpha 贡献热力图",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 35,
+            "stacking": {
+              "mode": "percent",
+              "group": "A"
+            },
+            "insertNulls": false,
+            "spanNulls": true,
+            "showPoints": "never"
+          },
+          "unit": "percent",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha001"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha006"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha030"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha040"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha042"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha055"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha058"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "cyan",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alpha101"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "magenta",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha001\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha001"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha006\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "B",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha006"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha030\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "C",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha030"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha040\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "D",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha040"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha042\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "E",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha042"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha055\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "F",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha055"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha058\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "G",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha058"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT mean(\"weight_alpha101\") FROM \"csi300_alpha101_stage\" WHERE $timeFilter GROUP BY \"variant_id\" fill(linear)",
+          "refId": "H",
+          "queryType": "influxql",
+          "rawQuery": true,
+          "alias": "alpha101"
+        }
+      ],
+      "title": "8 alpha 权重演化",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "id": 101,
+      "title": "DSR Gate 状态",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "lean-influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "FAILED"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "PASSED"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 42
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "lean-influxdb"
+          },
+          "query": "SELECT last(\"dsr_passed\") FROM \"csi300_alpha101_stage\" WHERE \"stage_type\"='optimize_champion' AND $timeFilter",
+          "refId": "A",
+          "queryType": "influxql",
+          "rawQuery": true
+        }
+      ],
+      "title": "DSR gate 状态",
+      "type": "stat"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "csi300",
+    "alpha101",
+    "composite",
+    "dev-loop"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "1h",
+      "6h",
+      "12h",
+      "24h",
+      "7d",
+      "30d"
+    ]
+  },
+  "timezone": "Asia/Shanghai",
+  "title": "CSI300 Alpha101 策略开发环路",
+  "uid": "csi300-alpha101-loop",
+  "version": 1,
+  "weekStart": "monday"
+}
