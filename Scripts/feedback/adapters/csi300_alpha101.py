@@ -50,7 +50,9 @@ def check_triggers(review: dict, gen_history: list, manifest_raw: dict,
         if len(gaps) < min_generations:
             continue
         recent_gaps = gaps[-min_generations:]
-        if not all(g >= gap_threshold for g in recent_gaps):
+        # Strict `>` matches production trigger.py:40 + gold2.py:49,65 + spec §1.4/§2.4
+        # ("连续 N 代 gap > gap_threshold" — strictly above, not at-or-above).
+        if not all(g > gap_threshold for g in recent_gaps):
             continue
         if weights and not (weights[-1] >= 3.0 or _trending_up(weights[-min_generations:])):
             continue

@@ -13,12 +13,14 @@ def test_low_contribution_alpha_triggers_hypothesize(tmp_path):
 
     review = {"layer_attribution": {
         "alpha_006": {"pnl_pct_of_total": -0.15, "n_trades": 30}}}
+    # All 3 gaps strictly ABOVE threshold 0.20 (spec §2.4: "连续 N 代 gap > gap_threshold",
+    # strict `>` per trigger.py:40 + gold2.py:49,65 — NOT >=).
     gen_history = [
         {"generation": 1, "layer_gaps": {"alpha_006": {"gap": 0.25}},
          "shaping_overrides": {"alpha_006_contrib_penalty": 2.5}},
         {"generation": 2, "layer_gaps": {"alpha_006": {"gap": 0.22}},
          "shaping_overrides": {"alpha_006_contrib_penalty": 2.8}},
-        {"generation": 3, "layer_gaps": {"alpha_006": {"gap": 0.20}},
+        {"generation": 3, "layer_gaps": {"alpha_006": {"gap": 0.21}},
          "shaping_overrides": {"alpha_006_contrib_penalty": 3.0}},
     ]
     manifest_raw = {"strategy_name": "AShareCSI300Alpha101CompositeStrategy",
