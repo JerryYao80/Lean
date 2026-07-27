@@ -238,7 +238,91 @@ Scripts/factor_zoo/backfill_alpha101_csi300.py
 
 **`[Explicit]` 手动**：跑 2024-Q1 三月真实回测 + 复盘 + 验 review.json 8 alpha 归因非空 + 跑一轮 Bayes（减 trial 到 5）验 manifest/reward/DSR 通路。
 
-## 7. 非目标
+## 7. 阶段结果可视化（让优化/重构成果直观可见）
+
+把每一轮回测的核心指标 + 每 alpha 归因按"阶段"落库，前端用独立 Grafana dashboard 可视化，让 baseline → optimize 各代 → refactor 各代的 Sharpe/回撤/收益曲线 + 每 alpha 贡献演化一目了然。同时落一份本地 CSV 供脚本/人读。
+
+### 7.1 阶段定义与标识
+
+每次回测产物（summary.json + review.json + manifest）归属一个阶段，由 manifest 的 `stage_meta` 块声明（Bayes optimizer 每次跑前注入 / refactor 候选生成时由 hypothesize 流程注入）：
+
+| stage_type | 含义 | 何时产生 | variant_id |
+|---|---|---|---|
+| `baseline` | 等权 1/8 初始基线 | Stage 2 完成后首次回测 | `baseline` |
+| `optimize` | Bayes 优化某 trial | Stage 3 每次 `lean_runner.run_backtest` | `opt_gen{G}_trial{T}` |
+| `optimize_champion` | Bayes 最优 trial（DSR gate 后）| Stage 3 `optimize()` 收尾 | `opt_champion_gen{G}` |
+| `refactor` | hypothesize 替换某 alpha 后的候选 | Stage 6 新变体回测 | `refactor_{inspired_layer}_gen{G}` |
+
+`generation` = 优化代数（`generations.read_history` 计数），`strategy_id` = `csi300_alpha101_composite`。
+
+### 7.2 InfluxDB measurements（新建，独立，不污染既有）
+
+**measurement 1: `csi300_alpha101_stage`**（每阶段 1 行点，汇总指标）
+
+| 字段 | 类型 | 来源 |
+|---|---|---|
+| tags: `strategy_id`, `stage_type`, `variant_id`, `generation` | string | manifest stage_meta |
+| field: `sharpe` | float | summary.json "Sharpe Ratio" |
+| field: `sortino` | float | "Sortino Ratio" |
+| field: `drawdown` | float | "Drawdown" |
+| field: `net_profit` | float | "Net Profit" |
+| field: `compounding_annual_return` | float | "Compounding Annual Return" |
+| field: `total_orders` | int | "Total Orders" |
+| field: `win_rate` | float | "Win Rate" |
+| field: `alpha_weight_<NNN>` | float ×8 | manifest parameters w_alphaNNN（归一化后）|
+| field: `dsr_passed` | int (0/1) | DSR gate（仅 optimize_champion）|
+| timestamp | ns | 回测完成时间 |
+
+**measurement 2: `csi300_alpha101_alpha_attribution`**（每阶段 ×8 alpha = 8 行点）
+
+| 字段 | 类型 | 来源 |
+|---|---|---|
+| tags: `strategy_id`, `alpha_id` (alpha_001..alpha_101), `stage_type`, `variant_id`, `generation` | string | review.json layer_attribution |
+| field: `pnl_pct_of_total` | float | review.json layer_attribution[alpha_id].pnl_pct_of_total |
+| field: `pnl_abs` | float | .pnl_abs |
+| field: `n_trades` | int | .n_trades |
+| field: `n_wins` | int | .n_wins |
+| field: `weight` | float | 该阶段该 alpha 的归一化权重 |
+| timestamp | ns | 回测完成时间 |
+
+### 7.3 CSV（本地快照，CSV 是数据源 / dashboard 是可视化）
+
+`Results/csi300_alpha101/stage_results.csv`（每阶段追加 1 行，扁平）：
+
+```
+stage_type,generation,variant_id,timestamp,sharpe,sortino,drawdown,net_profit,
+total_orders,win_rate,dsr_passed,
+alpha_001_contrib_pct,alpha_006_contrib_pct,alpha_030_contrib_pct,alpha_040_contrib_pct,
+alpha_042_contrib_pct,alpha_055_contrib_pct,alpha_058_contrib_pct,alpha_101_contrib_pct,
+w_alpha001,w_alpha006,w_alpha030,w_alpha040,w_alpha042,w_alpha055,w_alpha058,w_alpha101
+```
+
+### 7.4 Grafana dashboard（新建，独立）
+
+`monitoring/grafana/dashboards/lean/csi300-alpha101-loop.json`，数据源 InfluxDB（InfluxQL 模式，符合 [[grafana-influxql-fix]]）。面板：
+
+1. **阶段 Sharpe 演化**（折线，按 stage_type 着色）—— baseline → 各 optimize trial → champion → refactor，直观看到优化爬坡 + 重构跃迁。
+2. **阶段回撤 / 净收益**（折线双轴）。
+3. **每 alpha 贡献热力图**（8 alpha × stage 矩阵，`pnl_pct_of_total` 着色）—— 哪个 alpha 持续拖后腿 → 触发 refactor 的依据。
+4. **8 alpha 权重演化**（堆叠面积，optimize 各 trial 的 `w_alphaNNN`）—— 看 Bayes 学到的权重轨迹。
+5. **DSR gate 状态**（状态面板，optimize_champion 行的 `dsr_passed`）。
+
+### 7.5 Bridge 脚本（新建，独立）
+
+`Scripts/csi300_alpha101/stage_bridge.py`：
+- 输入：`--summary <path>` `--review <path>` `--manifest <path>`，从 manifest 读 `stage_meta`（stage_type/generation/variant_id）。
+- 复用 `export_backtest_results_to_influx.py` 的 `parse_numeric_value` / `metric_key` / `InfluxPoint`（import，不改）。
+- 写 2 个 InfluxDB measurement + 追加 CSV。
+- `INFLUXDB_TOKEN="admin-token-leansystem"` org=lean bucket=quant（[[influxdb-token]]）。
+- 不向任何既有 measurement 写（`lean_backtest_stat`/`soloquant_pipeline_funnel`/`barra_*` 全不动，[[never-modify-existing-features]]）。
+
+### 7.6 接入点
+
+- **Stage 2 baseline 回测后**：手动/脚本调 `stage_bridge.py`。
+- **Stage 3 Bayes 每次 `lean_runner.run_backtest` 后**：manifest 标 `stage_type=optimize`，bridge 读 trial 结果。`bayesian_optimizer.py` 不改——在 manifest 的 `reward_config` 外侧用轻量 wrapper（新文件 `Scripts/auto_optimize/strategies/csi300_alpha101_composite/run_with_bridge.py`）包一层：调 `bayesian_optimizer.optimize` 前后 + 每 N trial 调 bridge。
+- **Stage 6 refactor 候选回测后**：manifest 标 `stage_type=refactor`，bridge 落库。
+
+## 8. 非目标
 
 - 不下载 CSI500（退 CSI300-only，已确认）。
 - 不改 `FactorStore`/`RParquetAdapter`/`bayesian_optimizer`/`reward`/`hypothesize`/`on_gate3_pass`/`gold2` 任何既有文件。
@@ -248,20 +332,22 @@ Scripts/factor_zoo/backfill_alpha101_csi300.py
 - 不动 SoloQuant 管道 measurement/dashboard（独立文件，绝不污染 `soloquant_pipeline_funnel`）。
 - 不做 alpha101 全 101 回填（只回填手选 8 个，控成本）。
 - 不 LLM 生成策略代码（C# 手写，确定性 + 接现有模板）。
+- 不向既有 InfluxDB measurement 写（`csi300_alpha101_*` 全新独立 measurement）。
 
-## 8. 验收标准
+## 9. 验收标准
 
 1. `dotnet build QuantConnect.Lean.sln` 通过。
 2. C# 测试全绿（`Alpha101CompositeAlphaModelTests` + `AShareCSI300Alpha101CompositeStrategyTests`）。
-3. Python 测试全绿（回填 + manifest + 复盘归因 + 反馈触发）。
+3. Python 测试全绿（回填 + manifest + 复盘归因 + 反馈触发 + stage_bridge 落库）。
 4. 回填后 `result/factor-zoo/alpha{001,006,030,040,042,055,058,101}/` 各有 2024-01-02..2026-06-29 的交易日目录。
 5. `dotnet Launcher.dll --config config-csi300-alpha101-composite.json` 跑通 2024-Q1 三月回测，生成 summary.json + order-events.json。
 6. `review/cli.py` 生成 review.json，8 alpha 各有非空 `pnl_pct_of_total`，和≈1。
 7. `bayesian_optimizer.py` 读 manifest 跑通（减 trial smoke），DSR gate 返回 `passed` bool。
 8. hypothesize mock 验证：低贡献 alpha → 生成 `.md` 假设文件（走通构建+重构衔接）。
 9. 真实磁盘 `[Explicit]` smoke：`store.Get("alpha042", 603799.SH, 2026-07-24) ≈ 1.06993`。
+10. **可视化**：`stage_bridge.py` 落库后，`csi300_alpha101_stage` measurement 有 ≥3 行点（baseline + ≥1 optimize + ≥1 refactor），CSV 同步追加；Grafana `csi300-alpha101-loop` dashboard 打开能见阶段 Sharpe 折线 + 每 alpha 贡献热力图。
 
-## 9. 风险与对策
+## 10. 风险与对策
 
 - **风险**: 8 alpha 权重 Bayes 优化 200 trial × 3.6min/回测 = 12 小时。
   **对策**: smoke 阶段减 trial 到 5-10 验通路；正式跑后台 + `--no-build`；manifest `rebalance-days` 也可优化降频。
@@ -275,6 +361,10 @@ Scripts/factor_zoo/backfill_alpha101_csi300.py
   **对策**: 回测区间卡 2024-01-02..2026-06-29（与价格对齐）；7 月 alpha parquet 留作 live-paper 单独 spec。
 - **风险**: 现有 `Get_RoutesBarraAndParquetAndRegistryByPrefix` 测试因 barra CSV 数据增长而失败（预存在，非本任务引入）。
   **对策**: 不在本任务修；如阻塞 CI，单独处理（改断言或换日期）。
+- **风险**: bridge 每次回测后写 InfluxDB 增加 Stage 3 墙钟开销。
+  **对策**: bridge 写库 ~0.5s/次（单点 HTTP），200 trial 增 ~100s，相对 12h 回测可忽略；失败不阻塞回测（try/except + 日志）。
+- **风险**: dashboard 面板查询空 measurement（首次跑前无数据）显示空图。
+  **对策**: dashboard 配置 `< 1 hour` 默认时间窗 + 空状态提示；验收标准 10 要求 ≥3 行点后 dashboard 非空。
 
 ## 10. 文件清单总览
 
@@ -293,9 +383,19 @@ Scripts/factor_zoo/backfill_alpha101_csi300.py
 | `Tests/Python/test_review_csi300_alpha101_attribution.py` | 新建 | Stage 5 测试 |
 | `Scripts/feedback/adapters/csi300_alpha101.py` | 新建 | Stage 6 重构 |
 | `Tests/Python/test_feedback_csi300_alpha101_trigger.py` | 新建 | Stage 6 测试 |
+| `Scripts/csi300_alpha101/stage_bridge.py` | 新建 | §7 阶段结果落 InfluxDB + CSV |
+| `Scripts/auto_optimize/strategies/csi300_alpha101_composite/run_with_bridge.py` | 新建 | §7 Bayes wrapper（每 N trial 调 bridge）|
+| `monitoring/grafana/dashboards/lean/csi300-alpha101-loop.json` | 新建 | §7 可视化 dashboard |
+| `Tests/Python/test_csi300_alpha101_stage_bridge.py` | 新建 | §7 测试（落库 + CSV + 不污染既有 measurement）|
 
 **复用既有组件（不新建、不修改）**:
 - `Algorithm.CSharp/Universe/AShareCSI300UniverseSelectionModel.cs` (CSI300-only，月刷新，pythonnet loader)
 - `Common/Orders/Fees/AShareStockFeeModel.cs` / `AShareStockFillModel.cs` / `AShareStockBuyingPowerModel.cs` / `DelayedSettlementModel.cs`
 - `Algorithm.CSharp/Models/Risk/MaxDrawdownRiskModel.cs`
 - `Algorithm.CSharp/Models/Portfolio/EqualWeightPortfolioModel.cs`（或 LEAN 原生 `EqualWeightingPortfolioConstructionModel`）
+- `Scripts/export_backtest_results_to_influx.py` 的 `parse_numeric_value` / `metric_key` / `InfluxPoint`（import 复用，不改）
+
+**新增可视化/落库文件（§7，全独立）**:
+- `Scripts/csi300_alpha101/stage_bridge.py`（落 2 个新 measurement + CSV）
+- `Scripts/auto_optimize/strategies/csi300_alpha101_composite/run_with_bridge.py`（Bayes wrapper）
+- `monitoring/grafana/dashboards/lean/csi300-alpha101-loop.json`（独立 dashboard）
