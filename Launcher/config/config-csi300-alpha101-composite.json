@@ -1,0 +1,23 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "AShareCSI300Alpha101CompositeStrategy",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "../../../Algorithm.CSharp/bin/Debug/QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data",
+  "results-destination-folder": "../../../Results/csi300_alpha101",
+  "period-start": "2024-01-02",
+  "period-finish": "2026-06-29",
+  "cash-amount": 1000000,
+  "parameters": {
+    "w_alpha001": "0.125",
+    "w_alpha006": "0.125",
+    "w_alpha030": "0.125",
+    "w_alpha040": "0.125",
+    "w_alpha042": "0.125",
+    "w_alpha055": "0.125",
+    "w_alpha058": "0.125",
+    "w_alpha101": "0.125",
+    "zscore-threshold": "1.0",
+    "rebalance-days": "21"
+  }
+}
