@@ -84,6 +84,14 @@ namespace QuantConnect.Algorithm.CSharp
             // 允许小单 (等权 30 只时单笔占比可能极小).
             Settings.MinimumOrderMarginPortfolioPercentage = 0;
 
+            // Universe resolution: Daily. A-share daily data lives at
+            // Data/equity/{sse,szse}/daily/*.zip (NO minute data on disk). The
+            // default UniverseSettings.Resolution is Minute (QCAlgorithm.cs:225),
+            // which causes 1.46M failed minute-bar requests + security.Price==0
+            // → PortfolioTarget.Percent returns null (PortfolioTarget.cs:156-160)
+            // → 0 orders reach execution. Daily matches the monthly/21d design.
+            UniverseSettings.Resolution = Resolution.Daily;
+
             // === 关键: 必须先安装 A股 security initializer, 再注册 CSI300 universe ===
             // AShareCSI300UniverseSelectionModel 内部用 ManualUniverseSelectionModel
             // 添加 plain Equity (默认模型对 A股错). 此 initializer 在每只 security
@@ -135,7 +143,12 @@ namespace QuantConnect.Algorithm.CSharp
             // Layer 4: Risk — 最大回撤 20% 清仓.
             SetRiskManagement(new MaximumDrawdownPercentPortfolio(0.20m));
 
-            // Layer 5: Execution — A股 100 股整手.
+            // Layer 5: Execution — A股 100 股整手 (lot-rounded, T+1 不可卖).
+            // NOTE: 0-orders root cause was NOT execution-model (verified end-to-end
+            // 2026-07-28) — it was upstream truncated/10000x-scaled daily .zip data.
+            // With real-yuan zips (export_ashare_stock_data.py from daily parquet),
+            // AShareLotSizeExecutionModel produces orders correctly. Do NOT swap to
+            // ImmediateExecutionModel as a "fix" — that masks data bugs.
             SetExecution(new AShareLotSizeExecutionModel());
 
             SetWarmUp(60, Resolution.Daily);
