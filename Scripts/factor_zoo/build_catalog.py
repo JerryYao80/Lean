@@ -86,6 +86,76 @@ ALPHA101_HINTS = {
 _ALPHA101_DESCRIPTIONS = None  # lazy cache
 
 
+# ── Technical indicators (stk_factor_pro, 48 qfq factors) ──
+# Each maps a stk_factor_pro column (qfq variant) to a factor_id. The indicator
+# values are ALREADY computed by tushare; the builder only extracts the asof
+# row — no re-computation. Backfilled by backfill_technical.py (per-ts_code by-year).
+TECH_INDICATORS = {
+    "macd_qfq": ("tech_macd", "MACD", "异同移动平均线柱值, 正=多头动能, 正向", "Trend"),
+    "macd_dif_qfq": ("tech_macd_dif", "MACD DIF", "MACD 快线(DIF), 金叉死叉信号", "Trend"),
+    "macd_dea_qfq": ("tech_macd_dea", "MACD DEA", "MACD 慢线(DEA), 信号线", "Trend"),
+    "rsi_qfq_6": ("tech_rsi_6", "RSI(6)", "6日 RSI, >80超买<20超卖, 反向", "Trend"),
+    "rsi_qfq_12": ("tech_rsi_12", "RSI(12)", "12日 RSI, 中短期强弱, 反向", "Trend"),
+    "rsi_qfq_24": ("tech_rsi_24", "RSI(24)", "24日 RSI, 中期强弱, 反向", "Trend"),
+    "kdj_k_qfq": ("tech_kdj_k", "KDJ K", "KDJ 之 K 线, >80超买<20超卖, 反向", "Trend"),
+    "kdj_d_qfq": ("tech_kdj_d", "KDJ D", "KDJ 之 D 线, 慢线, 反向", "Trend"),
+    "kdj_qfq": ("tech_kdj_j", "KDJ J", "KDJ 之 J 线, 灵敏超买超卖, 反向", "Trend"),
+    "boll_upper_qfq": ("tech_boll_upper", "Boll Upper", "布林上轨, 价格触碰=超买, 反向", "Volatility"),
+    "boll_mid_qfq": ("tech_boll_mid", "Boll Mid", "布林中轨(20日均线), 均值回归锚", "Trend"),
+    "boll_lower_qfq": ("tech_boll_lower", "Boll Lower", "布林下轨, 触碰=超卖, 正向", "Volatility"),
+    "bias1_qfq": ("tech_bias1", "BIAS1", "6日乖离率, 偏离均线, 反向", "Trend"),
+    "bias2_qfq": ("tech_bias2", "BIAS2", "12日乖离率, 反向", "Trend"),
+    "bias3_qfq": ("tech_bias3", "BIAS3", "24日乖离率, 反向", "Trend"),
+    "cci_qfq": ("tech_cci", "CCI", "顺势指标, >100超买<-100超卖, 反向", "Trend"),
+    "wr_qfq": ("tech_wr", "WR", "威廉指标, >20超买<-20超卖, 反向", "Trend"),
+    "mfi_qfq": ("tech_mfi", "MFI", "资金流量指标, 量价RSI, 反向", "Volatility"),
+    "mtm_qfq": ("tech_mtm", "MTM", "动量指标, 正=上涨动量, 正向", "Trend"),
+    "roc_qfq": ("tech_roc", "ROC", "变动率, 12日收益动量, 正向", "Trend"),
+    "obv_qfq": ("tech_obv", "OBV", "能量潮, 量价配合, 正向", "Liquidity"),
+    "psy_qfq": ("tech_psy", "PSY", "心理线, >75超买<25超卖, 反向", "Trend"),
+    "trix_qfq": ("tech_trix", "TRIX", "三重平滑均线, 趋势过滤, 正向", "Trend"),
+    "dpo_qfq": ("tech_dpo", "DPO", "去趋势价格, 震荡指标, 反向", "Volatility"),
+    "cr_qfq": ("tech_cr", "CR", "能量指标, >200超买, 反向", "Trend"),
+    "emv_qfq": ("tech_emv", "EMV", "简易波动, 量价能量, 正向", "Liquidity"),
+    "mass_qfq": ("tech_mass", "MASS", "梅斯线, >27反转, 反向", "Trend"),
+    "asi_qfq": ("tech_asi", "ASI", "实质震荡指标, 趋势确认, 正向", "Trend"),
+    "bbi_qfq": ("tech_bbi", "BBI", "多空指标, 综合均线, 正向", "Trend"),
+    "atr_qfq": ("tech_atr", "ATR", "真实波幅, 高=高波动, 反向", "Volatility"),
+    "vr_qfq": ("tech_vr", "VR", "容量比率, >350超买, 反向", "Liquidity"),
+    "dmi_adx_qfq": ("tech_dmi_adx", "DMI ADX", "趋势强度, >25有趋势, 正向", "Trend"),
+    "dmi_pdi_qfq": ("tech_dmi_pdi", "DMI PDI", "+DI 多头方向指标, 正向", "Trend"),
+    "dmi_mdi_qfq": ("tech_dmi_mdi", "DMI MDI", "-DI 空头方向指标, 反向", "Trend"),
+    "expma_12_qfq": ("tech_expma_12", "EXPMA12", "12日指数均线, 短期趋势", "Trend"),
+    "expma_50_qfq": ("tech_expma_50", "EXPMA50", "50日指数均线, 中期趋势", "Trend"),
+    "ktn_upper_qfq": ("tech_ktn_upper", "Keltner Upper", "肯特纳上轨, 反向", "Volatility"),
+    "ktn_mid_qfq": ("tech_ktn_mid", "Keltner Mid", "肯特纳中轨, 均值锚", "Trend"),
+    "ktn_down_qfq": ("tech_ktn_down", "Keltner Lower", "肯特纳下轨, 正向", "Volatility"),
+    "taq_up_qfq": ("tech_taq_up", "TAQ Up", "通道上轨, 反向", "Volatility"),
+    "taq_mid_qfq": ("tech_taq_mid", "TAQ Mid", "通道中轨, 均值锚", "Trend"),
+    "taq_down_qfq": ("tech_taq_down", "TAQ Down", "通道下轨, 正向", "Volatility"),
+    "dfma_dif_qfq": ("tech_dfma_dif", "DFMA DIF", "均价线差值(DIF), 正向", "Trend"),
+    "dfma_difma_qfq": ("tech_dfma_difma", "DFMA DIFMA", "均价线差值均线, 反向", "Trend"),
+    "xsii_td1_qfq": ("tech_xsii_td1", "XSII TD1", "薛斯通道内轨1, 反向", "Volatility"),
+    "xsii_td2_qfq": ("tech_xsii_td2", "XSII TD2", "薛斯通道内轨2, 反向", "Volatility"),
+    "xsii_td3_qfq": ("tech_xsii_td3", "XSII TD3", "薛斯通道外轨3, 反向", "Volatility"),
+    "xsii_td4_qfq": ("tech_xsii_td4", "XSII TD4", "薛斯通道外轨4, 反向", "Volatility"),
+}
+
+
+def _tech_entry(col: str, info: tuple[str, str, str, str]) -> dict:
+    fid, name, hint, category = info
+    return {
+        "id": fid,
+        "name": name,
+        "category": category,
+        "compute_mode": "Precomputed",
+        "storage": _parquet(f"result/factor-zoo/{fid}", fid, f"lean_factor_{fid}"),
+        "tushare_deps": ["stk_factor_pro"],
+        "selection_hint": hint,
+        "parameters": {"indicator_col": col},
+    }
+
+
 def _load_alpha101_descriptions() -> dict:
     """Load Scripts/factor_zoo/alpha101_descriptions.yaml (101 entries).
     Returns {} if missing/corrupt (graceful degrade; catalog then omits the
@@ -127,7 +197,7 @@ def _alpha_entry(n: int, hint: str) -> dict:
 
 
 # fmt: off
-# Static metadata table — 159 factors (36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101).
+# Static metadata table — 207 factors (36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101 + 48 Technical).
 # Fields: id, name, category, compute_mode (Runtime|Precomputed), storage,
 # tushare_deps, selection_hint, parameters.
 FACTOR_METADATA: list[dict] = [
@@ -211,6 +281,9 @@ FACTOR_METADATA: list[dict] = [
 
     # ── Alpha101 (101 WorldQuant formulaic alphas) ──
     *[_alpha_entry(n, ALPHA101_HINTS[n]) for n in range(1, 102)],
+
+    # ── Technical (48 stk_factor_pro qfq indicators) ──
+    *[_tech_entry(col, info) for col, info in TECH_INDICATORS.items()],
 ]
 # fmt: on
 

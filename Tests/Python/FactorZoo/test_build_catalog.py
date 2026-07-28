@@ -61,15 +61,31 @@ def test_every_factor_has_nonempty_selection_hint(tmp_path):
         assert f.get("selection_hint"), f"factor {f['id']} missing selection_hint"
 
 
-def test_catalog_has_159_factors(tmp_path):
+def test_catalog_has_207_factors(tmp_path):
     out = tmp_path / "factor-catalog.yaml"
     bc.build_catalog(freshness_path=None, out_path=out)
     factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
-    # 36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101 = 159.
-    assert len(factors) == 159, f"expected 159 factors, got {len(factors)}"
+    # 36 FactorRegistry + 15 Barra + 7 Phase 5 + 101 Alpha101 + 48 Technical = 207.
+    assert len(factors) == 207, f"expected 207 factors, got {len(factors)}"
     ids = {f["id"] for f in factors}
     assert {"accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
             "ivol_20d", "max_ret_20d", "short_term_reversal"}.issubset(ids)
+
+
+def test_technical_entries_present(tmp_path):
+    out = tmp_path / "factor-catalog.yaml"
+    bc.build_catalog(freshness_path=None, out_path=out)
+    factors = yaml.safe_load(out.read_text(encoding="utf-8"))["factors"]
+    ids = {f["id"] for f in factors}
+    assert "tech_macd" in ids
+    assert "tech_rsi_6" in ids
+    assert "tech_kdj_j" in ids
+    tech_macd = next(f for f in factors if f["id"] == "tech_macd")
+    assert tech_macd["storage"]["path"] == "result/factor-zoo/tech_macd/<date>/<ts_code>.parquet"
+    assert tech_macd["storage"]["influx"] == "lean_factor_tech_macd"
+    assert tech_macd["tushare_deps"] == ["stk_factor_pro"]
+    tech_ids = {f["id"] for f in factors if f["id"].startswith("tech_")}
+    assert len(tech_ids) == 48, f"expected 48 technical factors, got {len(tech_ids)}"
 
 
 def test_alpha101_entries_present(tmp_path):

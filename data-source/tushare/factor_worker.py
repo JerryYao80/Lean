@@ -311,6 +311,58 @@ def _make_alpha101_group():
 _BLD_ALPHA101, _RES_ALPHA101 = _make_alpha101_group()
 
 
+def _make_technical_group():
+    """One group builder: stk_factor_pro panel loaded once, all qfq technical
+    indicators (MACD/RSI/KDJ/BOLL/BIAS/CCI/... 48 factors) in one pass.
+
+    Freshness is group-granular; tech_macd dir is the canonical reference.
+    Per-indicator failures (empty column) are recorded in the build summary,
+    do NOT poison the group. stk_factor_pro is backfilled by
+    backfill_technical.py (per-ts_code by-year) — NOT in the tushare daemon's
+    CORE_SCHEDULED_APIS (registry enabled=False).
+    """
+    from technical.builder import build_day as _technical_build_day
+
+    def _build(date_compact: str) -> dict:
+        from barra_cne5_data_loader import BarraCNE5DataLoader
+        loader = BarraCNE5DataLoader(TUSHARE_DATA_PATH)
+        ts_codes = loader.load_index_constituents(
+            asof_date=date_compact, index_code="000300.SH")
+        date_yyyy_mm_dd = f"{date_compact[0:4]}-{date_compact[4:6]}-{date_compact[6:8]}"
+        summary = _technical_build_day(
+            date_yyyy_mm_dd=date_yyyy_mm_dd, ts_codes=ts_codes,
+            data_root=TUSHARE_DATA_PATH, result_root=CROWDING_RESULT_ROOT,
+            write_influxdb=bool(INFLUX_TOKEN),
+            influx_url=INFLUX_URL, influx_org=INFLUX_ORG,
+            influx_bucket=INFLUX_BUCKET, influx_token=INFLUX_TOKEN,
+        )
+        return {"rows": int(summary["rows"]),
+                "duration_ms": int(summary["duration_ms"]),
+                "failed_indicators": list(summary.get("failed", {}).keys())}
+
+    def _resolve() -> str | None:
+        root = Path(CROWDING_RESULT_ROOT) / "factor-zoo" / "tech_macd"
+        if not root.exists():
+            return None
+        best: str | None = None
+        for sub in root.iterdir():
+            if not sub.is_dir():
+                continue
+            try:
+                datetime.strptime(sub.name, "%Y-%m-%d")
+            except ValueError:
+                continue
+            compact = sub.name.replace("-", "")
+            if best is None or compact > best:
+                best = compact
+        return best
+
+    return _build, _resolve
+
+
+_BLD_TECHNICAL, _RES_TECHNICAL = _make_technical_group()
+
+
 # Financial (annual PIT) factors — value changes only on new annual disclosure.
 _BLD_ACCRUALS, _RES_ACCRUALS = _make_factorzoo_builder("accruals_sloan_builder", "accruals_sloan")
 _BLD_GP, _RES_GP = _make_factorzoo_builder("gross_profitability_builder", "gross_profitability")
@@ -449,6 +501,14 @@ BUILDERS: list[FactorBuilder] = [
         build_callable=_BLD_ALPHA101,
         latest_date_resolver=_RES_ALPHA101,
         depends_on=("daily", "adj_factor", "daily_basic", "index_member_all"),
+        max_backfill_days=60,
+    ),
+    # ── Technical group (48 qfq indicators from stk_factor_pro) ──
+    FactorBuilder(
+        factor_id="technical",
+        build_callable=_BLD_TECHNICAL,
+        latest_date_resolver=_RES_TECHNICAL,
+        depends_on=("stk_factor_pro",),
         max_backfill_days=60,
     ),
 ]

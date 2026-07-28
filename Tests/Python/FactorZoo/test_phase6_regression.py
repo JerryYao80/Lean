@@ -15,14 +15,26 @@ EXPECTED_BUILDERS = {
     "crowding", "forward", "barra_v2",
     "accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
     "ivol_20d", "max_ret_20d", "short_term_reversal",
+    "alpha101", "technical",
 }
 
 
-def test_factor_worker_dry_run_resolves_all_builders():
-    """--once --dry-run must report all 10 builders (no real build, no writes)."""
+def test_factor_worker_dry_run_resolves_all_builders(tmp_path):
+    """--once --dry-run must report all 12 builders (no real build, no writes).
+
+    Hermetic: point TUSHARE_SCHEDULER_STATE at a tmp file whose
+    last_finished_target_date is far-future so T_raw >= T_cal (otherwise the
+    daemon skips the whole cycle as "waiting for tushare" and `built` is {}).
+    """
+    state_file = tmp_path / "scheduler_state.json"
+    state_file.write_text('{"last_finished_target_date": "99991231"}', encoding="utf-8")
+    env = {"TUSHARE_SCHEDULER_STATE": str(state_file)}
+    import os
+    env = {**os.environ, **env}
     r = subprocess.run(
         [PY, "-u", str(WORKER), "--once", "--dry-run"],
         cwd=str(WORKER.parent), capture_output=True, text=True, timeout=120,
+        env=env,
     )
     assert r.returncode == 0, f"factor_worker failed: {r.stderr[-500:]}"
     # The JSON report is pretty-printed (indent=2) and is the last stdout block.
