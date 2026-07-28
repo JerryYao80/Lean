@@ -36,7 +36,12 @@ log = logging.getLogger("backfill_alpha101_csi300")
 
 def load_csi300_ts_codes(asof_compact: str) -> list[str]:
     """CSI300 constituents (000300.SH) as of a date."""
-    loader = BarraCNE5DataLoader()
+    # BarraCNE5DataLoader requires data_root (matches factor_worker.py:165 which
+    # passes TUSHARE_DATA_PATH). Use the same default as trade_days_in_range.
+    tushare_path = os.environ.get(
+        "TUSHARE_DATA_PATH",
+        "/home/project/tushare-downloader/tushare_data_v2")
+    loader = BarraCNE5DataLoader(tushare_path)
     return loader.load_index_constituents(asof_date=asof_compact, index_code="000300.SH")
 
 
@@ -57,9 +62,12 @@ def backfill_range(dates: list[str], csi300: list[str], result_root: str | None 
 def trade_days_in_range(start: str, end: str) -> list[str]:
     """Trade days (YYYY-MM-DD) between start and end inclusive, from trade_cal."""
     import pandas as pd
+    # Match factor_worker's default (data-source/tushare/factor_worker.py:49-50):
+    # /home/project/tushare-downloader/tushare_data_v2 (NOT _REPO.parent which
+    # would resolve to /home/project/hope/tushare-downloader — wrong level).
     tushare_path = os.environ.get(
         "TUSHARE_DATA_PATH",
-        str(_REPO.parent / "tushare-downloader" / "tushare_data_v2"))
+        "/home/project/tushare-downloader/tushare_data_v2")
     cal = pd.read_parquet(f"{tushare_path}/trade_cal/data.parquet")
     cal = cal[(cal["is_open"] == 1)
               & (cal["cal_date"].astype(str) >= start.replace("-", ""))
