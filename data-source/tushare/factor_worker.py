@@ -378,6 +378,11 @@ _BLD_TURNOVER, _RES_TURNOVER = _make_factorzoo_builder("turnover_anomaly_builder
 _BLD_AMPLITUDE, _RES_AMPLITUDE = _make_factorzoo_builder("amplitude_anomaly_builder", "amplitude_anomaly")
 _BLD_LIMIT, _RES_LIMIT = _make_factorzoo_builder("limit_behavior_builder", "limit_behavior")
 _BLD_INTRADAY, _RES_INTRADAY = _make_factorzoo_builder("intraday_reversal_builder", "intraday_reversal")
+# Margin trading factors (融资融券多空因子)
+_BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
+_BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
+# Margin trading factors (融资融券多空因子)
+_BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
 
 
 def _resolve_forward_latest() -> str | None:
@@ -521,6 +526,12 @@ BUILDERS: list[FactorBuilder] = [
         factor_id="intraday_reversal",
         build_callable=_BLD_INTRADAY, latest_date_resolver=_RES_INTRADAY,
         depends_on=("daily",), max_backfill_days=60,
+    ),
+    # ── Margin trading factors (融资融券多空因子) ──
+    FactorBuilder(
+        factor_id="margin_factors",
+        build_callable=_BLD_MARGIN, latest_date_resolver=_RES_MARGIN,
+        depends_on=("margin_detail",), max_backfill_days=60,
     ),
     # ── Alpha101 group (101 WorldQuant alphas, panel-loaded-once) ──
     FactorBuilder(
