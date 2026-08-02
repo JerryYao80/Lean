@@ -373,6 +373,12 @@ _BLD_IVOL, _RES_IVOL = _make_factorzoo_builder("ivol_20d_builder", "ivol_20d")
 _BLD_MAXRET, _RES_MAXRET = _make_factorzoo_builder("max_ret_20d_builder", "max_ret_20d")
 _BLD_REVERSAL, _RES_REVERSAL = _make_factorzoo_builder("short_term_reversal_builder", "short_term_reversal")
 
+# Manipulation detection factors
+_BLD_TURNOVER, _RES_TURNOVER = _make_factorzoo_builder("turnover_anomaly_builder", "turnover_anomaly")
+_BLD_AMPLITUDE, _RES_AMPLITUDE = _make_factorzoo_builder("amplitude_anomaly_builder", "amplitude_anomaly")
+_BLD_LIMIT, _RES_LIMIT = _make_factorzoo_builder("limit_behavior_builder", "limit_behavior")
+_BLD_INTRADAY, _RES_INTRADAY = _make_factorzoo_builder("intraday_reversal_builder", "intraday_reversal")
+
 
 def _resolve_forward_latest() -> str | None:
     """No parquet on disk; resolve from factor_worker's own state file (crash-resume)."""
@@ -495,6 +501,27 @@ BUILDERS: list[FactorBuilder] = [
         build_callable=_BLD_REVERSAL, latest_date_resolver=_RES_REVERSAL,
         depends_on=("daily", "adj_factor"), max_backfill_days=60,
     ),
+    # ── Manipulation detection factors ──
+    FactorBuilder(
+        factor_id="turnover_anomaly",
+        build_callable=_BLD_TURNOVER, latest_date_resolver=_RES_TURNOVER,
+        depends_on=("daily_basic",), max_backfill_days=60,
+    ),
+    FactorBuilder(
+        factor_id="amplitude_anomaly",
+        build_callable=_BLD_AMPLITUDE, latest_date_resolver=_RES_AMPLITUDE,
+        depends_on=("daily",), max_backfill_days=60,
+    ),
+    FactorBuilder(
+        factor_id="limit_behavior",
+        build_callable=_BLD_LIMIT, latest_date_resolver=_RES_LIMIT,
+        depends_on=("limit_list_d",), max_backfill_days=60,
+    ),
+    FactorBuilder(
+        factor_id="intraday_reversal",
+        build_callable=_BLD_INTRADAY, latest_date_resolver=_RES_INTRADAY,
+        depends_on=("daily",), max_backfill_days=60,
+    ),
     # ── Alpha101 group (101 WorldQuant alphas, panel-loaded-once) ──
     FactorBuilder(
         factor_id="alpha101",
@@ -557,6 +584,13 @@ def run_once(dry_run: bool = False) -> dict:
 
     state = _load_state()
     factors_state = state.setdefault("factors", {})
+    # Reset poisoned factors so they can retry after the fix
+    for fid, entry in list(factors_state.items()):
+        if entry.get("last_status") == "poisoned":
+            LOGGER.info("Resetting poisoned factor %s for retry", fid)
+            entry["last_status"] = None
+            entry["fail_count"] = 0
+            entry["last_error"] = None
     report = {"status": "ran", "t_cal": t_cal, "t_raw": t_raw, "built": {}}
 
     for builder in BUILDERS:
