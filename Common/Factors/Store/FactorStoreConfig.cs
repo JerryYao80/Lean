@@ -35,6 +35,11 @@ namespace QuantConnect.Factors.Store
             }
             // Task 4: parquet factors -> RParquetAdapter
             store.Register("crowding", new RParquetAdapter("crowding-factor", "composite"));
+            // Manipulation detection factors
+            store.Register("turnover_anomaly", new RParquetAdapter("factor-zoo/turnover_anomaly", "turnover_anomaly"));
+            store.Register("amplitude_anomaly", new RParquetAdapter("factor-zoo/amplitude_anomaly", "amplitude_anomaly"));
+            store.Register("limit_behavior", new RParquetAdapter("factor-zoo/limit_behavior", "limit_behavior"));
+            store.Register("intraday_reversal", new RParquetAdapter("factor-zoo/intraday_reversal", "intraday_reversal"));
             // Alpha101: 101 个独立 id (单点读, LLM/人工点名哪个读哪个)
             Alpha101FactorRegistration.Register(store);
         }
