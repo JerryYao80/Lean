@@ -1,8 +1,10 @@
-"""Cooper-Gulen-Schill (2008) asset growth factor builder.
+"""Amplitude Anomaly factor builder (Z-score of intraday amplitude).
 
-AG = (total_assets_t - total_assets_{t-1}) / total_assets_{t-1}
+Amplitude = (high - low) / pre_close
+Z-score = (amplitude_t - mean(amplitude, 20)) / std(amplitude, 20)
+Clamped to [-5, 5].
 
-Annual PIT, min_periods=2. EXCLUDES banks (comp_type in {"2","4","5"}).
+Need >= 21 days (current + trailing 20). Daily factor.
 """
 from __future__ import annotations
 
@@ -29,19 +31,20 @@ DEFAULT_TS_PATH = os.environ.get(
     "TUSHARE_DATA_PATH", "/home/project/tushare-downloader/tushare_data_v2"
 )
 DEFAULT_RESULT_ROOT = os.environ.get(
-    "ASSET_GROWTH_RESULT_ROOT", str(_REPO_ROOT / "result")
+    "AMPLITUDE_ANOMALY_RESULT_ROOT", str(_REPO_ROOT / "result")
 )
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
 DEFAULT_INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 
-FACTOR_ID = "asset_growth"
-MEASUREMENT = "lean_factor_asset_growth"
+FACTOR_ID = "amplitude_anomaly"
+MEASUREMENT = "lean_factor_amplitude_anomaly"
 OUTPUT_COLUMNS = ["ts_code", FACTOR_ID]
 
-_BANK_COMP_TYPES = {"2", "4", "5"}
-_ANNOUNCE_FIELDS = ("f_ann_date", "ann_date")
+_WINDOW = 20
+_CLAMP_MIN = -5.0
+_CLAMP_MAX = 5.0
 
 
 def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
@@ -52,29 +55,6 @@ def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
         return pd.read_parquet(p)
     except Exception:
         return pd.DataFrame()
-
-
-def _load_pit_rows(api_name: str, ts_code: str, asof: str,
-                   data_root: str) -> pd.DataFrame:
-    """Full sorted PIT-annual frame (mirrors pit_financials filter logic)."""
-    df = _read_partition(data_root, api_name, ts_code)
-    if df.empty:
-        return df
-    if "ts_code" in df.columns:
-        df = df[df["ts_code"].astype(str) == ts_code]
-    if "report_type" in df.columns:
-        df = df[df["report_type"].astype(str) == "1"]
-    if "end_type" in df.columns:
-        df = df[df["end_type"].astype(str) == "4"]
-    ann_col = next((c for c in _ANNOUNCE_FIELDS if c in df.columns), None)
-    if ann_col is None:
-        return pd.DataFrame()
-    df = df[df[ann_col].astype(str) <= asof]
-    if df.empty:
-        return pd.DataFrame()
-    df = df.sort_values(["end_date", ann_col])
-    df = df.drop_duplicates(subset=["end_date"], keep="last")
-    return df.sort_values("end_date").reset_index(drop=True)
 
 
 def _to_float(v, default=None):
@@ -89,38 +69,96 @@ def _to_float(v, default=None):
         return default
 
 
-def _compute_asset_growth(bs_rows: pd.DataFrame) -> float | None:
-    """AG = (TA_t - TA_{t-1}) / TA_{t-1}. Banks excluded by caller."""
-    if bs_rows is None or len(bs_rows) < 2:
+def _compute_amplitude_zscore(
+    daily_df: pd.DataFrame, asof: str, window: int = _WINDOW
+) -> float | None:
+    """Compute amplitude Z-score: (amp_t - mean) / std over trailing window.
+
+    Amplitude = (high - low) / pre_close
+    Z-score clamped to [-5, 5].
+    Need >= window + 1 days (current + trailing window).
+    """
+    if daily_df is None or daily_df.empty:
         return None
-    if "total_assets" not in bs_rows.columns:
+    required = {"trade_date", "high", "low", "pre_close"}
+    if not required.issubset(daily_df.columns):
         return None
-    cur = bs_rows.iloc[-1]
-    prev = bs_rows.iloc[-2]
-    # Bank exclusion: if the CURRENT row's comp_type is a bank, skip.
-    ct = str(cur.get("comp_type", ""))
-    if ct in _BANK_COMP_TYPES:
+
+    d = daily_df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).str.replace(r"\.0$", "", regex=True)
+    d = d[d["trade_date"].astype(str) <= str(asof)]
+    if d.empty:
         return None
-    ta_t = _to_float(cur.get("total_assets"))
-    ta_prev = _to_float(prev.get("total_assets"))
-    if ta_t is None or ta_prev is None:
+    d = d.sort_values("trade_date")
+
+    # Need at least window + 1 days
+    if len(d) < window + 1:
         return None
-    if ta_prev == 0:
+
+    # Compute amplitude = (high - low) / pre_close
+    d["high_f"] = d["high"].apply(lambda x: _to_float(x))
+    d["low_f"] = d["low"].apply(lambda x: _to_float(x))
+    d["pre_close_f"] = d["pre_close"].apply(lambda x: _to_float(x))
+    d = d.dropna(subset=["high_f", "low_f", "pre_close_f"])
+
+    if len(d) < window + 1:
         return None
-    return (ta_t - ta_prev) / ta_prev
+
+    # Filter out rows with zero pre_close
+    d = d[d["pre_close_f"] > 0]
+    if len(d) < window + 1:
+        return None
+
+    d["amplitude"] = (d["high_f"] - d["low_f"]) / d["pre_close_f"]
+    d = d.dropna(subset=["amplitude"])
+
+    if len(d) < window + 1:
+        return None
+
+    # Trailing window for mean/std (excluding current day)
+    trailing = d.iloc[-(window + 1) : -1]  # exclude the current (last) row
+    current_amp = float(d["amplitude"].iloc[-1])
+
+    if len(trailing) < window:
+        return None
+
+    amplitudes = trailing["amplitude"].astype(float).values
+    n = len(amplitudes)
+    if n < 2:
+        return None
+
+    mean_amp = sum(amplitudes) / n
+    variance = sum((a - mean_amp) ** 2 for a in amplitudes) / n
+    # Use a tolerance to avoid floating-point noise when all values are identical.
+    _VAR_TOL = 1e-30
+    if variance <= _VAR_TOL:
+        return 0.0
+
+    std_amp = math.sqrt(variance)
+    if std_amp == 0:
+        return 0.0
+
+    zscore = (current_amp - mean_amp) / std_amp
+    return float(max(_CLAMP_MIN, min(_CLAMP_MAX, zscore)))
 
 
 def _ts_ns(trade_date_compact: str) -> int:
     local = datetime(
-        int(trade_date_compact[0:4]), int(trade_date_compact[4:6]),
-        int(trade_date_compact[6:8]), 15, 0, 0, tzinfo=CHINA_TZ,
+        int(trade_date_compact[0:4]),
+        int(trade_date_compact[4:6]),
+        int(trade_date_compact[6:8]),
+        15,
+        0,
+        0,
+        tzinfo=CHINA_TZ,
     )
     return int(local.astimezone(timezone.utc).timestamp() * 1_000_000_000)
 
 
 def to_line(ts_code: str, trade_date_compact: str, factors: dict) -> str:
     fields = [
-        f"{k}={v:.12g}" for k, v in factors.items()
+        f"{k}={v:.12g}"
+        for k, v in factors.items()
         if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
     ]
     if not fields:
@@ -131,8 +169,9 @@ def to_line(ts_code: str, trade_date_compact: str, factors: dict) -> str:
     )
 
 
-def write_influx(lines: Iterable[str], url: str, org: str, bucket: str,
-                 token: str) -> int:
+def write_influx(
+    lines: Iterable[str], url: str, org: str, bucket: str, token: str
+) -> int:
     payload = [l for l in lines if l]
     if not payload:
         return 0
@@ -143,8 +182,10 @@ def write_influx(lines: Iterable[str], url: str, org: str, bucket: str,
         f"{url.rstrip('/')}/api/v2/write?{q}",
         data=("\n".join(payload) + "\n").encode(),
         method="POST",
-        headers={"Authorization": f"Token {token}",
-                 "Content-Type": "text/plain; charset=utf-8"},
+        headers={
+            "Authorization": f"Token {token}",
+            "Content-Type": "text/plain; charset=utf-8",
+        },
     )
     with request.urlopen(req, timeout=60) as resp:
         return len(payload) if 200 <= resp.status < 300 else 0
@@ -174,30 +215,30 @@ def build_day(
     lines: list[str] = []
     out_rows: list[dict] = []
     for ts_code in ts_codes:
-        bs_rows = _load_pit_rows("balancesheet", ts_code, trade_date_compact,
-                                 data_root)
-        value = _compute_asset_growth(bs_rows)
+        daily_df = _read_partition(data_root, "daily", ts_code)
+        value = _compute_amplitude_zscore(daily_df, trade_date_compact)
         if value is None:
             continue
         record = {"ts_code": ts_code, FACTOR_ID: float(value)}
         out_rows.append(record)
-        pass  # batch write below
         if write_influxdb:
             line = to_line(ts_code, trade_date_compact, {FACTOR_ID: float(value)})
             if line:
                 lines.append(line)
 
     if out_rows:
-        pd.DataFrame(out_rows).to_parquet(factor_dir / f"{date_yyyy_mm_dd}.parquet", index=False)
+        pd.DataFrame(out_rows).to_parquet(
+            factor_dir / f"{date_yyyy_mm_dd}.parquet", index=False
+        )
     if write_influxdb and lines:
         try:
             write_influx(
-            lines,
-            url=influx_url or DEFAULT_INFLUX_URL,
-            org=influx_org or DEFAULT_INFLUX_ORG,
-            bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
-            token=influx_token or DEFAULT_INFLUX_TOKEN or "",
-        )
+                lines,
+                url=influx_url or DEFAULT_INFLUX_URL,
+                org=influx_org or DEFAULT_INFLUX_ORG,
+                bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
+                token=influx_token or DEFAULT_INFLUX_TOKEN or "",
+            )
         except Exception:
             pass
 
@@ -209,8 +250,10 @@ def build_day(
 def _cli() -> int:
     parser = argparse.ArgumentParser(description=f"{FACTOR_ID} factor builder")
     parser.add_argument("--date", required=True, help="Trade date YYYY-MM-DD")
-    parser.add_argument("--ts-codes", nargs="*", default=[],
-                        help="Tushare codes; if empty, CSI300 universe is used")
+    parser.add_argument(
+        "--ts-codes", nargs="*", default=[],
+        help="Tushare codes; if empty, CSI300 universe is used"
+    )
     parser.add_argument("--data-root", default=DEFAULT_TS_PATH)
     parser.add_argument("--result-root", default=DEFAULT_RESULT_ROOT)
     parser.add_argument("--influx", action="store_true")
@@ -221,23 +264,27 @@ def _cli() -> int:
         try:
             sys.path.insert(0, str(_HERE.parent))
             from barra_cne5_data_loader import BarraCNE5DataLoader  # noqa: E402
+
             loader = BarraCNE5DataLoader(args.data_root)
             ts_codes = loader.load_index_constituents(
                 asof_date=_format_date(args.date), index_code="000300.SH"
             )
         except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: failed to load CSI300 universe: {exc}",
-                  file=sys.stderr)
+            print(f"WARNING: failed to load CSI300 universe: {exc}", file=sys.stderr)
             ts_codes = []
 
     if not ts_codes:
-        print("ERROR: no ts_codes provided and CSI300 universe unavailable",
-              file=sys.stderr)
+        print(
+            "ERROR: no ts_codes provided and CSI300 universe unavailable",
+            file=sys.stderr,
+        )
         return 2
 
     out = build_day(
-        args.date, ts_codes,
-        data_root=args.data_root, result_root=args.result_root,
+        args.date,
+        ts_codes,
+        data_root=args.data_root,
+        result_root=args.result_root,
         write_influxdb=args.influx,
     )
     print(f"Built {len(out)} {FACTOR_ID} rows for {args.date}")

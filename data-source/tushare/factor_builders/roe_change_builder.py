@@ -167,8 +167,8 @@ def build_day(
     data_root = data_root or DEFAULT_TS_PATH
     result_root = result_root or DEFAULT_RESULT_ROOT
     trade_date_compact = _format_date(date_yyyy_mm_dd)
-    date_dir = Path(result_root) / "factor-zoo" / FACTOR_ID / date_yyyy_mm_dd
-    date_dir.mkdir(parents=True, exist_ok=True)
+    factor_dir = Path(result_root) / "factor-zoo" / FACTOR_ID
+    factor_dir.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
     out_rows: list[dict] = []
@@ -180,22 +180,25 @@ def build_day(
             continue
         record = {"ts_code": ts_code, FACTOR_ID: float(value)}
         out_rows.append(record)
-        pd.DataFrame([record]).to_parquet(
-            date_dir / f"{ts_code}.parquet", index=False
-        )
+        pass  # batch write below
         if write_influxdb:
             line = to_line(ts_code, trade_date_compact, {FACTOR_ID: float(value)})
             if line:
                 lines.append(line)
 
+    if out_rows:
+        pd.DataFrame(out_rows).to_parquet(factor_dir / f"{date_yyyy_mm_dd}.parquet", index=False)
     if write_influxdb and lines:
-        write_influx(
+        try:
+            write_influx(
             lines,
             url=influx_url or DEFAULT_INFLUX_URL,
             org=influx_org or DEFAULT_INFLUX_ORG,
             bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
             token=influx_token or DEFAULT_INFLUX_TOKEN or "",
         )
+        except Exception:
+            pass
 
     if not out_rows:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)

@@ -1,8 +1,13 @@
-"""Cooper-Gulen-Schill (2008) asset growth factor builder.
+"""Intraday reversal factor builder.
 
-AG = (total_assets_t - total_assets_{t-1}) / total_assets_{t-1}
+reversal = (close - low) / (high - low)
 
-Annual PIT, min_periods=2. EXCLUDES banks (comp_type in {"2","4","5"}).
+Range: [0, 1]
+Near 1: accumulation (reversal from low)
+Near 0: distribution (reversal from high)
+If high == low, return 0.5 (neutral)
+
+Uses the `daily` table (per-ts-code parquet with high, low, close columns).
 """
 from __future__ import annotations
 
@@ -29,19 +34,16 @@ DEFAULT_TS_PATH = os.environ.get(
     "TUSHARE_DATA_PATH", "/home/project/tushare-downloader/tushare_data_v2"
 )
 DEFAULT_RESULT_ROOT = os.environ.get(
-    "ASSET_GROWTH_RESULT_ROOT", str(_REPO_ROOT / "result")
+    "INTRADAY_REVERSAL_RESULT_ROOT", str(_REPO_ROOT / "result")
 )
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
 DEFAULT_INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 
-FACTOR_ID = "asset_growth"
-MEASUREMENT = "lean_factor_asset_growth"
+FACTOR_ID = "intraday_reversal"
+MEASUREMENT = "lean_factor_intraday_reversal"
 OUTPUT_COLUMNS = ["ts_code", FACTOR_ID]
-
-_BANK_COMP_TYPES = {"2", "4", "5"}
-_ANNOUNCE_FIELDS = ("f_ann_date", "ann_date")
 
 
 def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
@@ -54,60 +56,40 @@ def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_pit_rows(api_name: str, ts_code: str, asof: str,
-                   data_root: str) -> pd.DataFrame:
-    """Full sorted PIT-annual frame (mirrors pit_financials filter logic)."""
-    df = _read_partition(data_root, api_name, ts_code)
-    if df.empty:
-        return df
-    if "ts_code" in df.columns:
-        df = df[df["ts_code"].astype(str) == ts_code]
-    if "report_type" in df.columns:
-        df = df[df["report_type"].astype(str) == "1"]
-    if "end_type" in df.columns:
-        df = df[df["end_type"].astype(str) == "4"]
-    ann_col = next((c for c in _ANNOUNCE_FIELDS if c in df.columns), None)
-    if ann_col is None:
-        return pd.DataFrame()
-    df = df[df[ann_col].astype(str) <= asof]
-    if df.empty:
-        return pd.DataFrame()
-    df = df.sort_values(["end_date", ann_col])
-    df = df.drop_duplicates(subset=["end_date"], keep="last")
-    return df.sort_values("end_date").reset_index(drop=True)
+def _compute_intraday_reversal(daily_df: pd.DataFrame, asof: str) -> float | None:
+    """Compute intraday reversal for a single asof date.
 
+    reversal = (close - low) / (high - low)
+    If high == low, returns 0.5 (neutral).
+    """
+    if daily_df is None or daily_df.empty:
+        return None
+    if "trade_date" not in daily_df.columns:
+        return None
+    required = {"high", "low", "close"}
+    if not required.issubset(daily_df.columns):
+        return None
 
-def _to_float(v, default=None):
-    try:
-        if v is None:
-            return default
-        f = float(v)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
+    d = daily_df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).str.replace(r"\.0$", "", regex=True)
+    d = d[d["trade_date"].astype(str) <= str(asof)]
+    if d.empty:
+        return None
+    d = d.sort_values("trade_date")
 
+    # Use the latest row (closest to asof)
+    row = d.iloc[-1]
+    high = float(row["high"])
+    low = float(row["low"])
+    close = float(row["close"])
 
-def _compute_asset_growth(bs_rows: pd.DataFrame) -> float | None:
-    """AG = (TA_t - TA_{t-1}) / TA_{t-1}. Banks excluded by caller."""
-    if bs_rows is None or len(bs_rows) < 2:
+    if math.isnan(high) or math.isnan(low) or math.isnan(close):
         return None
-    if "total_assets" not in bs_rows.columns:
-        return None
-    cur = bs_rows.iloc[-1]
-    prev = bs_rows.iloc[-2]
-    # Bank exclusion: if the CURRENT row's comp_type is a bank, skip.
-    ct = str(cur.get("comp_type", ""))
-    if ct in _BANK_COMP_TYPES:
-        return None
-    ta_t = _to_float(cur.get("total_assets"))
-    ta_prev = _to_float(prev.get("total_assets"))
-    if ta_t is None or ta_prev is None:
-        return None
-    if ta_prev == 0:
-        return None
-    return (ta_t - ta_prev) / ta_prev
+
+    if high == low:
+        return 0.5
+
+    return (close - low) / (high - low)
 
 
 def _ts_ns(trade_date_compact: str) -> int:
@@ -174,14 +156,12 @@ def build_day(
     lines: list[str] = []
     out_rows: list[dict] = []
     for ts_code in ts_codes:
-        bs_rows = _load_pit_rows("balancesheet", ts_code, trade_date_compact,
-                                 data_root)
-        value = _compute_asset_growth(bs_rows)
+        daily_df = _read_partition(data_root, "daily", ts_code)
+        value = _compute_intraday_reversal(daily_df, trade_date_compact)
         if value is None:
             continue
         record = {"ts_code": ts_code, FACTOR_ID: float(value)}
         out_rows.append(record)
-        pass  # batch write below
         if write_influxdb:
             line = to_line(ts_code, trade_date_compact, {FACTOR_ID: float(value)})
             if line:
@@ -192,12 +172,12 @@ def build_day(
     if write_influxdb and lines:
         try:
             write_influx(
-            lines,
-            url=influx_url or DEFAULT_INFLUX_URL,
-            org=influx_org or DEFAULT_INFLUX_ORG,
-            bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
-            token=influx_token or DEFAULT_INFLUX_TOKEN or "",
-        )
+                lines,
+                url=influx_url or DEFAULT_INFLUX_URL,
+                org=influx_org or DEFAULT_INFLUX_ORG,
+                bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
+                token=influx_token or DEFAULT_INFLUX_TOKEN or "",
+            )
         except Exception:
             pass
 

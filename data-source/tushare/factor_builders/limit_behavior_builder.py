@@ -1,8 +1,10 @@
-"""Cooper-Gulen-Schill (2008) asset growth factor builder.
+"""Limit behavior factor builder.
 
-AG = (total_assets_t - total_assets_{t-1}) / total_assets_{t-1}
+Counts limit-up and limit-down occurrences for each stock in trailing N days.
+Score = (up_count + down_count) / N, range [0, 2].
+If no limit records, score = 0.0.
 
-Annual PIT, min_periods=2. EXCLUDES banks (comp_type in {"2","4","5"}).
+Reads limit_list_d table which is date-partitioned (not per-ts_code).
 """
 from __future__ import annotations
 
@@ -29,85 +31,99 @@ DEFAULT_TS_PATH = os.environ.get(
     "TUSHARE_DATA_PATH", "/home/project/tushare-downloader/tushare_data_v2"
 )
 DEFAULT_RESULT_ROOT = os.environ.get(
-    "ASSET_GROWTH_RESULT_ROOT", str(_REPO_ROOT / "result")
+    "LIMIT_BEHAVIOR_RESULT_ROOT", str(_REPO_ROOT / "result")
 )
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
 DEFAULT_INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 
-FACTOR_ID = "asset_growth"
-MEASUREMENT = "lean_factor_asset_growth"
+FACTOR_ID = "limit_behavior"
+MEASUREMENT = "lean_factor_limit_behavior"
 OUTPUT_COLUMNS = ["ts_code", FACTOR_ID]
 
-_BANK_COMP_TYPES = {"2", "4", "5"}
-_ANNOUNCE_FIELDS = ("f_ann_date", "ann_date")
+DEFAULT_WINDOW = 5
 
 
-def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
-    p = Path(data_root) / table / f"ts_code={ts_code}" / "data.parquet"
-    if not p.exists():
+def _read_limit_list(data_root: str) -> pd.DataFrame:
+    """Read all date partitions of limit_list_d from data_root.
+
+    Expects {data_root}/limit_list_d/year=YYYY/data.parquet files.
+    Returns concatenated DataFrame with columns including trade_date, ts_code,
+    up_stat, limit.  Empty DataFrame if no data found.
+    """
+    root = Path(data_root) / "limit_list_d"
+    if not root.exists():
         return pd.DataFrame()
-    try:
-        return pd.read_parquet(p)
-    except Exception:
+
+    frames: list[pd.DataFrame] = []
+    for year_dir in root.glob("year=*"):
+        p = year_dir / "data.parquet"
+        if p.exists():
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                continue
+
+    if not frames:
         return pd.DataFrame()
 
+    return pd.concat(frames, ignore_index=True)
 
-def _load_pit_rows(api_name: str, ts_code: str, asof: str,
-                   data_root: str) -> pd.DataFrame:
-    """Full sorted PIT-annual frame (mirrors pit_financials filter logic)."""
-    df = _read_partition(data_root, api_name, ts_code)
+
+def _compute_limit_behavior(
+    limit_df: pd.DataFrame,
+    ts_code: str,
+    asof: str,
+    window: int = DEFAULT_WINDOW,
+) -> float | None:
+    """Compute limit behavior score for a single stock.
+
+    Count limit-up and limit-down occurrences in the trailing `window` days
+    up to and including `asof`.  Score = (up_count + down_count) / window.
+    Returns 0.0 if no limit records exist.  Returns None if input is empty.
+    """
+    if limit_df is None or limit_df.empty:
+        return None
+
+    df = limit_df.copy()
+
+    # Ensure trade_date is string for comparison
+    if "trade_date" not in df.columns:
+        return None
+    df["trade_date"] = df["trade_date"].astype(str).str.replace(r"\.0$", "", regex=True)
+
+    # Filter by ts_code
+    if "ts_code" not in df.columns:
+        return None
+    df = df[df["ts_code"].astype(str) == ts_code]
     if df.empty:
-        return df
-    if "ts_code" in df.columns:
-        df = df[df["ts_code"].astype(str) == ts_code]
-    if "report_type" in df.columns:
-        df = df[df["report_type"].astype(str) == "1"]
-    if "end_type" in df.columns:
-        df = df[df["end_type"].astype(str) == "4"]
-    ann_col = next((c for c in _ANNOUNCE_FIELDS if c in df.columns), None)
-    if ann_col is None:
-        return pd.DataFrame()
-    df = df[df[ann_col].astype(str) <= asof]
+        return 0.0
+
+    # Filter trailing window: trade_date <= asof, within window days
+    df = df[df["trade_date"].astype(str) <= str(asof)]
     if df.empty:
-        return pd.DataFrame()
-    df = df.sort_values(["end_date", ann_col])
-    df = df.drop_duplicates(subset=["end_date"], keep="last")
-    return df.sort_values("end_date").reset_index(drop=True)
+        return 0.0
 
+    # Sort by date descending and take top window rows
+    df = df.sort_values("trade_date", ascending=False)
+    df = df.head(window)
 
-def _to_float(v, default=None):
-    try:
-        if v is None:
-            return default
-        f = float(v)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
+    up_count = 0
+    down_count = 0
 
+    for _, row in df.iterrows():
+        limit_val = row.get("limit")
+        up_stat = row.get("up_stat")
+        # up_stat non-null indicates a limit hit
+        if up_stat is not None and pd.notna(up_stat):
+            if limit_val == "U":
+                up_count += 1
+            elif limit_val == "D":
+                down_count += 1
 
-def _compute_asset_growth(bs_rows: pd.DataFrame) -> float | None:
-    """AG = (TA_t - TA_{t-1}) / TA_{t-1}. Banks excluded by caller."""
-    if bs_rows is None or len(bs_rows) < 2:
-        return None
-    if "total_assets" not in bs_rows.columns:
-        return None
-    cur = bs_rows.iloc[-1]
-    prev = bs_rows.iloc[-2]
-    # Bank exclusion: if the CURRENT row's comp_type is a bank, skip.
-    ct = str(cur.get("comp_type", ""))
-    if ct in _BANK_COMP_TYPES:
-        return None
-    ta_t = _to_float(cur.get("total_assets"))
-    ta_prev = _to_float(prev.get("total_assets"))
-    if ta_t is None or ta_prev is None:
-        return None
-    if ta_prev == 0:
-        return None
-    return (ta_t - ta_prev) / ta_prev
+    return (up_count + down_count) / window
 
 
 def _ts_ns(trade_date_compact: str) -> int:
@@ -171,17 +187,17 @@ def build_day(
     factor_dir = Path(result_root) / "factor-zoo" / FACTOR_ID
     factor_dir.mkdir(parents=True, exist_ok=True)
 
+    # Read all limit_list_d partitions once
+    limit_df = _read_limit_list(data_root)
+
     lines: list[str] = []
     out_rows: list[dict] = []
     for ts_code in ts_codes:
-        bs_rows = _load_pit_rows("balancesheet", ts_code, trade_date_compact,
-                                 data_root)
-        value = _compute_asset_growth(bs_rows)
+        value = _compute_limit_behavior(limit_df, ts_code, trade_date_compact)
         if value is None:
             continue
         record = {"ts_code": ts_code, FACTOR_ID: float(value)}
         out_rows.append(record)
-        pass  # batch write below
         if write_influxdb:
             line = to_line(ts_code, trade_date_compact, {FACTOR_ID: float(value)})
             if line:
@@ -192,12 +208,12 @@ def build_day(
     if write_influxdb and lines:
         try:
             write_influx(
-            lines,
-            url=influx_url or DEFAULT_INFLUX_URL,
-            org=influx_org or DEFAULT_INFLUX_ORG,
-            bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
-            token=influx_token or DEFAULT_INFLUX_TOKEN or "",
-        )
+                lines,
+                url=influx_url or DEFAULT_INFLUX_URL,
+                org=influx_org or DEFAULT_INFLUX_ORG,
+                bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
+                token=influx_token or DEFAULT_INFLUX_TOKEN or "",
+            )
         except Exception:
             pass
 
@@ -213,7 +229,8 @@ def _cli() -> int:
                         help="Tushare codes; if empty, CSI300 universe is used")
     parser.add_argument("--data-root", default=DEFAULT_TS_PATH)
     parser.add_argument("--result-root", default=DEFAULT_RESULT_ROOT)
-    parser.add_argument("--influx", action="store_true")
+    parser.add_argument("--influx", action="store_true",
+                        help="Also write to InfluxDB")
     args = parser.parse_args()
 
     ts_codes = args.ts_codes

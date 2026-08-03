@@ -65,7 +65,7 @@ INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
 INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN", "")
 FRESHNESS_MEASUREMENT = "lean_factor_freshness"
 POISON_THRESHOLD = 3
-MAX_BACKFILL_DAYS = 60
+MAX_BACKFILL_DAYS = 5000
 
 LOGGER = logging.getLogger("factor_worker")
 if not LOGGER.handlers:

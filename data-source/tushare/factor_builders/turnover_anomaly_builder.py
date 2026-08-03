@@ -1,8 +1,17 @@
-"""Cooper-Gulen-Schill (2008) asset growth factor builder.
+"""Turnover Anomaly factor builder — Z-score of turnover_rate vs trailing 20-day window.
 
-AG = (total_assets_t - total_assets_{t-1}) / total_assets_{t-1}
+Logic:
+    z = (turnover_t - mean) / std, clamped to [-5, 5]
+    If std == 0, return 0.0
+    Need at least 21 days of data (20 history + current)
 
-Annual PIT, min_periods=2. EXCLUDES banks (comp_type in {"2","4","5"}).
+Input:
+    {data_root}/daily_basic/ts_code={ts_code}/data.parquet (needs turnover_rate column)
+
+Output:
+    {result_root}/factor-zoo/turnover_anomaly/<YYYY-MM-DD>.parquet
+    columns: ts_code, turnover_anomaly
+    Also mirrored to InfluxDB measurement `lean_factor_turnover_anomaly`.
 """
 from __future__ import annotations
 
@@ -29,22 +38,23 @@ DEFAULT_TS_PATH = os.environ.get(
     "TUSHARE_DATA_PATH", "/home/project/tushare-downloader/tushare_data_v2"
 )
 DEFAULT_RESULT_ROOT = os.environ.get(
-    "ASSET_GROWTH_RESULT_ROOT", str(_REPO_ROOT / "result")
+    "TURNOVER_ANOMALY_RESULT_ROOT", str(_REPO_ROOT / "result")
 )
 DEFAULT_INFLUX_URL = os.environ.get("INFLUXDB_URL", "http://127.0.0.1:8086")
 DEFAULT_INFLUX_ORG = os.environ.get("INFLUXDB_ORG", "lean")
 DEFAULT_INFLUX_BUCKET = os.environ.get("INFLUXDB_BUCKET", "quant")
 DEFAULT_INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 
-FACTOR_ID = "asset_growth"
-MEASUREMENT = "lean_factor_asset_growth"
+FACTOR_ID = "turnover_anomaly"
+MEASUREMENT = "lean_factor_turnover_anomaly"
 OUTPUT_COLUMNS = ["ts_code", FACTOR_ID]
 
-_BANK_COMP_TYPES = {"2", "4", "5"}
-_ANNOUNCE_FIELDS = ("f_ann_date", "ann_date")
+_WINDOW = 20
+_MIN_DAYS = _WINDOW + 1  # 20 history + current day
 
 
 def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
+    """Read {data_root}/{table}/ts_code={ts_code}/data.parquet. Empty if missing."""
     p = Path(data_root) / table / f"ts_code={ts_code}" / "data.parquet"
     if not p.exists():
         return pd.DataFrame()
@@ -54,63 +64,65 @@ def _read_partition(data_root: str, table: str, ts_code: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_pit_rows(api_name: str, ts_code: str, asof: str,
-                   data_root: str) -> pd.DataFrame:
-    """Full sorted PIT-annual frame (mirrors pit_financials filter logic)."""
-    df = _read_partition(data_root, api_name, ts_code)
+def _compute_turnover_zscore(daily_basic_df: pd.DataFrame, asof: str, window: int = _WINDOW) -> float | None:
+    """Compute Z-score of turnover_rate vs trailing window ending at asof.
+
+    Args:
+        daily_basic_df: DataFrame with trade_date and turnover_rate columns
+        asof: Date string in YYYYMMDD format
+        window: Trailing window size (default 20)
+
+    Returns:
+        Z-score clamped to [-5, 5], or None if insufficient data
+    """
+    if daily_basic_df is None or daily_basic_df.empty:
+        return None
+    if "trade_date" not in daily_basic_df.columns or "turnover_rate" not in daily_basic_df.columns:
+        return None
+
+    df = daily_basic_df.copy()
+    df["trade_date"] = df["trade_date"].astype(str).str.replace(r"\.0$", "", regex=True)
+    df = df[df["trade_date"].astype(str) <= str(asof)]
     if df.empty:
-        return df
-    if "ts_code" in df.columns:
-        df = df[df["ts_code"].astype(str) == ts_code]
-    if "report_type" in df.columns:
-        df = df[df["report_type"].astype(str) == "1"]
-    if "end_type" in df.columns:
-        df = df[df["end_type"].astype(str) == "4"]
-    ann_col = next((c for c in _ANNOUNCE_FIELDS if c in df.columns), None)
-    if ann_col is None:
-        return pd.DataFrame()
-    df = df[df[ann_col].astype(str) <= asof]
-    if df.empty:
-        return pd.DataFrame()
-    df = df.sort_values(["end_date", ann_col])
-    df = df.drop_duplicates(subset=["end_date"], keep="last")
-    return df.sort_values("end_date").reset_index(drop=True)
+        return None
+    df = df.sort_values("trade_date")
 
+    # Need at least window + 1 days (window history + current)
+    if len(df) < window + 1:
+        return None
 
-def _to_float(v, default=None):
-    try:
-        if v is None:
-            return default
-        f = float(v)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
+    # Get trailing window (including current day)
+    turnover_series = df["turnover_rate"].astype(float).tail(window + 1)
+    turnover_series = turnover_series.replace([float("inf"), float("-inf")], float("nan")).dropna()
 
+    if len(turnover_series) < window + 1:
+        return None
 
-def _compute_asset_growth(bs_rows: pd.DataFrame) -> float | None:
-    """AG = (TA_t - TA_{t-1}) / TA_{t-1}. Banks excluded by caller."""
-    if bs_rows is None or len(bs_rows) < 2:
+    # Current turnover (last value)
+    turnover_t = float(turnover_series.iloc[-1])
+
+    # Historical window (exclude current day)
+    hist_window = turnover_series.iloc[:-1]
+
+    if len(hist_window) < window:
         return None
-    if "total_assets" not in bs_rows.columns:
-        return None
-    cur = bs_rows.iloc[-1]
-    prev = bs_rows.iloc[-2]
-    # Bank exclusion: if the CURRENT row's comp_type is a bank, skip.
-    ct = str(cur.get("comp_type", ""))
-    if ct in _BANK_COMP_TYPES:
-        return None
-    ta_t = _to_float(cur.get("total_assets"))
-    ta_prev = _to_float(prev.get("total_assets"))
-    if ta_t is None or ta_prev is None:
-        return None
-    if ta_prev == 0:
-        return None
-    return (ta_t - ta_prev) / ta_prev
+
+    mean = float(hist_window.mean())
+    std = float(hist_window.std(ddof=1))  # Sample std
+
+    if std == 0 or math.isnan(std):
+        return 0.0
+
+    z_score = (turnover_t - mean) / std
+
+    # Clamp to [-5, 5]
+    z_score = max(-5.0, min(5.0, z_score))
+
+    return z_score
 
 
 def _ts_ns(trade_date_compact: str) -> int:
+    """Convert YYYYMMDD to UTC nanoseconds (15:00 Shanghai)."""
     local = datetime(
         int(trade_date_compact[0:4]), int(trade_date_compact[4:6]),
         int(trade_date_compact[6:8]), 15, 0, 0, tzinfo=CHINA_TZ,
@@ -119,6 +131,7 @@ def _ts_ns(trade_date_compact: str) -> int:
 
 
 def to_line(ts_code: str, trade_date_compact: str, factors: dict) -> str:
+    """Convert factors dict to InfluxDB line protocol."""
     fields = [
         f"{k}={v:.12g}" for k, v in factors.items()
         if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
@@ -133,6 +146,7 @@ def to_line(ts_code: str, trade_date_compact: str, factors: dict) -> str:
 
 def write_influx(lines: Iterable[str], url: str, org: str, bucket: str,
                  token: str) -> int:
+    """Write lines to InfluxDB via HTTP API."""
     payload = [l for l in lines if l]
     if not payload:
         return 0
@@ -151,6 +165,7 @@ def write_influx(lines: Iterable[str], url: str, org: str, bucket: str,
 
 
 def _format_date(yyyy_mm_dd: str) -> str:
+    """'2024-01-05' -> '20240105'."""
     return yyyy_mm_dd.replace("-", "")
 
 
@@ -165,6 +180,20 @@ def build_day(
     influx_bucket: str | None = None,
     influx_token: str | None = None,
 ) -> pd.DataFrame:
+    """Build turnover_anomaly factor for one trade date across many ts_codes.
+
+    Args:
+        date_yyyy_mm_dd: 'YYYY-MM-DD' (e.g., '2024-01-05').
+        ts_codes: list of Tushare codes like '600519.SH'.
+        data_root: tushare parquet root. Defaults to DEFAULT_TS_PATH.
+        result_root: result dir root. Defaults to DEFAULT_RESULT_ROOT.
+        write_influxdb: if True, also write to InfluxDB.
+        influx_*: InfluxDB connection params (env defaults if None).
+
+    Returns:
+        DataFrame with columns OUTPUT_COLUMNS, one row per ts_code that had
+        sufficient data to compute the factor.
+    """
     data_root = data_root or DEFAULT_TS_PATH
     result_root = result_root or DEFAULT_RESULT_ROOT
     trade_date_compact = _format_date(date_yyyy_mm_dd)
@@ -174,14 +203,12 @@ def build_day(
     lines: list[str] = []
     out_rows: list[dict] = []
     for ts_code in ts_codes:
-        bs_rows = _load_pit_rows("balancesheet", ts_code, trade_date_compact,
-                                 data_root)
-        value = _compute_asset_growth(bs_rows)
+        daily_basic_df = _read_partition(data_root, "daily_basic", ts_code)
+        value = _compute_turnover_zscore(daily_basic_df, trade_date_compact)
         if value is None:
             continue
         record = {"ts_code": ts_code, FACTOR_ID: float(value)}
         out_rows.append(record)
-        pass  # batch write below
         if write_influxdb:
             line = to_line(ts_code, trade_date_compact, {FACTOR_ID: float(value)})
             if line:
@@ -192,12 +219,12 @@ def build_day(
     if write_influxdb and lines:
         try:
             write_influx(
-            lines,
-            url=influx_url or DEFAULT_INFLUX_URL,
-            org=influx_org or DEFAULT_INFLUX_ORG,
-            bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
-            token=influx_token or DEFAULT_INFLUX_TOKEN or "",
-        )
+                lines,
+                url=influx_url or DEFAULT_INFLUX_URL,
+                org=influx_org or DEFAULT_INFLUX_ORG,
+                bucket=influx_bucket or DEFAULT_INFLUX_BUCKET,
+                token=influx_token or DEFAULT_INFLUX_TOKEN or "",
+            )
         except Exception:
             pass
 
