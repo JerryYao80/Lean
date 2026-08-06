@@ -39,7 +39,20 @@ namespace QuantConnect.Algorithm.Framework.Execution
             _targetsCollection.AddRange(targets);
             if (_targetsCollection.IsEmpty) return;
 
-            // Phase 1: sells first (release T+1-locked cash)
+            // Phase 1: sells first (release T+1-locked cash).
+            //
+            // Observability note (Phase 1 sell-failure interaction):
+            //   A sell that passes AboveMinimumOrderMarginPortfolioPercentage here can
+            //   still be invalidated at FILL TIME by AShareStockBuyingPowerModel's T+1
+            //   available-quantity check (the pre-trade check does not enforce T+1
+            //   share availability, but the fill-time check does). When that happens
+            //   BacktestingBrokerage marks the order OrderStatus.Invalid and logs an
+            //   Algorithm.Error; the sell frees no cash. Phase 2 buys that depended on
+            //   that cash will then fail their buying-power check and be skipped —
+            //   silently by design (honest degradation). This matches
+            //   AShareLotSizeExecutionModel behavior (no regression). To diagnose a
+            //   "Phase 2 buy skipped" that should have succeeded, correlate with the
+            //   Order Error log emitted for the Phase 1 sell in the same time step.
             ExecuteSells(algorithm);
             // Phase 2: buys second (each re-checks buying power after sells freed cash)
             ExecuteBuys(algorithm);
