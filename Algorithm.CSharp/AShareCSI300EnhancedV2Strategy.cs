@@ -43,6 +43,10 @@ namespace QuantConnect.Algorithm.CSharp
             UniverseSettings.Resolution = Resolution.Daily;
 
             SetSecurityInitializer(new AShareStockSecurityInitializer());
+            // L1 Universe (AShareCSI300UniverseSelectionModel) uses pythonnet to call
+            // barra_cne5_data_loader.py for CSI300 constituents, so PythonEngine MUST be
+            // initialized before Py.GIL() — otherwise Py.GIL() segfaults (exit 139, no
+            // stack trace). Idempotent (guarded by _isInitialized).
             PythonInitializer.Initialize();
 
             var dataRoot = GetParameterOrDefault("dataRoot",
