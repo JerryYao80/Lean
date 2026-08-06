@@ -79,7 +79,6 @@ class MVOWeightExporter:
         self.max_weight = max_weight
         self.risk_aversion = risk_aversion
         self._panel_loader = FactorPanelLoader(factor_root) if factor_root else None
-        self._ic_cache: dict[str, dict] = {}
 
     # --- public ---
 
@@ -88,6 +87,7 @@ class MVOWeightExporter:
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
         written: list[Path] = []
+        failed: list[str] = []
         for dt in rebalance_dates:
             json_path = out_path / f"mvo_weights_{dt}.json"
             if json_path.exists() and not force:
@@ -98,17 +98,21 @@ class MVOWeightExporter:
                 payload = self._compute_weights_for_date(dt)
                 if payload is None:
                     LOGGER.warning("No weights for %s; skipping", dt)
+                    failed.append(dt)
                     continue
                 json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
                 LOGGER.info("Wrote %s (%d assets)", json_path, payload["n_assets"])
                 written.append(json_path)
             except Exception:
                 LOGGER.exception("Failed month %s", dt)
+                failed.append(dt)
                 continue
+        if failed:
+            LOGGER.warning("%d month(s) failed: %s", len(failed), failed)
         return written
 
     def _compute_weights_for_date(self, as_of: str) -> dict | None:
-        alpha_scores = self._load_alpha_scores(as_of)
+        alpha_scores, report_name = self._load_alpha_scores(as_of)
         if alpha_scores is None or alpha_scores.empty:
             LOGGER.warning("No alpha scores for %s", as_of)
             return None
@@ -122,17 +126,48 @@ class MVOWeightExporter:
             LOGGER.warning("Too few overlapping symbols (%d) for %s", len(symbols), as_of)
             return None
         alpha = alpha_scores[symbols]
-        ret = returns[symbols].dropna(axis=1, how="all").dropna(axis=0, how="any")
-        # Re-align after dropna
+        ret = returns[symbols]
+
+        # C2: Drop symbols with fewer than 60 non-NaN return observations.
+        min_obs = 60
+        obs_count = ret.notna().sum(axis=0)
+        keep = obs_count[obs_count >= min_obs].index
+        if len(keep) < len(symbols):
+            LOGGER.info("Dropped %d symbols with < %d obs for %s",
+                        len(symbols) - len(keep), min_obs, as_of)
+        ret = ret[keep]
+        # Re-align alpha to surviving symbols
         symbols = alpha.index.intersection(ret.columns)
         if len(symbols) < 2:
+            LOGGER.warning("Too few symbols after min-obs filter (%d) for %s",
+                           len(symbols), as_of)
             return None
         alpha = alpha[symbols]
         ret = ret[symbols]
 
+        # Align on common dates (dropna how="any" on remaining rows).
+        ret = ret.dropna(axis=0, how="any")
+        symbols = alpha.index.intersection(ret.columns)
+        if len(symbols) < 2:
+            LOGGER.warning("Too few symbols after common-date alignment for %s", as_of)
+            return None
+        alpha = alpha[symbols]
+        ret = ret[symbols]
+
+        # C2: Require enough observations for a well-conditioned covariance.
+        min_rows = max(60, len(symbols) + 1)
+        if len(ret) < min_rows:
+            LOGGER.warning("Insufficient aligned rows (%d < %d) for %s; skipping",
+                           len(ret), min_rows, as_of)
+            return None
+
         mu = self._alpha_to_mu(alpha.values)
         sigma = self._estimate_covariance(ret)
         weights, fallback = self._solve_mvo(mu, sigma, symbols.tolist())
+        # C3: infeasible -> empty weights dict -> skip
+        if not weights:
+            LOGGER.warning("MVO infeasible for %s (n*max_weight<1)", as_of)
+            return None
 
         return {
             "as_of": as_of,
@@ -141,26 +176,29 @@ class MVOWeightExporter:
             "lambda": float(self.risk_aversion),
             "cov_window": int(self.cov_window),
             "n_assets": len(weights),
-            "ic_report_used": self._last_ic_report_name,
+            "ic_report_used": report_name,
             "fallback": fallback,
         }
 
     # --- data loading (overridable in tests) ---
 
-    _last_ic_report_name: str | None = None
-
-    def _load_alpha_scores(self, as_of: str) -> pd.Series | None:
+    def _load_alpha_scores(self, as_of: str) -> tuple[pd.Series | None, str | None]:
         """Load latest IC report <= as_of; synthesize per-stock alpha =
         sum(factor_value * factor_weight) / sum(weight), then cross-sectional
-        normalize to [0,1] (mirrors C# ComputeAlphaScores)."""
-        report = self._load_latest_ic_report(as_of)
+        normalize to [0,1] (mirrors C# ComputeAlphaScores).
+
+        Returns (scores, report_name) tuple — report_name is the filename of
+        the IC report actually used (None if no scores). Explicit return
+        removes the prior temporal coupling via self._last_ic_report_name.
+        """
+        report, report_name = self._load_latest_ic_report(as_of)
         if report is None:
-            return None
+            return None, None
         if self._panel_loader is None:
             self._panel_loader = FactorPanelLoader()
         panel = self._panel_loader.load_panel(as_of)
         if panel is None or panel.empty:
-            return None
+            return None, report_name
 
         factors = report.get("factors", [])
         scores = pd.Series(0.0, index=panel.index, dtype=float)
@@ -177,36 +215,35 @@ class MVOWeightExporter:
         lo, hi = scores.min(), scores.max()
         if hi > lo:
             scores = (scores - lo) / (hi - lo)
-        return scores
+        return scores, report_name
 
-    def _load_latest_ic_report(self, as_of: str) -> dict | None:
+    def _load_latest_ic_report(self, as_of: str) -> tuple[dict | None, str | None]:
+        """Return (report_dict, report_filename). Latest report with
+        report_date <= as_of. No earliest-report fallback (would be a
+        lookahead-in-disguise: using a future report's weights for a past
+        date)."""
         if not self.ic_report_dir.exists():
             LOGGER.warning("IC report dir not found: %s", self.ic_report_dir)
-            return None
+            return None, None
         as_of_dt = datetime.strptime(as_of, "%Y-%m-%d")
         best_dt = None
         best_path = None
-        earliest_dt = None
-        earliest_path = None
         for p in self.ic_report_dir.glob("ic_report_*.json"):
             ds = p.stem[len("ic_report_"):]
             try:
                 dt = datetime.strptime(ds, "%Y-%m-%d")
             except ValueError:
                 continue
-            if earliest_dt is None or dt < earliest_dt:
-                earliest_dt, earliest_path = dt, p
             if dt <= as_of_dt and (best_dt is None or dt > best_dt):
                 best_dt, best_path = dt, p
-        path = best_path or earliest_path
-        if path is None:
-            return None
-        self._last_ic_report_name = path.name
+        if best_path is None:
+            LOGGER.info("No IC report <= %s", as_of)
+            return None, None
         try:
-            return json.loads(path.read_text())
+            return json.loads(best_path.read_text()), best_path.name
         except Exception:
-            LOGGER.exception("Failed to parse %s", path)
-            return None
+            LOGGER.exception("Failed to parse %s", best_path)
+            return None, None
 
     def _load_historical_returns(self, as_of: str, window: int) -> pd.DataFrame | None:
         """Trailing `window` back-adjusted daily returns STRICTLY BEFORE as_of."""
@@ -216,7 +253,10 @@ class MVOWeightExporter:
         end_compact = (as_of_dt - timedelta(days=1)).strftime("%Y%m%d")
 
         frames = {}
+        n_total = 0
+        n_failed = 0
         for ts_dir in self.daily_data_dir.glob("ts_code=*"):
+            n_total += 1
             ts_code = ts_dir.name[len("ts_code="):]
             try:
                 df = pd.read_parquet(ts_dir)
@@ -225,17 +265,29 @@ class MVOWeightExporter:
                 if df.empty:
                     continue
                 df = df.sort_values("trade_date")
-                # Back-adjusted close
+                # C1: Back-adjusted close. If adj_factor is missing or
+                # length-mismatched, SKIP the symbol — never silently fall
+                # back to raw close (ex-div days would inject fake -10%
+                # returns into the covariance).
                 adj = self._load_adj_factor(ts_code, start_compact, end_compact)
-                close = df["close"].astype(float).values
-                if adj is not None and len(adj) == len(df):
-                    close = close * adj
+                if adj is None:
+                    LOGGER.warning("Skip %s: adj_factor missing", ts_code)
+                    continue
+                if len(adj) != len(df):
+                    LOGGER.warning("Skip %s: adj_factor len %d != daily len %d",
+                                   ts_code, len(adj), len(df))
+                    continue
+                close = df["close"].astype(float).values * adj
                 rets = pd.Series(np.diff(close) / close[:-1],
                                  index=df["trade_date"].values[1:])
                 frames[ts_code] = rets
             except Exception:
+                n_failed += 1
                 LOGGER.debug("Failed to load daily for %s", ts_code, exc_info=True)
                 continue
+        if n_failed > 0:
+            LOGGER.warning("Failed to load daily data for %d/%d symbols",
+                           n_failed, n_total)
         if not frames:
             return None
         panel = pd.DataFrame(frames)
@@ -253,6 +305,7 @@ class MVOWeightExporter:
             df = df.sort_values("trade_date")
             return df["adj_factor"].astype(float).values
         except Exception:
+            LOGGER.warning("Failed to load adj_factor for %s", ts_code, exc_info=True)
             return None
 
     # --- MVO math ---
@@ -263,20 +316,35 @@ class MVOWeightExporter:
         return (pct - 0.5) * 0.40
 
     def _estimate_covariance(self, returns: pd.DataFrame) -> np.ndarray:
-        """Ledoit-Wolf shrinkage covariance + tiny ridge for PD stability."""
+        """Ledoit-Wolf shrinkage covariance + tiny ridge for PD stability.
+
+        Annualized (×252) so Σ is on the same scale as the annualized μ
+        (±0.20 band). Without annualization the variance term is ~1000×
+        smaller than μ'w and the optimizer ignores alpha (I4).
+        """
         try:
             lw = LedoitWolf().fit(returns.values)
             cov = lw.covariance_
         except Exception:
             cov = np.cov(returns.values, rowvar=False)
         cov = np.atleast_2d(cov)
-        cov += np.eye(cov.shape[0]) * 1e-8
+        cov = cov * 252.0  # annualize (252 trading days)
+        cov += np.eye(cov.shape[0]) * 1e-8  # ridge for PD stability
         return cov
 
     def _solve_mvo(self, mu: np.ndarray, sigma: np.ndarray,
                    symbols: list[str]) -> tuple[dict, str | None]:
-        """SLSQP: min -mu'w + (lambda/2) w'Sigma w, s.t. sum(w)=1, 0<=w<=max."""
+        """SLSQP: min -mu'w + (lambda/2) w'Sigma w, s.t. sum(w)=1, 0<=w<=max.
+
+        C3: If n*max_weight < 1 the constraints are infeasible (cannot sum
+        to 1 with each w_i <= max). Returns ({}, "infeasible") so the caller
+        can skip the date rather than emit weights violating the bound.
+        """
         n = len(symbols)
+        # C3: infeasibility detection
+        if n * self.max_weight < 1.0 - 1e-9:
+            LOGGER.warning("infeasible: n*max_weight<1 (n=%d, max=%s)", n, self.max_weight)
+            return {}, "infeasible"
         x0 = np.full(n, 1.0 / n)
 
         def objective(w):
@@ -307,6 +375,20 @@ class MVOWeightExporter:
         else:
             w = x0
             fallback = "equal_weight"
+
+        # C3 defense-in-depth: clip to [0, max_weight] and renormalize
+        # (2 passes). Guarantees the bound even if SLSQP or the equal-weight
+        # fallback produced an out-of-bound value.
+        for _ in range(2):
+            w = np.clip(w, 0.0, self.max_weight)
+            s = w.sum()
+            if s > 0:
+                w = w / s
+            else:
+                w = x0
+                fallback = "equal_weight"
+                break
+
         return {sym: float(wi) for sym, wi in zip(symbols, w)}, fallback
 
 
