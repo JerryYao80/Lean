@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -33,8 +34,9 @@ DEFAULT_OUT_DIR = "/home/project/hope/Lean/result/ic-reports"
 
 
 def _month_end_dates(start: str, end: str) -> list[str]:
-    """All month-end dates in [start, end], inclusive, as yyyy-MM-dd strings."""
-    from datetime import datetime, timedelta
+    """All month-end dates in [start, end] that fall on an actual month-end;
+    a trailing partial month is skipped.
+    """
     s = datetime.strptime(start, "%Y-%m-%d")
     e = datetime.strptime(end, "%Y-%m-%d")
     dates = []
@@ -46,7 +48,9 @@ def _month_end_dates(start: str, end: str) -> list[str]:
             next_first = current.replace(month=current.month + 1, day=1)
         month_end = next_first - timedelta(days=1)
         if month_end > e:
-            month_end = e
+            # Trailing partial month — real month-end exceeds `end`; skip
+            # (matches upstream ic_ir_engine._get_month_end_dates behavior).
+            break
         if month_end >= s:
             dates.append(month_end.strftime("%Y-%m-%d"))
         current = next_first
@@ -59,6 +63,7 @@ def _build_report_payload(
     min_ir: float,
     month_end: str,
     ic_window_start: str,
+    ic_window_end: str,
     horizon: int,
 ) -> dict | None:
     """Filter factors and build the JSON payload. Returns None if no factors pass."""
@@ -94,7 +99,7 @@ def _build_report_payload(
     return {
         "report_date": month_end,
         "ic_window_start": ic_window_start,
-        "ic_window_end": month_end,
+        "ic_window_end": ic_window_end,
         "horizon": int(horizon),
         "min_ic": float(min_ic),
         "min_ir": float(min_ir),
@@ -142,24 +147,37 @@ def export_ic_reports(
             written.append(json_path)
             continue
 
-        # Expanding window: ic_window_start .. month_end (exclusive of month_end
-        # — compute_ic_report's _get_month_end_dates returns month-ends <= end_date,
-        # so the last IC observation is a prior month-end, not month_end itself).
-        report_df = eng.compute_ic_report(
-            start_date=ic_window_start,
-            end_date=month_end,
-            horizon=horizon,
-        )
+        try:
+            # end_date = month_end - 1 day so _get_month_end_dates returns
+            # month-ends strictly before month_end; the last IC observation is
+            # the prior month-end, whose 21-day forward return has fully
+            # materialized by month_end — no lookahead.
+            month_end_dt = datetime.strptime(month_end, "%Y-%m-%d")
+            ic_end = (month_end_dt - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        payload = _build_report_payload(
-            report_df, min_ic, min_ir, month_end, ic_window_start, horizon)
-        if payload is None:
-            LOGGER.warning("No factors passed filter for %s; skipping JSON", month_end)
+            report_df = eng.compute_ic_report(
+                start_date=ic_window_start,
+                end_date=ic_end,
+                horizon=horizon,
+            )
+
+            payload = _build_report_payload(
+                report_df, min_ic, min_ir, month_end, ic_window_start, ic_end, horizon)
+            if payload is None:
+                LOGGER.warning("No factors passed filter for %s; skipping JSON", month_end)
+                # FIX 3: on force=True with no passing factors, remove any stale
+                # JSON left from a prior run so it isn't consumed as fresh.
+                if force and json_path.exists():
+                    json_path.unlink(missing_ok=True)
+                    LOGGER.info("Deleted stale JSON for %s (no factors passed)", month_end)
+                continue
+
+            json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+            LOGGER.info("Wrote %s (%d factors)", json_path, len(payload["factors"]))
+            written.append(json_path)
+        except Exception:
+            LOGGER.exception("Failed month %s", month_end)
             continue
-
-        json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-        LOGGER.info("Wrote %s (%d factors)", json_path, len(payload["factors"]))
-        written.append(json_path)
 
     return written
 
