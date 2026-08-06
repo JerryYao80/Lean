@@ -51,7 +51,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             var store = new FactorStore();
             store.Register("alpha042", new RParquetAdapter(
                 factorRoot: "factor-zoo/alpha042", valueColumn: "alpha042",
-                readScalar: (path, column) => 0.55m));
+                readScalar: (path, column, tsCode) => 0.55m));
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             var r = store.Get("alpha042", sym, new DateTime(2026, 7, 24));
             Assert.AreEqual(FactorDataQuality.Valid, r.Quality);

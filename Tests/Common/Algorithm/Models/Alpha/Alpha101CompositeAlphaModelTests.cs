@@ -61,7 +61,7 @@ namespace QuantConnect.Tests.Common.Algorithm.Models.Alpha
                 var localAid = aid;
                 store.Register(aid, new RParquetAdapter(
                     factorRoot: $"factor-zoo/{aid}", valueColumn: aid,
-                    readScalar: (path, column) =>
+                    readScalar: (path, column, tsCode) =>
                     {
                         // path = .../factor-zoo/alphaNNN/<date>/<ts_code>.parquet
                         var fileName = System.IO.Path.GetFileNameWithoutExtension(path);

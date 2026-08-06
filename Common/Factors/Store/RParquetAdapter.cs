@@ -31,11 +31,11 @@ namespace QuantConnect.Factors.Store
         private readonly string _factorRoot;
         private readonly string _valueColumn;
         private readonly string _resultRoot;
-        private readonly Func<string, string, decimal?> _readScalar;
+        private readonly Func<string, string, string, decimal?> _readScalar;
 
         public RParquetAdapter(string factorRoot, string valueColumn,
                                string resultRoot = null,
-                               Func<string, string, decimal?> readScalar = null)
+                               Func<string, string, string, decimal?> readScalar = null)
         {
             _factorRoot = factorRoot;
             _valueColumn = valueColumn;
@@ -46,12 +46,32 @@ namespace QuantConnect.Factors.Store
         public bool TryGet(Symbol symbol, DateTime date, IEnumerable<BaseData> history, out FactorResult result)
         {
             var tsCode = SymbolToTsCode(symbol);
-            var path = Path.Combine(_resultRoot, _factorRoot,
-                date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), $"{tsCode}.parquet");
+            var dateStr = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var factorDir = Path.Combine(_resultRoot, _factorRoot);
+
+            // New layout: <factorRoot>/<date>.parquet (multi-row, filter by ts_code)
+            var newPath = Path.Combine(factorDir, $"{dateStr}.parquet");
             result = new FactorResult { Value = 0m, Time = date, Symbol = symbol, FactorId = _factorRoot, Quality = FactorDataQuality.Missing };
-            decimal? v;
-            try { v = _readScalar(path, _valueColumn); }
+
+            decimal? v = null;
+            try
+            {
+                if (File.Exists(newPath))
+                {
+                    v = _readScalar(newPath, _valueColumn, tsCode);
+                }
+                else
+                {
+                    // Fallback to old layout: <factorRoot>/<date>/<tsCode>.parquet
+                    var oldPath = Path.Combine(factorDir, dateStr, $"{tsCode}.parquet");
+                    if (File.Exists(oldPath))
+                    {
+                        v = _readScalar(oldPath, _valueColumn, tsCode);
+                    }
+                }
+            }
             catch { return false; }
+
             if (!v.HasValue) return false;
             result = new FactorResult { Value = v.Value, RawValue = v.Value, Time = date, Symbol = symbol, FactorId = _factorRoot, Quality = FactorDataQuality.Valid };
             return true;
@@ -77,22 +97,37 @@ namespace QuantConnect.Factors.Store
         }
 
         /// <summary>
-        /// Default reader: pythonnet + pandas read_parquet, scalar extraction.
+        /// Default reader: pythonnet + pandas read_parquet.
+        /// With tsCodeFilter: reads multi-row parquet and filters by ts_code column.
+        /// Without tsCodeFilter: reads single-row parquet and extracts the value directly.
         /// Mirrors CrowdingFactorZooAlphaModel.cs:130-184 (Py.GIL + Py.Import("pandas")
         /// + pd.read_parquet + df[column].iloc[0] + (double) cast). Returns null on
         /// missing file / empty frame / NaN — never throws (caller maps to Missing).
         /// </summary>
-        private static decimal? DefaultPythonNetReader(string path, string column)
+        private static decimal? DefaultPythonNetReader(string path, string column, string tsCodeFilter = null)
         {
             if (!File.Exists(path)) return null;
             using (Py.GIL())
             {
                 dynamic pd = Py.Import("pandas");
                 dynamic df = pd.read_parquet(path);
-                // df.__bool__() raises "truth value is ambiguous" on multi-row frames;
-                // use len() like the reference model (CrowdingFactorZooAlphaModel.cs:161).
                 if (df == null || (int)df.__len__() == 0) return null;
-                dynamic val = df[column].iloc[0];
+
+                dynamic val;
+                if (!string.IsNullOrEmpty(tsCodeFilter))
+                {
+                    // Multi-row parquet: filter by ts_code column, then get value
+                    dynamic mask = df["ts_code"] == tsCodeFilter;
+                    dynamic filtered = df[mask];
+                    if ((int)filtered.__len__() == 0) return null;
+                    val = filtered[column].iloc[0];
+                }
+                else
+                {
+                    // Single-row parquet (old format): direct extraction
+                    val = df[column].iloc[0];
+                }
+
                 if (val == null) return null;
                 try { return Convert.ToDecimal((double)val, CultureInfo.InvariantCulture); }
                 catch { return null; }

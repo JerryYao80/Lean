@@ -53,7 +53,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             var store = new FactorStore();
             store.Register("fake_parquet", new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
-                readScalar: (path, column) => 0.55m));
+                readScalar: (path, column, tsCode) => 0.55m));
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             var r = store.Get("fake_parquet", sym, new DateTime(2026, 7, 22));
             Assert.AreEqual(FactorDataQuality.Valid, r.Quality);

@@ -15,7 +15,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
         {
             var adapter = new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
-                readScalar: (path, column) => 0.42m);
+                readScalar: (path, column, tsCode) => 0.42m);
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             var ok = adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out var result);
             Assert.IsTrue(ok);
@@ -28,7 +28,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
         {
             var adapter = new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
-                readScalar: (path, column) => (decimal?)null);
+                readScalar: (path, column, tsCode) => (decimal?)null);
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             var ok = adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out var result);
             Assert.IsFalse(ok);
@@ -42,7 +42,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             var adapter = new RParquetAdapter(
                 factorRoot: "crowding-factor", valueColumn: "composite",
                 resultRoot: "/tmp/fz_parquet_test_root",
-                readScalar: (path, column) => { seenPath = path; seenCol = column; return 0.1m; });
+                readScalar: (path, column, tsCode) => { seenPath = path; seenCol = column; return 0.1m; });
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out _);
             Assert.AreEqual("/tmp/fz_parquet_test_root/crowding-factor/2026-07-22/600519.SH.parquet", seenPath);
@@ -57,7 +57,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             var adapter = new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
                 resultRoot: "/tmp/fz_parquet_test_root",
-                readScalar: (path, column) => { seenPath = path; return 0.1m; });
+                readScalar: (path, column, tsCode) => { seenPath = path; return 0.1m; });
             var sym = Symbol.Create("000001", SecurityType.Equity, Market.SZSE);
             adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out _);
             Assert.IsTrue(seenPath.EndsWith("/000001.SZ.parquet"), $"resolved {seenPath}");
@@ -72,7 +72,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             var adapter = new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
                 resultRoot: "/tmp/fz_parquet_test_root",
-                readScalar: (path, column) => { seenPath = path; return 0.1m; });
+                readScalar: (path, column, tsCode) => { seenPath = path; return 0.1m; });
             var sym = Symbol.Create("518880", SecurityType.Equity, Market.SSE);
             adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out _);
             Assert.IsTrue(seenPath.EndsWith("/518880.SH.parquet"), $"resolved {seenPath}");
@@ -85,7 +85,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             // runtime error) and return Missing rather than propagating the exception.
             var adapter = new RParquetAdapter(
                 factorRoot: "factor-zoo", valueColumn: "value",
-                readScalar: (path, column) => throw new InvalidOperationException("boom"));
+                readScalar: (path, column, tsCode) => throw new InvalidOperationException("boom"));
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             var ok = adapter.TryGet(sym, new DateTime(2026, 7, 22), null, out var result);
             Assert.IsFalse(ok);
@@ -101,7 +101,7 @@ namespace QuantConnect.Tests.Common.Factors.Store
             // .../hope/result (the broken two-".." resolution).
             string seenPath = null;
             var adapter = new RParquetAdapter("crowding-factor", "composite",
-                readScalar: (path, column) => { seenPath = path; return (decimal?)null; });
+                readScalar: (path, column, tsCode) => { seenPath = path; return (decimal?)null; });
             var sym = Symbol.Create("600519", SecurityType.Equity, Market.SSE);
             adapter.TryGet(sym, new DateTime(2024, 1, 2), null, out _);
             Assert.IsNotNull(seenPath, "reader was not invoked");
