@@ -9,6 +9,7 @@ using NUnit.Framework;
 using QuantConnect.Algorithm;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Brokerages.Backtesting;
 using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine.Results;
@@ -51,7 +52,7 @@ namespace QuantConnect.Tests.Algorithm
 
         // Behavioral test: proves the two-phase sell-before-buy ordering releases
         // cash from a sell so a subsequent buy (that would otherwise be
-        // unaffordable) is actually submitted.
+        // unaffordable) actually FILLS.
         //
         // Setup: algorithm holds 200 shares of SPY priced at $250 (=$50k locked in
         // SPY). Cash is set to just $500. We emit two targets:
@@ -59,38 +60,55 @@ namespace QuantConnect.Tests.Algorithm
         //   - buy AAPL 100   (cost = 100 * $250 = $25k, far exceeding the $500 cash
         //                     on hand BEFORE the SPY sell, affordable AFTER).
         //
-        // Assertion: after Execute + synchronous fill processing, an order for AAPL
-        // exists. The buy could only have been submitted if the SPY sell freed cash
-        // first — exactly the T+1 cash-release behavior we need. With a
-        // buy-before-sell ordering (or a single-phase model that skips the buy when
-        // cash is insufficient), no AAPL order would appear.
+        // Mechanism: with asynchronous=false, each MarketOrder call blocks until the
+        // order is FILLED (BacktestingTransactionHandler.Run -> HandleOrderRequest ->
+        // ProcessAsynchronousEvents -> BacktestingBrokerage.Scan -> fill ->
+        // OnOrderEvents -> Portfolio.ProcessFills credits cash). So by the time
+        // ExecuteSells returns, the SPY sell has filled and Portfolio.Cash has been
+        // credited the ~$50k proceeds. ExecuteBuys then runs against the freed cash.
         //
-        // Uses the real backtest fill pipeline (BrokerageTransactionHandler +
-        // NullBrokerage → Portfolio.ProcessFills) so the cash freed by the SPY sell
-        // is actually credited to Portfolio.Cash before the AAPL buy's buying-power
-        // check runs. Default CashBuyingPowerModel (Equity) is used — the point is
-        // to test ORDERING, not A-share T+1 specifics.
+        // BacktestingBrokerage.Scan enforces HasSufficientBuyingPowerForOrder at fill
+        // time — an unaffordable buy is marked OrderStatus.Invalid (the "Insufficient
+        // buying power" rejection). MinimumOrderMarginPortfolioPercentage is set
+        // NONZERO (0.001) so the execution model's pre-check is live, not
+        // short-circuited.
+        //
+        // Assertions are on FILLS (Portfolio quantities + Cash), not order
+        // submissions — proving the actual cash-release mechanism. With a
+        // buy-before-sell ordering the AAPL buy would be invalidated at fill time
+        // (only $500 cash, no sell proceeds yet) and Portfolio[AAPL].Quantity would
+        // stay 0. This test would also FAIL under NullBrokerage (no fills → SPY
+        // quantity stays 200, Cash stays 500), which is the meaningfulness check.
         [Test]
         public void Execute_SellFreesCashForSubsequentBuy()
         {
             var algorithm = new AlgorithmStub();
             algorithm.SetDateTime(new DateTime(2024, 1, 2, 9, 30, 0));
-            algorithm.Settings.MinimumOrderMarginPortfolioPercentage = 0;
+            // NONZERO so AboveMinimumOrderMarginPortfolioPercentage is live (not short-circuited).
+            algorithm.Settings.MinimumOrderMarginPortfolioPercentage = 0.001m;
 
             var spy = algorithm.AddEquity(Symbols.SPY.Value);
             var aapl = algorithm.AddEquity(Symbols.AAPL.Value);
+            // Force exchange open so MarketOrder is not converted to MarketOnOpen
+            // (which would not fill until next bar). Tests in this file don't run a
+            // time loop, so we need the exchange always open for synchronous fills.
+            spy.Exchange = new SecurityExchange(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork));
+            aapl.Exchange = new SecurityExchange(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork));
+            // BacktestingBrokerage fills market orders at the current market price.
             spy.SetMarketPrice(new TradeBar { Value = 250m, Time = algorithm.UtcTime });
             aapl.SetMarketPrice(new TradeBar { Value = 250m, Time = algorithm.UtcTime });
 
-            // Give the algorithm 200 shares of SPY (=$50k), very little cash.
+            // Give the algorithm 200 shares of SPY (=$50k), very little cash ($500).
             spy.Holdings.SetHoldings(250m, 200);
             algorithm.Portfolio.SetCash(500m);
+            var cashBefore = algorithm.Portfolio.Cash;
 
             algorithm.SetFinishedWarmingUp();
 
-            var orderProcessor = GetAndSetBrokerageTransactionHandler(algorithm, out var brokerage);
+            var orderProcessor = GetAndSetBacktestingTransactionHandler(algorithm, out var brokerage);
             try
             {
+                // synchronous: each MarketOrder blocks until filled (cash credited before next order).
                 var model = new AShareT1SequentialExecutionModel(asynchronous: false);
                 algorithm.SetExecution(model);
 
@@ -107,16 +125,24 @@ namespace QuantConnect.Tests.Algorithm
                 model.Execute(algorithm, targets);
                 orderProcessor.ProcessSynchronousEvents();
 
-                var orders = orderProcessor.GetOrders().ToList();
-                // The SPY sell must have been submitted.
-                Assert.IsTrue(orders.Any(o => o.Symbol == Symbols.SPY && o.Quantity < 0),
-                    "SPY sell order was not submitted");
-                // The AAPL buy must have been submitted — proving the SPY sell freed
-                // cash before the buy's buying-power check ran. Without sell-first
-                // ordering, the $500 cash would not cover 100 * $250 = $25k and the
-                // buy would be skipped.
-                Assert.IsTrue(orders.Any(o => o.Symbol == Symbols.AAPL && o.Quantity > 0),
-                    "AAPL buy order was not submitted — sell did not free cash for the buy");
+                // 1. The SPY sell FILLED: holdings liquidated, cash credited.
+                Assert.AreEqual(0m, algorithm.Portfolio[Symbols.SPY].Quantity,
+                    "SPY sell did not fill — holdings not liquidated");
+                Assert.Greater(algorithm.Portfolio.Cash, cashBefore,
+                    "SPY sell did not credit cash — fill pipeline not engaged");
+                // Sell proceeds: 200 * 250 = 50000 credited. Cash before was 500.
+                // 500 + 50000 = 50500 before the AAPL buy. The fact that Cash is now
+                // ~25500 (not ~50500) proves the AAPL buy ALSO filled (cost 25000),
+                // spending the freed cash — exactly the sell-frees-cash-for-buy path.
+                Assert.That(algorithm.Portfolio.Cash,
+                    Is.GreaterThan(24000m).And.LessThan(27000m),
+                    $"Expected ~25500 (500 + 50000 sell - 25000 buy - fees); Cash={algorithm.Portfolio.Cash}");
+
+                // 2. The AAPL buy FILLED against the freed cash. Without sell-before-buy
+                //    the buy would be invalidated (Insufficient buying power) and
+                //    Portfolio[AAPL].Quantity would stay 0.
+                Assert.AreEqual(100m, algorithm.Portfolio[Symbols.AAPL].Quantity,
+                    "AAPL buy did not fill — sell did not free cash for the buy");
             }
             finally
             {
@@ -125,11 +151,15 @@ namespace QuantConnect.Tests.Algorithm
             }
         }
 
-        internal static BrokerageTransactionHandler GetAndSetBrokerageTransactionHandler(
-            IAlgorithm algorithm, out NullBrokerage brokerage)
+        // Wires the REAL backtest fill pipeline: BacktestingTransactionHandler +
+        // BacktestingBrokerage. BacktestingBrokerage.Scan fills market orders
+        // synchronously and fires OrdersStatusChanged -> Portfolio.ProcessFills,
+        // crediting cash. This is the same pipeline the production backtest uses.
+        internal static BacktestingTransactionHandler GetAndSetBacktestingTransactionHandler(
+            IAlgorithm algorithm, out BacktestingBrokerage brokerage)
         {
-            brokerage = new NullBrokerage();
-            var orderProcessor = new BrokerageTransactionHandler();
+            brokerage = new BacktestingBrokerage(algorithm);
+            var orderProcessor = new BacktestingTransactionHandler();
             orderProcessor.Initialize(algorithm, brokerage, new BacktestingResultHandler());
             algorithm.Transactions.SetOrderProcessor(orderProcessor);
             algorithm.Transactions.MarketOrderFillTimeout = TimeSpan.Zero;
