@@ -40,6 +40,31 @@ namespace QuantConnect.Factors.Store
             store.Register("amplitude_anomaly", new RParquetAdapter("factor-zoo/amplitude_anomaly", "amplitude_anomaly"));
             store.Register("limit_behavior", new RParquetAdapter("factor-zoo/limit_behavior", "limit_behavior"));
             store.Register("intraday_reversal", new RParquetAdapter("factor-zoo/intraday_reversal", "intraday_reversal"));
+
+            // Phase-5 fundamental / anomaly factors (built to result/factor-zoo/<fid>/<date>.parquet,
+            // value column == fid). Previously built but unregistered — catalog↔built↔registered gap.
+            foreach (var fid in new[] {
+                "accruals_sloan", "gross_profitability", "asset_growth", "roe_change",
+                "ivol_20d", "max_ret_20d", "short_term_reversal"
+            })
+            {
+                store.Register(fid, new RParquetAdapter($"factor-zoo/{fid}", fid));
+            }
+
+            // Margin / short-selling factors: one parquet dir (factor-zoo/margin_factors) holds
+            // 5 value columns. Register each sub-fid as its own adapter pointing at the same dir.
+            foreach (var col in new[] {
+                "margin_balance_change", "short_balance_change", "margin_buy_ratio",
+                "short_sell_ratio", "margin_short_ratio"
+            })
+            {
+                store.Register(col, new RParquetAdapter("factor-zoo/margin_factors", col));
+            }
+
+            // Technical indicators (48 fids): dir == value column == fid (e.g. tech_macd).
+            // Mirrors Alpha101FactorRegistration's per-fid RParquetAdapter pattern.
+            TechnicalFactorRegistration.Register(store);
+
             // Alpha101: 101 个独立 id (单点读, LLM/人工点名哪个读哪个)
             Alpha101FactorRegistration.Register(store);
         }

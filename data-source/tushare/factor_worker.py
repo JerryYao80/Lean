@@ -177,6 +177,33 @@ def _build_crowding(date_compact: str) -> dict:
     return {"rows": int(len(df)), "duration_ms": int((time.perf_counter() - started) * 1000)}
 
 
+def _max_factorzoo_date(root: Path) -> str | None:
+    """Max built date under a factor-zoo dir -> compact YYYYMMDD, or None if empty.
+
+    Supports BOTH on-disk layouts (the builder switched from date-subdirs to flat
+    parquet files; older code only scanned subdirs and returned None for the flat
+    layout, causing the daemon/backfill to treat factors as "never built" and
+    rebuild every date from scratch):
+      - Flat:   <root>/<YYYY-MM-DD>.parquet   (current alpha101/technical/Phase-5)
+      - Subdir: <root>/<YYYY-MM-DD>/           (legacy / crowding-factor)
+    """
+    if not root.exists():
+        return None
+    best: str | None = None
+    for entry in root.iterdir():
+        name = entry.stem if entry.is_file() and entry.suffix == ".parquet" else entry.name
+        if entry.is_file() and entry.suffix != ".parquet":
+            continue
+        try:
+            datetime.strptime(name, "%Y-%m-%d")
+        except ValueError:
+            continue
+        compact = name.replace("-", "")
+        if best is None or compact > best:
+            best = compact
+    return best
+
+
 def _resolve_crowding_latest() -> str | None:
     """Max yyyy-MM-dd dir under result/crowding-factor/ -> compact YYYYMMDD."""
     root = Path(CROWDING_RESULT_ROOT) / "crowding-factor"
@@ -245,20 +272,7 @@ def _make_factorzoo_builder(module_name: str, factor_id: str):
 
     def _resolve() -> str | None:
         root = Path(CROWDING_RESULT_ROOT) / "factor-zoo" / factor_id
-        if not root.exists():
-            return None
-        best: str | None = None
-        for sub in root.iterdir():
-            if not sub.is_dir():
-                continue
-            try:
-                datetime.strptime(sub.name, "%Y-%m-%d")
-            except ValueError:
-                continue
-            compact = sub.name.replace("-", "")
-            if best is None or compact > best:
-                best = compact
-        return best
+        return _max_factorzoo_date(root)
 
     return _build, _resolve
 
@@ -290,20 +304,7 @@ def _make_alpha101_group():
 
     def _resolve() -> str | None:
         root = Path(CROWDING_RESULT_ROOT) / "factor-zoo" / "alpha001"
-        if not root.exists():
-            return None
-        best: str | None = None
-        for sub in root.iterdir():
-            if not sub.is_dir():
-                continue
-            try:
-                datetime.strptime(sub.name, "%Y-%m-%d")
-            except ValueError:
-                continue
-            compact = sub.name.replace("-", "")
-            if best is None or compact > best:
-                best = compact
-        return best
+        return _max_factorzoo_date(root)
 
     return _build, _resolve
 
@@ -342,20 +343,7 @@ def _make_technical_group():
 
     def _resolve() -> str | None:
         root = Path(CROWDING_RESULT_ROOT) / "factor-zoo" / "tech_macd"
-        if not root.exists():
-            return None
-        best: str | None = None
-        for sub in root.iterdir():
-            if not sub.is_dir():
-                continue
-            try:
-                datetime.strptime(sub.name, "%Y-%m-%d")
-            except ValueError:
-                continue
-            compact = sub.name.replace("-", "")
-            if best is None or compact > best:
-                best = compact
-        return best
+        return _max_factorzoo_date(root)
 
     return _build, _resolve
 
@@ -378,10 +366,7 @@ _BLD_TURNOVER, _RES_TURNOVER = _make_factorzoo_builder("turnover_anomaly_builder
 _BLD_AMPLITUDE, _RES_AMPLITUDE = _make_factorzoo_builder("amplitude_anomaly_builder", "amplitude_anomaly")
 _BLD_LIMIT, _RES_LIMIT = _make_factorzoo_builder("limit_behavior_builder", "limit_behavior")
 _BLD_INTRADAY, _RES_INTRADAY = _make_factorzoo_builder("intraday_reversal_builder", "intraday_reversal")
-# Margin trading factors (融资融券多空因子)
-_BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
-_BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
-# Margin trading factors (融资融券多空因子)
+# Margin trading factors (融资融券多空因子) — single registration
 _BLD_MARGIN, _RES_MARGIN = _make_factorzoo_builder("margin_factors_builder", "margin_factors")
 
 
@@ -474,64 +459,64 @@ BUILDERS: list[FactorBuilder] = [
     FactorBuilder(
         factor_id="accruals_sloan",
         build_callable=_BLD_ACCRUALS, latest_date_resolver=_RES_ACCRUALS,
-        depends_on=("balancesheet", "cashflow"), max_backfill_days=1,
+        depends_on=("balancesheet", "cashflow"), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="gross_profitability",
         build_callable=_BLD_GP, latest_date_resolver=_RES_GP,
-        depends_on=("income", "balancesheet"), max_backfill_days=1,
+        depends_on=("income", "balancesheet"), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="asset_growth",
         build_callable=_BLD_AG, latest_date_resolver=_RES_AG,
-        depends_on=("balancesheet", "stock_basic"), max_backfill_days=1,
+        depends_on=("balancesheet", "stock_basic"), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="roe_change",
         build_callable=_BLD_ROECH, latest_date_resolver=_RES_ROECH,
-        depends_on=("fina_indicator",), max_backfill_days=1,
+        depends_on=("fina_indicator",), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="ivol_20d",
         build_callable=_BLD_IVOL, latest_date_resolver=_RES_IVOL,
-        depends_on=("daily", "adj_factor", "index_daily"), max_backfill_days=60,
+        depends_on=("daily", "adj_factor", "index_daily"), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="max_ret_20d",
         build_callable=_BLD_MAXRET, latest_date_resolver=_RES_MAXRET,
-        depends_on=("daily",), max_backfill_days=60,
+        depends_on=("daily",), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="short_term_reversal",
         build_callable=_BLD_REVERSAL, latest_date_resolver=_RES_REVERSAL,
-        depends_on=("daily", "adj_factor"), max_backfill_days=60,
+        depends_on=("daily", "adj_factor"), max_backfill_days=5000,
     ),
     # ── Manipulation detection factors ──
     FactorBuilder(
         factor_id="turnover_anomaly",
         build_callable=_BLD_TURNOVER, latest_date_resolver=_RES_TURNOVER,
-        depends_on=("daily_basic",), max_backfill_days=60,
+        depends_on=("daily_basic",), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="amplitude_anomaly",
         build_callable=_BLD_AMPLITUDE, latest_date_resolver=_RES_AMPLITUDE,
-        depends_on=("daily",), max_backfill_days=60,
+        depends_on=("daily",), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="limit_behavior",
         build_callable=_BLD_LIMIT, latest_date_resolver=_RES_LIMIT,
-        depends_on=("limit_list_d",), max_backfill_days=60,
+        depends_on=("limit_list_d",), max_backfill_days=5000,
     ),
     FactorBuilder(
         factor_id="intraday_reversal",
         build_callable=_BLD_INTRADAY, latest_date_resolver=_RES_INTRADAY,
-        depends_on=("daily",), max_backfill_days=60,
+        depends_on=("daily",), max_backfill_days=5000,
     ),
     # ── Margin trading factors (融资融券多空因子) ──
     FactorBuilder(
         factor_id="margin_factors",
         build_callable=_BLD_MARGIN, latest_date_resolver=_RES_MARGIN,
-        depends_on=("margin_detail",), max_backfill_days=60,
+        depends_on=("margin_detail",), max_backfill_days=5000,
     ),
     # ── Alpha101 group (101 WorldQuant alphas, panel-loaded-once) ──
     FactorBuilder(
@@ -539,7 +524,7 @@ BUILDERS: list[FactorBuilder] = [
         build_callable=_BLD_ALPHA101,
         latest_date_resolver=_RES_ALPHA101,
         depends_on=("daily", "adj_factor", "daily_basic", "index_member_all"),
-        max_backfill_days=60,
+        max_backfill_days=5000,
     ),
     # ── Technical group (48 qfq indicators from stk_factor_pro) ──
     FactorBuilder(
@@ -547,7 +532,7 @@ BUILDERS: list[FactorBuilder] = [
         build_callable=_BLD_TECHNICAL,
         latest_date_resolver=_RES_TECHNICAL,
         depends_on=("stk_factor_pro",),
-        max_backfill_days=60,
+        max_backfill_days=5000,
     ),
 ]
 
@@ -555,8 +540,7 @@ BUILDERS: list[FactorBuilder] = [
 def _queue_pending_dates(t_f: str | None, t_cal: str, max_days: int) -> list[str]:
     """Return compact YYYYMMDD open dates in (T_f, T_cal], capped at max_days.
 
-    If T_f is None (never built), queue just the latest open day <= t_cal
-    (don't bootstrap history).
+    If T_f is None (never built), backfill ALL available history up to max_days.
     Uses trade_cal to enumerate ONLY open days.
     """
     import pandas as pd
@@ -576,9 +560,6 @@ def _queue_pending_dates(t_f: str | None, t_cal: str, max_days: int) -> list[str
         LOGGER.warning("Backlog %d days exceeds cap %d; truncating to latest %d",
                        len(open_days), max_days, max_days)
         open_days = open_days[-max_days:]
-    if t_f is None and open_days:
-        # never built -> only build the latest day, not history
-        open_days = [open_days[-1]]
     return open_days
 
 

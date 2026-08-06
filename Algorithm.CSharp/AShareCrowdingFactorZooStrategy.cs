@@ -31,7 +31,7 @@
  *   对 A股是错的 (T+1 settlement, 印花税, 整手 100, 涨跌停板等). 必须在
  *   AShareCSI300UniverseSelectionModel 添加 equity 之前调用 security initializer 安装 A股股票模型,
  *   这样 universe 后续添加的每只 equity 都会自动套上:
- *     - AShareStockFeeModel        (佣金万2.5 + 印花税 + 过户费)
+ *     - AShareStockFeeModel        (佣金万3 + 印花税千0.5 + 过户费万0.1)
  *     - AShareStockFillModel       (涨跌停板不成交)
  *     - AShareStockBuyingPowerModel(100 股整手, T+1 不可卖)
  *     - DelayedSettlementModel(1, 09:00)  (T+1 结算, 隔日 09:00 到账)
@@ -174,33 +174,7 @@ namespace QuantConnect.Algorithm.CSharp
                 DateTimeStyles.None, out parsed) ? parsed : defaultValue;
         }
 
-        /// <summary>
-        /// A股股票 SecurityInitializer — 为 SSE/SZSE Equity 安装 A股股票模型.
-        /// 零侵入 — 仅通过 SetSecurityInitializer 注册, 不修改 LEAN 原生. 安全: universe 后续
-        /// 添加 plain Equity 时此 initializer 回调, 为每只 SSE/SZSE 股票装 A-share 模型.
-        /// 镜像 OptionVolArb5LayerStrategy.AShareETFSecurityInitializer (line 366-380)
-        /// 但用于 STOCKS 而非 ETF, 参考 AShareBarraCNE5Algorithm:201-204:
-        ///   - AShareStockFeeModel        (佣金万2.5 + 印花税 + 过户费)
-        ///   - AShareStockFillModel       (涨跌停板不成交)
-        ///   - AShareStockBuyingPowerModel(100 股整手, T+1 不可卖)
-        ///   - DelayedSettlementModel(1, 09:00)  (T+1 结算, 隔日 09:00 到账)
-        /// </summary>
-        private class AShareStockSecurityInitializer : ISecurityInitializer
-        {
-            public void Initialize(Security security)
-            {
-                if (security.Symbol.ID.Market != Market.SSE && security.Symbol.ID.Market != Market.SZSE) return;
-                if (security.Type != SecurityType.Equity) return;
-
-                // A股股票费率: 佣金万2.5 (min 5元) + 印花税千1 (卖) + 过户费万0.1.
-                security.FeeModel = new AShareStockFeeModel();
-                // A股股票成交: 涨跌停板不成交, 集合竞价等.
-                security.FillModel = new AShareStockFillModel();
-                // A股股票购买力: 100 股整手, T+1 不可卖 (当日买入不可卖).
-                security.BuyingPowerModel = new AShareStockBuyingPowerModel();
-                // A股股票结算: T+1 (隔日 09:00 资金到账).
-                security.SetSettlementModel(new DelayedSettlementModel(1, TimeSpan.FromHours(9)));
-            }
-        }
+        // AShareStockSecurityInitializer is now a shared public class in
+        // QuantConnect.Securities (Common/Securities/AShareStockSecurityInitializer.cs).
     }
 }
