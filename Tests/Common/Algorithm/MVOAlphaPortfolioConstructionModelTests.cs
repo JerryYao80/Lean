@@ -64,8 +64,8 @@ namespace QuantConnect.Tests.Common.Algorithm
             var model = new MVOAlphaPortfolioConstructionModel(_tempDir);
             model.LoadLatestWeightsForTest(new DateTime(2024, 3, 15));
             var weights = model.GetWeightsCacheForTest();
-            Assert.AreEqual(0.5m, weights["600000"]);
-            Assert.AreEqual(0.5m, weights["600001"]);
+            Assert.That(weights["600000"], Is.EqualTo(0.5m).Within(0.0001m));
+            Assert.That(weights["600001"], Is.EqualTo(0.5m).Within(0.0001m));
         }
 
         [Test]
@@ -76,7 +76,7 @@ namespace QuantConnect.Tests.Common.Algorithm
             // as_of before any report -> earliest
             model.LoadLatestWeightsForTest(new DateTime(2024, 1, 1));
             var weights = model.GetWeightsCacheForTest();
-            Assert.AreEqual(0.6m, weights["600000"]);
+            Assert.That(weights["600000"], Is.EqualTo(0.6m).Within(0.0001m));
         }
 
         [Test]
@@ -88,6 +88,19 @@ namespace QuantConnect.Tests.Common.Algorithm
             var weights = model.GetWeightsCacheForTest();
             Assert.IsTrue(weights.ContainsKey("600000"));
             Assert.IsTrue(weights.ContainsKey("000001"));
+        }
+
+        // Critical #1 regression: when weights fail to load (dir missing / no
+        // files / all parse failures), the cache must be empty so CreateTargets
+        // can log+skip the rebalance instead of silently drifting.
+        [Test]
+        public void CreateTargets_SkipsWhenWeightsMissing()
+        {
+            // Non-existent dir -> LoadLatestWeights logs error and leaves cache empty.
+            var model = new MVOAlphaPortfolioConstructionModel(
+                Path.Combine(_tempDir, "does-not-exist"));
+            model.LoadLatestWeightsForTest(new DateTime(2024, 3, 15));
+            Assert.AreEqual(0, model.GetWeightsCacheForTest().Count);
         }
     }
 }

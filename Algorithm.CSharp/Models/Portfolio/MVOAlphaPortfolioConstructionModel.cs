@@ -31,9 +31,13 @@ namespace QuantConnect.Algorithm.CSharp.Models.Portfolio
     {
         private readonly string _mvoWeightsDir;
         private readonly decimal _minWeight;
+        // Kept for API compatibility (strategy passes it). Actual rebalance cadence
+        // is monthly via _rebalanceMonths (MVO weights are monthly) — see IsRebalanceMonth.
         private readonly Resolution _rebalanceResolution;
+        private readonly int _rebalanceMonths;
 
-        private DateTime? _lastRebalanceTime;
+        private int _lastRebalanceYear = -1;
+        private int _lastRebalanceMonth = -1;
         // Keyed by bare ticker (Symbol.Value), e.g. "600000" — exchange suffix stripped.
         private Dictionary<string, decimal> _weightsCache = new();
         private DateTime _weightsAsOf = DateTime.MinValue;
@@ -41,20 +45,30 @@ namespace QuantConnect.Algorithm.CSharp.Models.Portfolio
         public MVOAlphaPortfolioConstructionModel(
             string mvoWeightsDir,
             decimal minWeight = 0.0m,
-            Resolution rebalanceResolution = Resolution.Daily)
+            Resolution rebalanceResolution = Resolution.Daily,
+            int rebalanceMonths = 1)
         {
             _mvoWeightsDir = mvoWeightsDir ?? throw new ArgumentNullException(nameof(mvoWeightsDir));
             _minWeight = minWeight;
             _rebalanceResolution = rebalanceResolution;
+            _rebalanceMonths = rebalanceMonths;
         }
 
         public override List<PortfolioTarget> CreateTargets(QCAlgorithm algorithm, Insight[] insights)
         {
             var targets = new List<PortfolioTarget>();
-            if (!ShouldRebalance(algorithm.Time)) return targets;
+            if (!IsRebalanceMonth(algorithm.Time)) return targets;
             if (insights.Length == 0) return targets;
 
             LoadLatestWeights(algorithm.Time);
+
+            // Critical: visible degradation when weights failed to load (mirrors
+            // ICWeightedAlphaModelV2.Update caller-side null-check-and-log).
+            if (_weightsCache.Count == 0)
+            {
+                algorithm.Debug($"[MVO-PCM] {algorithm.Time:yyyy-MM-dd}: no MVO weights available, skipping rebalance");
+                return targets;
+            }
 
             foreach (var insight in insights)
             {
@@ -66,7 +80,8 @@ namespace QuantConnect.Algorithm.CSharp.Models.Portfolio
                 }
             }
 
-            _lastRebalanceTime = algorithm.Time;
+            _lastRebalanceYear = algorithm.Time.Year;
+            _lastRebalanceMonth = algorithm.Time.Month;
             return targets;
         }
 
@@ -128,6 +143,11 @@ namespace QuantConnect.Algorithm.CSharp.Models.Portfolio
             _weightsCache = new Dictionary<string, decimal>();
             foreach (var s in chosen.Symbols ?? new List<MVOWeightSymbol>())
             {
+                if (string.IsNullOrEmpty(s.TsCode))
+                {
+                    Log.Error("[MVO-PCM] Null/empty ts_code in weights file, skipping entry");
+                    continue;
+                }
                 // Strip exchange suffix (.SH/.SZ) to match Symbol.Value (bare ticker)
                 var ticker = s.TsCode.Split('.')[0];
                 _weightsCache[ticker] = (decimal)s.Weight;
@@ -140,10 +160,12 @@ namespace QuantConnect.Algorithm.CSharp.Models.Portfolio
             }
         }
 
-        private bool ShouldRebalance(DateTime now)
+        private bool IsRebalanceMonth(DateTime now)
         {
-            if (_lastRebalanceTime == null) return true;
-            return now.Date != _lastRebalanceTime.Value.Date;
+            if (_lastRebalanceYear < 0) return true;
+            if (now.Year == _lastRebalanceYear && now.Month == _lastRebalanceMonth) return false;
+            var elapsed = (now.Year - _lastRebalanceYear) * 12 + (now.Month - _lastRebalanceMonth);
+            return elapsed >= _rebalanceMonths;
         }
 
         // --- test hooks ---
