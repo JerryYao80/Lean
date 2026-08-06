@@ -145,8 +145,13 @@ class MVOWeightExporter:
         alpha = alpha[symbols]
         ret = ret[symbols]
 
-        # Align on common dates (dropna how="any" on remaining rows).
-        ret = ret.dropna(axis=0, how="any")
+        # Align on common dates. Use how="all" (drop a date only if NO symbol has
+        # data) — how="any" would drop any date where a single stock was suspended,
+        # which on a 300-stock universe over 120 days collapses to near-zero rows.
+        # Per-symbol data quality is already enforced by the min_obs filter above;
+        # remaining gaps are handled by Ledoit-Wolf shrinkage (designed for the
+        # n < p / missing-data regime).
+        ret = ret.dropna(axis=0, how="all")
         symbols = alpha.index.intersection(ret.columns)
         if len(symbols) < 2:
             LOGGER.warning("Too few symbols after common-date alignment for %s", as_of)
@@ -155,7 +160,11 @@ class MVOWeightExporter:
         ret = ret[symbols]
 
         # C2: Require enough observations for a well-conditioned covariance.
-        min_rows = max(60, len(symbols) + 1)
+        # Fixed floor (NOT scaled by len(symbols)) — Ledoit-Wolf shrinkage
+        # explicitly handles the p > n regime; a len(symbols)+1 threshold makes
+        # MVO mathematically impossible for CSI300 (~300 symbols) with a 120-day
+        # cov_window (~120 trading rows).
+        min_rows = 60
         if len(ret) < min_rows:
             LOGGER.warning("Insufficient aligned rows (%d < %d) for %s; skipping",
                            len(ret), min_rows, as_of)
@@ -321,12 +330,26 @@ class MVOWeightExporter:
         Annualized (×252) so Σ is on the same scale as the annualized μ
         (±0.20 band). Without annualization the variance term is ~1000×
         smaller than μ'w and the optimizer ignores alpha (I4).
+
+        NaN handling: Ledoit-Wolf does not accept NaN. After the how="all"
+        row drop, individual symbols may still have NaN on suspended days.
+        Impute column-wise with each symbol's mean return (forward-fill
+        would leak future data; mean-fill is a conservative, no-lookahead
+        neutral imputation that preserves each symbol's first moment).
         """
+        arr = returns.values
+        if np.isnan(arr).any():
+            col_mean = np.nanmean(arr, axis=0)
+            # Guard against all-NaN columns (shouldn't happen post min_obs filter)
+            col_mean = np.where(np.isnan(col_mean), 0.0, col_mean)
+            inds = np.where(np.isnan(arr))
+            arr = arr.copy()
+            arr[inds] = np.take(col_mean, inds[1])
         try:
-            lw = LedoitWolf().fit(returns.values)
+            lw = LedoitWolf().fit(arr)
             cov = lw.covariance_
         except Exception:
-            cov = np.cov(returns.values, rowvar=False)
+            cov = np.cov(arr, rowvar=False)
         cov = np.atleast_2d(cov)
         cov = cov * 252.0  # annualize (252 trading days)
         cov += np.eye(cov.shape[0]) * 1e-8  # ridge for PD stability
