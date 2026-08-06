@@ -136,6 +136,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Alpha
                           + $"falling back to earliest {earliestDate:yyyy-MM-dd}");
                 return earliest;
             }
+            Log.Error($"[ICWeightedAlphaV2] All {files.Length} IC report(s) in {_icReportDir} failed to parse");
             return null;
         }
 

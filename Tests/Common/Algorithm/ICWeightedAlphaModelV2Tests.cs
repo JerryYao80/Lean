@@ -105,5 +105,20 @@ namespace QuantConnect.Tests.Common.Algorithm
             Assert.IsNotNull(report);
             Assert.AreEqual("2024-01-31", report.ReportDate);
         }
+
+        [Test]
+        public void LoadLatestReport_AllFilesCorrupt_ReturnsNullAndLogs()
+        {
+            // Two corrupt files, no valid ones — should return null (not crash).
+            File.WriteAllText(Path.Combine(_tempDir, "ic_report_2024-01-31.json"),
+                "{ broken");
+            File.WriteAllText(Path.Combine(_tempDir, "ic_report_2024-02-29.json"),
+                "not json at all }{");
+
+            var model = new ICWeightedAlphaModelV2(_tempDir);
+            ICReport report = null;
+            Assert.DoesNotThrow(() => report = model.LoadLatestReport(new DateTime(2024, 6, 30)));
+            Assert.IsNull(report, "all-corrupt dir should yield null, not crash");
+        }
     }
 }
