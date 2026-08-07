@@ -59,6 +59,93 @@ def _month_end_dates(start: str, end: str) -> list[str]:
     return dates
 
 
+class ICovarianceProvider:
+    """Abstract covariance source for MVO. Decouples Sigma estimation from the
+    optimizer — multiple strategies can share one MVO exporter with different
+    Sigma sources (historical sample cov vs Barra structured cov)."""
+
+    def estimate(self, symbols: list[str], as_of: str,
+                 returns: pd.DataFrame | None = None) -> tuple[np.ndarray, dict]:
+        """Return (sigma NxN, meta dict with 'cov_source')."""
+        raise NotImplementedError
+
+
+class HistoricalCovarianceProvider(ICovarianceProvider):
+    """Ledoit-Wolf shrinkage sample covariance of trailing returns (P2-B default).
+    Behavior identical to MVOWeightExporter._estimate_covariance."""
+
+    def estimate(self, symbols: list[str], as_of: str,
+                 returns: pd.DataFrame | None = None) -> tuple[np.ndarray, dict]:
+        if returns is None:
+            raise ValueError("HistoricalCovarianceProvider requires returns")
+        arr = returns.values
+        if np.isnan(arr).any():
+            col_mean = np.nanmean(arr, axis=0)
+            col_mean = np.where(np.isnan(col_mean), 0.0, col_mean)
+            inds = np.where(np.isnan(arr))
+            arr = arr.copy()
+            arr[inds] = np.take(col_mean, inds[1])
+        try:
+            lw = LedoitWolf().fit(arr)
+            cov = lw.covariance_
+        except Exception:
+            cov = np.cov(arr, rowvar=False)
+        cov = np.atleast_2d(cov)
+        cov = cov * 252.0
+        cov += np.eye(cov.shape[0]) * 1e-8
+        return cov, {"cov_source": "historical"}
+
+
+class BarraCovarianceProvider(ICovarianceProvider):
+    """Structured covariance from Barra factor risk: Sigma = B_t Sigma_f B_t' + diag(Delta).
+    Reads barra_risk_YYYY-MM-DD.json produced by export_barra_risk.py.
+    Loads latest file <= as_of (no lookahead — risk data estimated strictly before as_of)."""
+
+    def __init__(self, barra_risk_dir: str):
+        self.barra_risk_dir = Path(barra_risk_dir)
+
+    def estimate(self, symbols: list[str], as_of: str,
+                 returns: pd.DataFrame | None = None) -> tuple[np.ndarray, dict]:
+        risk = self._load_latest_barra_risk(as_of)
+        if risk is None:
+            raise ValueError(f"No barra_risk data <= {as_of} in {self.barra_risk_dir}")
+        sigma_f = np.array(risk["sigma_f"], dtype=float)
+        delta_dict = risk.get("delta", {})
+        expo_dict = risk.get("exposures", {})
+        n = len(symbols)
+        B = np.zeros((n, sigma_f.shape[0]))
+        delta = np.zeros(n)
+        for i, s in enumerate(symbols):
+            if s in expo_dict:
+                B[i] = np.array(expo_dict[s], dtype=float)
+            delta[i] = float(delta_dict.get(s, 0.0))  # missing -> 0 (conservative)
+        sigma = B @ sigma_f @ B.T + np.diag(delta)
+        sigma += np.eye(n) * 1e-8
+        return sigma, {"cov_source": "barra", "barra_risk_used": risk["as_of"]}
+
+    def _load_latest_barra_risk(self, as_of: str) -> dict | None:
+        if not self.barra_risk_dir.exists():
+            return None
+        as_of_dt = datetime.strptime(as_of, "%Y-%m-%d")
+        best_dt = None
+        best_path = None
+        for p in self.barra_risk_dir.glob("barra_risk_*.json"):
+            ds = p.stem[len("barra_risk_"):]
+            try:
+                dt = datetime.strptime(ds, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if dt <= as_of_dt and (best_dt is None or dt > best_dt):
+                best_dt, best_path = dt, p
+        if best_path is None:
+            return None
+        try:
+            return json.loads(best_path.read_text())
+        except Exception:
+            LOGGER.exception("Failed to parse %s", best_path)
+            return None
+
+
 class MVOWeightExporter:
     """Offline MVO weight exporter (expanding-window, no lookahead)."""
 
@@ -71,6 +158,7 @@ class MVOWeightExporter:
         max_weight: float = 0.10,
         risk_aversion: float = 1.0,
         factor_root: str | None = None,
+        cov_provider: ICovarianceProvider | None = None,
     ):
         self.ic_report_dir = Path(ic_report_dir)
         self.daily_data_dir = Path(daily_data_dir)
@@ -79,6 +167,7 @@ class MVOWeightExporter:
         self.max_weight = max_weight
         self.risk_aversion = risk_aversion
         self._panel_loader = FactorPanelLoader(factor_root) if factor_root else None
+        self._cov_provider = cov_provider or HistoricalCovarianceProvider()
 
     # --- public ---
 
@@ -171,7 +260,7 @@ class MVOWeightExporter:
             return None
 
         mu = self._alpha_to_mu(alpha.values)
-        sigma = self._estimate_covariance(ret)
+        sigma, cov_meta = self._cov_provider.estimate(symbols.tolist(), as_of, returns=ret)
         weights, fallback = self._solve_mvo(mu, sigma, symbols.tolist())
         # C3: infeasible -> empty weights dict -> skip
         if not weights:
@@ -187,6 +276,8 @@ class MVOWeightExporter:
             "n_assets": len(weights),
             "ic_report_used": report_name,
             "fallback": fallback,
+            "cov_source": cov_meta.get("cov_source", "historical"),
+            "barra_risk_used": cov_meta.get("barra_risk_used"),
         }
 
     # --- data loading (overridable in tests) ---
@@ -325,35 +416,13 @@ class MVOWeightExporter:
         return (pct - 0.5) * 0.40
 
     def _estimate_covariance(self, returns: pd.DataFrame) -> np.ndarray:
-        """Ledoit-Wolf shrinkage covariance + tiny ridge for PD stability.
-
-        Annualized (×252) so Σ is on the same scale as the annualized μ
-        (±0.20 band). Without annualization the variance term is ~1000×
-        smaller than μ'w and the optimizer ignores alpha (I4).
-
-        NaN handling: Ledoit-Wolf does not accept NaN. After the how="all"
-        row drop, individual symbols may still have NaN on suspended days.
-        Impute column-wise with each symbol's mean return (forward-fill
-        would leak future data; mean-fill is a conservative, no-lookahead
-        neutral imputation that preserves each symbol's first moment).
-        """
-        arr = returns.values
-        if np.isnan(arr).any():
-            col_mean = np.nanmean(arr, axis=0)
-            # Guard against all-NaN columns (shouldn't happen post min_obs filter)
-            col_mean = np.where(np.isnan(col_mean), 0.0, col_mean)
-            inds = np.where(np.isnan(arr))
-            arr = arr.copy()
-            arr[inds] = np.take(col_mean, inds[1])
-        try:
-            lw = LedoitWolf().fit(arr)
-            cov = lw.covariance_
-        except Exception:
-            cov = np.cov(arr, rowvar=False)
-        cov = np.atleast_2d(cov)
-        cov = cov * 252.0  # annualize (252 trading days)
-        cov += np.eye(cov.shape[0]) * 1e-8  # ridge for PD stability
-        return cov
+        """Delegate to the configured covariance provider (default historical).
+        Kept for backward compatibility with P2-B regression tests. Robust to
+        __new__ bypass (tests) — falls back to a fresh HistoricalCovarianceProvider
+        when _cov_provider was never set."""
+        provider = getattr(self, "_cov_provider", None) or HistoricalCovarianceProvider()
+        sigma, _ = provider.estimate(returns.columns.tolist(), "", returns=returns)
+        return sigma
 
     def _solve_mvo(self, mu: np.ndarray, sigma: np.ndarray,
                    symbols: list[str]) -> tuple[dict, str | None]:
@@ -427,16 +496,23 @@ def main() -> int:
     parser.add_argument("--risk-aversion", type=float, default=1.0)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--covariance-source", choices=["historical", "barra"], default="historical")
+    parser.add_argument("--barra-risk-dir", default="/home/project/hope/Lean/result/barra-risk")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     month_ends = _month_end_dates(args.start, args.end)
     LOGGER.info("Exporting MVO weights for %d month-ends", len(month_ends))
 
+    if args.covariance_source == "barra":
+        cov_provider = BarraCovarianceProvider(barra_risk_dir=args.barra_risk_dir)
+    else:
+        cov_provider = HistoricalCovarianceProvider()
     exporter = MVOWeightExporter(
         ic_report_dir=args.ic_report_dir, daily_data_dir=args.daily_dir,
         adj_factor_dir=args.adj_dir, cov_window=args.cov_window,
-        max_weight=args.max_weight, risk_aversion=args.risk_aversion)
+        max_weight=args.max_weight, risk_aversion=args.risk_aversion,
+        cov_provider=cov_provider)
     written = exporter.export_for_dates(month_ends, args.out_dir, force=args.force)
     LOGGER.info("Done: %d JSON files written to %s", len(written), args.out_dir)
     return 0

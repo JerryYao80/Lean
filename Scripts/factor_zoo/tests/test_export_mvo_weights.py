@@ -176,3 +176,56 @@ def test_min_obs_filter_drops_short_history(tmp_path):
     ts_codes = [s["ts_code"] for s in payload["symbols"]]
     assert symbols[0] not in ts_codes, "short-history symbol should be dropped"
     assert len(payload["symbols"]) == 4
+
+
+def test_historical_provider_backward_compatible(tmp_path):
+    """HistoricalCovarianceProvider must produce identical sigma to P2-B _estimate_covariance."""
+    from export_mvo_weights import HistoricalCovarianceProvider, MVOWeightExporter
+    rng = np.random.default_rng(3)
+    returns = pd.DataFrame(rng.normal(0, 0.01, (120, 10)),
+                           columns=[f"s{i}" for i in range(10)])
+    exporter = MVOWeightExporter.__new__(MVOWeightExporter)
+    sigma_old = exporter._estimate_covariance(returns)
+    provider = HistoricalCovarianceProvider()
+    sigma_new, meta = provider.estimate(returns.columns.tolist(), "2024-01-31", returns=returns)
+    np.testing.assert_allclose(sigma_new, sigma_old, atol=1e-12)
+    assert meta["cov_source"] == "historical"
+
+
+def test_barra_provider_constructs_structured_covariance(tmp_path):
+    """BarraCovarianceProvider: Sigma = B_t Sigma_f B_t' + diag(Delta)."""
+    from export_mvo_weights import BarraCovarianceProvider
+    sigma_f = np.array([[0.04, 0.01], [0.01, 0.09]])
+    delta = {"s0": 0.10, "s1": 0.20, "s2": 0.15}
+    exposures = {"s0": [1.0, 0.5], "s1": [0.5, 1.0], "s2": [1.0, 1.0]}
+    risk_file = tmp_path / "barra_risk_2024-01-31.json"
+    risk_file.write_text(json.dumps({
+        "as_of": "2024-01-31", "factors": ["f0", "f1"],
+        "sigma_f": sigma_f.tolist(), "delta": delta, "exposures": exposures,
+        "est_window": 504, "decay_halflife": 252, "n_symbols": 3, "n_obs": 504, "fallback": None,
+    }))
+    provider = BarraCovarianceProvider(barra_risk_dir=str(tmp_path))
+    symbols = ["s0", "s1", "s2"]
+    sigma, meta = provider.estimate(symbols, "2024-01-31")
+    B = np.array([exposures[s] for s in symbols])
+    expected = B @ sigma_f @ B.T + np.diag([delta[s] for s in symbols])
+    np.testing.assert_allclose(sigma, expected, atol=1e-10)
+    assert meta["cov_source"] == "barra"
+    assert meta["barra_risk_used"] == "2024-01-31"
+
+
+def test_cli_covariance_source_arg(monkeypatch, tmp_path):
+    """main() --covariance-source barra wires BarraCovarianceProvider."""
+    import export_mvo_weights as mod
+    captured = {}
+    def fake_export(self, dates, out_dir, force=False):
+        captured["provider"] = type(self._cov_provider).__name__
+        return []
+    monkeypatch.setattr(mod.MVOWeightExporter, "export_for_dates", fake_export)
+    monkeypatch.setattr(mod, "_month_end_dates", lambda s, e: ["2024-01-31"])
+    argv = ["prog", "--start", "2024-01-31", "--end", "2024-01-31",
+            "--covariance-source", "barra", "--barra-risk-dir", str(tmp_path),
+            "--out-dir", str(tmp_path)]
+    monkeypatch.setattr("sys.argv", argv)
+    mod.main()
+    assert captured["provider"] == "BarraCovarianceProvider"
