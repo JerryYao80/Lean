@@ -128,3 +128,31 @@ def test_csv_to_tscode_mapping():
     assert BarraRiskExporter._csv_to_tscode(Path("/x/sse/daily/600519.csv")) == "600519.SH"
     assert BarraRiskExporter._csv_to_tscode(Path("/x/szse/daily/000858.csv")) == "000858.SZ"
     assert BarraRiskExporter._csv_to_tscode(Path("/x/other/daily/600519.csv")) is None
+
+
+def test_diagonal_fallback_when_few_symbols(tmp_path):
+    """spec §4.1: <30 symbols -> diagonal Sigma_f with fallback='diagonal'."""
+    exporter = BarraRiskExporter(factor_data_dir=str(tmp_path), daily_data_dir=str(tmp_path),
+                                 adj_factor_dir=str(tmp_path), est_window=504, decay_halflife=252)
+    rng = np.random.default_rng(1)
+    f_hat = rng.normal(0, 0.01, (100, 15))
+    residuals = rng.normal(0, 0.01, (100, 5))
+    all_symbols = [f"s{i}.SH" for i in range(5)]
+    # B_t with only 5 symbols (<30) -> triggers diagonal fallback
+    B_t = {f"s{i}.SH": rng.normal(0, 1, 15).tolist() for i in range(5)}
+
+    B_panel = {"20240101": pd.DataFrame(
+        {f"s{i}.SH": rng.normal(0, 1, 15) for i in range(5)})}
+    r_panel = pd.DataFrame(
+        {f"s{i}.SH": rng.normal(0, 0.01, 100) for i in range(5)})
+
+    exporter._load_factor_and_returns = lambda as_of, w: (B_panel, r_panel)
+    exporter._cross_sectional_regression_panel = lambda Bp, rp: (f_hat, residuals, all_symbols)
+    exporter._load_factor_exposure_asof = lambda as_of: B_t
+    payload = exporter._compute_risk_for_date("2024-01-31")
+    assert payload is not None
+    assert payload["fallback"] == "diagonal"
+    # diagonal Sigma_f: off-diagonal ~0
+    sf = np.array(payload["sigma_f"])
+    off_diag = sf - np.diag(np.diag(sf))
+    assert np.abs(off_diag).max() < 1e-12

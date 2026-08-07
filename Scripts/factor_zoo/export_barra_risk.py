@@ -118,6 +118,14 @@ class BarraRiskExporter:
         if B_t is None:
             LOGGER.warning("No as-of exposure for %s", as_of)
             return None
+        # spec §4.1: full-market cross-section <30 symbols -> diagonal Sigma_f
+        fallback = None
+        if len(B_t) < 30:
+            LOGGER.warning(
+                "Only %d symbols with as-of exposure for %s (<30); "
+                "falling back to diagonal Sigma_f", len(B_t), as_of)
+            sigma_f = np.diag(np.diag(sigma_f))
+            fallback = "diagonal"
         return {
             "as_of": as_of,
             "factors": FACTORS,
@@ -128,7 +136,7 @@ class BarraRiskExporter:
             "decay_halflife": int(self.decay_halflife),
             "n_symbols": len(B_t),
             "n_obs": int(f.shape[0]),
-            "fallback": None,
+            "fallback": fallback,
         }
 
     # --- regression ---
@@ -251,7 +259,7 @@ class BarraRiskExporter:
                         B_panel[d] = {}
                     B_panel[d][ts_code] = row[FACTORS].astype(float)
             except Exception:
-                LOGGER.debug("Failed factor load for %s", ts_code, exc_info=True)
+                LOGGER.warning("Failed factor load for %s", ts_code)
                 continue
         if not B_panel:
             return None, None
@@ -276,6 +284,7 @@ class BarraRiskExporter:
                                  index=df["trade_date"].values[1:])
                 r_frames[ts_code] = rets
             except Exception:
+                LOGGER.warning("Failed daily return load for %s", ts_code)
                 continue
         if not r_frames:
             return None, None
