@@ -106,7 +106,7 @@ class BarraCovarianceProvider(ICovarianceProvider):
 
     def estimate(self, symbols: list[str], as_of: str,
                  returns: pd.DataFrame | None = None) -> tuple[np.ndarray, dict]:
-        risk = self._load_latest_barra_risk(as_of)
+        risk, risk_filename = self._load_latest_barra_risk(as_of)
         if risk is None:
             raise ValueError(f"No barra_risk data <= {as_of} in {self.barra_risk_dir}")
         sigma_f = np.array(risk["sigma_f"], dtype=float)
@@ -115,17 +115,57 @@ class BarraCovarianceProvider(ICovarianceProvider):
         n = len(symbols)
         B = np.zeros((n, sigma_f.shape[0]))
         delta = np.zeros(n)
+        n_missing_expo = 0
+        n_missing_delta = 0
+        available_deltas = [float(v) for v in delta_dict.values()
+                            if not np.isnan(float(v))]
+        # Conservative: a missing symbol should be treated as HIGH-risk (avoid it),
+        # not zero-risk. Zero variance would make MVO concentrate max_weight into it.
+        # Use the cross-sectional median of available deltas as the floor; if no
+        # deltas are available at all, use a 0.05*252 annualized variance floor.
+        delta_floor = (float(np.median(available_deltas))
+                       if available_deltas else 0.05 * 252)
         for i, s in enumerate(symbols):
             if s in expo_dict:
                 B[i] = np.array(expo_dict[s], dtype=float)
-            delta[i] = float(delta_dict.get(s, 0.0))  # missing -> 0 (conservative)
+            else:
+                n_missing_expo += 1
+            if s in delta_dict and not np.isnan(float(delta_dict[s])):
+                delta[i] = float(delta_dict[s])
+            else:
+                # conservative: treat missing as high-variance (floored to median)
+                delta[i] = delta_floor
+                n_missing_delta += 1
+        if n_missing_expo > 0:
+            LOGGER.warning(
+                "BarraCovarianceProvider: %d/%d symbols missing factor exposure (zeroed)",
+                n_missing_expo, n)
+        if n_missing_delta > 0:
+            LOGGER.warning(
+                "BarraCovarianceProvider: %d/%d symbols missing specific variance "
+                "(floored to median %.4f)", n_missing_delta, n, delta_floor)
+        # A large fraction missing signals a systemic ticker-format mismatch
+        # (not individual missing stocks) — raise rather than emit garbage.
+        if n_missing_expo > n // 2:
+            raise ValueError(
+                f"BarraCovarianceProvider: {n_missing_expo}/{n} symbols missing "
+                f"exposure — likely ticker-format mismatch")
         sigma = B @ sigma_f @ B.T + np.diag(delta)
         sigma += np.eye(n) * 1e-8
-        return sigma, {"cov_source": "barra", "barra_risk_used": risk["as_of"]}
+        return sigma, {
+            "cov_source": "barra",
+            "barra_risk_used": risk_filename,
+        }
 
-    def _load_latest_barra_risk(self, as_of: str) -> dict | None:
+    def _load_latest_barra_risk(self, as_of: str) -> tuple[dict | None, str | None]:
+        """Return (risk_dict, filename) for the latest barra_risk_*.json <= as_of.
+
+        Returns (None, None) when no file <= as_of exists (legitimate "no data").
+        A corrupt JSON file RAISES ValueError — masking it as "no data" would
+        cause the caller to skip the month and the C# side to reuse stale
+        weights (lookahead-in-disguise)."""
         if not self.barra_risk_dir.exists():
-            return None
+            return None, None
         as_of_dt = datetime.strptime(as_of, "%Y-%m-%d")
         best_dt = None
         best_path = None
@@ -138,12 +178,13 @@ class BarraCovarianceProvider(ICovarianceProvider):
             if dt <= as_of_dt and (best_dt is None or dt > best_dt):
                 best_dt, best_path = dt, p
         if best_path is None:
-            return None
+            return None, None  # legitimate: no file <= as_of
+        # Corrupt file: raise (do NOT mask as "no data" -> stale-weight reuse)
         try:
-            return json.loads(best_path.read_text())
-        except Exception:
-            LOGGER.exception("Failed to parse %s", best_path)
-            return None
+            return json.loads(best_path.read_text()), best_path.name
+        except Exception as exc:
+            raise ValueError(
+                f"Corrupt barra_risk file {best_path}: {exc}") from exc
 
 
 class MVOWeightExporter:

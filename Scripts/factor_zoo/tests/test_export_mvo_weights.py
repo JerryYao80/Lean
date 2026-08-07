@@ -178,22 +178,37 @@ def test_min_obs_filter_drops_short_history(tmp_path):
     assert len(payload["symbols"]) == 4
 
 
-def test_historical_provider_backward_compatible(tmp_path):
-    """HistoricalCovarianceProvider must produce identical sigma to P2-B _estimate_covariance."""
-    from export_mvo_weights import HistoricalCovarianceProvider, MVOWeightExporter
+def test_historical_provider_matches_reference_formula(tmp_path):
+    """HistoricalCovarianceProvider must match the P2-B reference formula
+    (NaN col-mean impute -> LedoitWolf -> x252 -> +1e-8 ridge), computed
+    inline here so a regression in the provider is caught. The inline
+    reference is independent of the provider code (a regression in the
+    provider would be caught by the assert_allclose)."""
+    from export_mvo_weights import HistoricalCovarianceProvider
+    from sklearn.covariance import LedoitWolf
     rng = np.random.default_rng(3)
-    returns = pd.DataFrame(rng.normal(0, 0.01, (120, 10)),
-                           columns=[f"s{i}" for i in range(10)])
-    exporter = MVOWeightExporter.__new__(MVOWeightExporter)
-    sigma_old = exporter._estimate_covariance(returns)
+    arr = rng.normal(0, 0.01, (120, 10))
+    # inject some NaN to exercise the impute path
+    arr[5, 2] = np.nan
+    arr[10, 7] = np.nan
+    returns = pd.DataFrame(arr, columns=[f"s{i}" for i in range(10)])
+    # Reference: P2-B formula inline (independent of the provider implementation)
+    ref = arr.copy()
+    col_mean = np.nanmean(ref, axis=0)
+    col_mean = np.where(np.isnan(col_mean), 0.0, col_mean)
+    inds = np.where(np.isnan(ref))
+    ref[inds] = np.take(col_mean, inds[1])
+    lw = LedoitWolf().fit(ref)
+    expected = lw.covariance_ * 252.0 + np.eye(10) * 1e-8
+    # Provider
     provider = HistoricalCovarianceProvider()
-    sigma_new, meta = provider.estimate(returns.columns.tolist(), "2024-01-31", returns=returns)
-    np.testing.assert_allclose(sigma_new, sigma_old, atol=1e-12)
+    sigma, meta = provider.estimate(returns.columns.tolist(), "2024-01-31", returns=returns)
+    np.testing.assert_allclose(sigma, expected, atol=1e-12)
     assert meta["cov_source"] == "historical"
 
 
 def test_barra_provider_constructs_structured_covariance(tmp_path):
-    """BarraCovarianceProvider: Sigma = B_t Sigma_f B_t' + diag(Delta)."""
+    """BarraCovarianceProvider: Sigma = B_t Sigma_f B_t' + diag(Delta) + ridge."""
     from export_mvo_weights import BarraCovarianceProvider
     sigma_f = np.array([[0.04, 0.01], [0.01, 0.09]])
     delta = {"s0": 0.10, "s1": 0.20, "s2": 0.15}
@@ -209,9 +224,62 @@ def test_barra_provider_constructs_structured_covariance(tmp_path):
     sigma, meta = provider.estimate(symbols, "2024-01-31")
     B = np.array([exposures[s] for s in symbols])
     expected = B @ sigma_f @ B.T + np.diag([delta[s] for s in symbols])
+    expected += np.eye(3) * 1e-8  # M1: account for the 1e-8 ridge
     np.testing.assert_allclose(sigma, expected, atol=1e-10)
     assert meta["cov_source"] == "barra"
-    assert meta["barra_risk_used"] == "2024-01-31"
+    # M2: barra_risk_used stores the filename (matches ic_report_used semantics)
+    assert meta["barra_risk_used"] == "barra_risk_2024-01-31.json"
+
+
+def test_barra_provider_missing_exposure_floored_not_zero(tmp_path):
+    """C1: missing-exposure symbol gets median-delta floor (conservative high
+    variance), NOT zero — zero would make MVO concentrate max_weight into it."""
+    from export_mvo_weights import BarraCovarianceProvider
+    sigma_f = np.array([[0.04, 0.0], [0.0, 0.04]])
+    # s0 has exposure+delta; s1 has NEITHER (missing)
+    risk_file = tmp_path / "barra_risk_2024-01-31.json"
+    risk_file.write_text(json.dumps({
+        "as_of": "2024-01-31", "factors": ["f0", "f1"],
+        "sigma_f": sigma_f.tolist(),
+        "delta": {"s0": 0.10},  # s1 missing
+        "exposures": {"s0": [1.0, 0.0]},  # s1 missing
+        "est_window": 504, "decay_halflife": 252, "n_symbols": 1, "n_obs": 504, "fallback": None,
+    }))
+    provider = BarraCovarianceProvider(barra_risk_dir=str(tmp_path))
+    sigma, meta = provider.estimate(["s0", "s1"], "2024-01-31")
+    # s1 missing both -> delta floored to median of available = 0.10, exposure 0
+    # sigma[1,1] = 0 (B row 0) + 0.10 (floored delta) + 1e-8 ridge
+    assert sigma[1, 1] >= 0.09  # floored, NOT ~1e-8
+    assert sigma[0, 1] == 0.0  # s1 has no exposure -> no cross-term
+    assert meta["cov_source"] == "barra"
+    assert meta["barra_risk_used"] == "barra_risk_2024-01-31.json"
+
+
+def test_barra_provider_corrupt_json_raises(tmp_path):
+    """I2: corrupt barra_risk JSON raises (was masked as 'no data' -> stale weights)."""
+    from export_mvo_weights import BarraCovarianceProvider
+    risk_file = tmp_path / "barra_risk_2024-01-31.json"
+    risk_file.write_text("{not valid json")
+    provider = BarraCovarianceProvider(barra_risk_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="Corrupt barra_risk file"):
+        provider.estimate(["s0"], "2024-01-31")
+
+
+def test_barra_provider_majority_missing_raises(tmp_path):
+    """C1: >50% symbols missing exposure -> ValueError (systemic ticker mismatch)."""
+    from export_mvo_weights import BarraCovarianceProvider
+    sigma_f = np.array([[0.04, 0.0], [0.0, 0.04]])
+    risk_file = tmp_path / "barra_risk_2024-01-31.json"
+    risk_file.write_text(json.dumps({
+        "as_of": "2024-01-31", "factors": ["f0", "f1"],
+        "sigma_f": sigma_f.tolist(),
+        "delta": {"s0": 0.10},  # only s0
+        "exposures": {"s0": [1.0, 0.0]},  # only s0; 3/4 missing -> >50%
+        "est_window": 504, "decay_halflife": 252, "n_symbols": 1, "n_obs": 504, "fallback": None,
+    }))
+    provider = BarraCovarianceProvider(barra_risk_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="ticker-format mismatch"):
+        provider.estimate(["s0", "s1", "s2", "s3"], "2024-01-31")
 
 
 def test_cli_covariance_source_arg(monkeypatch, tmp_path):
