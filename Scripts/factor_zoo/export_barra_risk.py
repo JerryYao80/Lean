@@ -105,6 +105,16 @@ class BarraRiskExporter:
         return written
 
     def _compute_risk_for_date(self, as_of: str) -> dict | None:
+        """Compute full Barra risk payload for a single as-of date.
+
+        Loads trailing factor/return panel (no lookahead), runs cross-sectional
+        regression to estimate factor covariance and specific variance, then
+        loads as-of factor exposures and assembles the JSON payload. Returns
+        None if any required stage yields no data.
+
+        Args:
+            as_of: Month-end date string ``YYYY-MM-DD``.
+        """
         B_panel, r_panel = self._load_factor_and_returns(as_of, self.est_window)
         if B_panel is None or r_panel is None:
             return None
@@ -166,8 +176,16 @@ class BarraRiskExporter:
         return f_hat, residuals
 
     def _cross_sectional_regression_panel(self, B_panel: dict, r_panel: pd.DataFrame):
-        """B_panel dict[date]->DataFrame[symbols x 15], r_panel DataFrame[dates x symbols].
-        Returns (f_hat, residuals, all_symbols) or None."""
+        """Stack per-date factor exposures and returns, then run cross-sectional OLS.
+
+        Aligns ``B_panel`` (dict[YYYYMMDD -> DataFrame[symbols x 15]]) with
+        ``r_panel`` (DataFrame[dates x symbols]) on common dates, builds dense
+        3-D arrays, and delegates to :meth:`_cross_sectional_regression`.
+
+        Returns:
+            ``(f_hat, residuals, all_symbols)`` or ``None`` if too few common
+            dates survive.
+        """
         common_dates = sorted(set(B_panel.keys()) & set(r_panel.index.strftime("%Y%m%d")))
         if len(common_dates) < self.est_window // 2:
             LOGGER.warning("Too few common dates (%d) for regression", len(common_dates))
@@ -222,11 +240,14 @@ class BarraRiskExporter:
         for s_idx in range(n_symbols):
             ts_code = symbols[s_idx]
             col = residuals[:, s_idx]
-            valid = col[~np.isnan(col)]
-            if len(valid) < 2:
+            mask = ~np.isnan(col)
+            idx = np.where(mask)[0]
+            if len(idx) < 2:
                 delta[ts_code] = float("nan")
                 continue
-            w = weights[-len(valid):]
+            w = weights[idx]
+            w = w / w.sum()
+            valid = col[idx]
             mean = np.average(valid, weights=w)
             var = np.average((valid - mean) ** 2, weights=w)
             delta[ts_code] = float(max(var * 252.0, 1e-10))
@@ -235,9 +256,22 @@ class BarraRiskExporter:
     # --- data loading ---
 
     def _load_factor_and_returns(self, as_of: str, window: int):
-        """Trailing `window` factor exposures B + back-adjusted returns STRICTLY BEFORE as_of.
-        Factors from factor CSV; returns from daily parquet (factor CSV has no close).
-        Returns (B_panel dict[YYYYMMDD -> DataFrame[symbols x 15]], r_panel DataFrame)."""
+        """Load trailing factor exposures and back-adjusted returns strictly before as_of.
+
+        Builds the estimation panel ``[as_of - window*1.6 days, as_of - 1]``
+        (no lookahead: the as-of day itself is excluded). Factor exposures come
+        from per-symbol CSVs under ``factor_data_dir``; close prices come from
+        per-symbol daily parquet directories and are back-adjusted by adj_factor.
+
+        Args:
+            as_of: ``YYYY-MM-DD`` as-of date (excluded from the panel).
+            window: Estimation window length in trading days.
+
+        Returns:
+            ``(B_panel, r_panel)`` where ``B_panel`` is dict[YYYYMMDD ->
+            DataFrame[symbols x 15]] and ``r_panel`` is DataFrame[dates x
+            symbols]; ``(None, None)`` if no data survives.
+        """
         as_of_dt = datetime.strptime(as_of, "%Y-%m-%d")
         start_dt = as_of_dt - timedelta(days=int(window * 1.6))
         start_compact = start_dt.strftime("%Y%m%d")
@@ -252,6 +286,10 @@ class BarraRiskExporter:
                 df = pd.read_csv(csv_path, dtype={"trade_date": str})
                 df = df[(df["trade_date"] >= start_compact) & (df["trade_date"] <= end_compact)]
                 if df.empty:
+                    continue
+                missing = [f for f in FACTORS if f not in df.columns]
+                if missing:
+                    LOGGER.warning("Skip %s: missing factor columns %s", ts_code, missing)
                     continue
                 for _, row in df.iterrows():
                     d = row["trade_date"]
@@ -277,7 +315,12 @@ class BarraRiskExporter:
                     continue
                 df = df.sort_values("trade_date")
                 adj = self._load_adj_factor(ts_code, start_compact, end_compact)
-                if adj is None or len(adj) != len(df):
+                if adj is None:
+                    LOGGER.warning("Skip %s: adj_factor missing", ts_code)
+                    continue
+                if len(adj) != len(df):
+                    LOGGER.warning("Skip %s: adj_factor len %d != daily len %d",
+                                   ts_code, len(adj), len(df))
                     continue
                 close = df["close"].astype(float).values * adj
                 rets = pd.Series(np.diff(close) / close[:-1],
@@ -305,6 +348,10 @@ class BarraRiskExporter:
                 df = pd.read_csv(csv_path, dtype={"trade_date": str})
                 df = df[df["trade_date"] <= as_of_compact].sort_values("trade_date")
                 if df.empty:
+                    continue
+                missing = [f for f in FACTORS if f not in df.columns]
+                if missing:
+                    LOGGER.warning("Skip %s: missing factor columns %s", ts_code, missing)
                     continue
                 last = df.iloc[-1]
                 best_exposures[ts_code] = last[FACTORS].astype(float).values

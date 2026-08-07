@@ -80,17 +80,55 @@ from datetime import datetime, timedelta
 
 
 def test_load_factor_and_returns_no_lookahead(tmp_path):
-    """est_window must end STRICTLY BEFORE as_of (no lookahead)."""
-    exporter = BarraRiskExporter(factor_data_dir=str(tmp_path), daily_data_dir=str(tmp_path),
-                                 adj_factor_dir=str(tmp_path), est_window=504)
-    captured = {}
-    def fake_load(as_of, window):
-        end_compact = (datetime.strptime(as_of, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y%m%d")
-        captured["end"] = end_compact
-        return None, None
-    exporter._load_factor_and_returns = fake_load
-    exporter._compute_risk_for_date("2024-01-31")
-    assert captured["end"] < "20240131"
+    """Real no-lookahead: _load_factor_and_returns must exclude as_of day.
+
+    Plants a minimal factor CSV + daily parquet + adj_factor parquet spanning
+    20240130 and 20240131 (as_of). Calls the REAL _load_factor_and_returns
+    (no monkeypatch of the method itself) and asserts the as-of day never
+    appears in the returned B_panel keys or r_panel index.
+    """
+    factor_dir = tmp_path / "sse" / "daily"
+    factor_dir.mkdir(parents=True)
+    daily_dir = tmp_path / "daily"
+    adj_dir = tmp_path / "adj_factor"
+
+    factor_rows = []
+    for d in ("20240130", "20240131"):
+        row = {"trade_date": d}
+        row.update({f: 0.1 for f in FACTORS})
+        factor_rows.append(row)
+    pd.DataFrame(factor_rows).to_csv(factor_dir / "600519.csv", index=False)
+
+    daily_ts_dir = daily_dir / "ts_code=600519.SH"
+    daily_ts_dir.mkdir(parents=True)
+    daily_df = pd.DataFrame({
+        "trade_date": ["20240130", "20240131"],
+        "close": [100.0, 101.0],
+    })
+    daily_df.to_parquet(daily_ts_dir / "part.parquet")
+
+    adj_ts_dir = adj_dir / "ts_code=600519.SH"
+    adj_ts_dir.mkdir(parents=True)
+    adj_df = pd.DataFrame({
+        "trade_date": ["20240130", "20240131"],
+        "adj_factor": [1.0, 1.0],
+    })
+    adj_df.to_parquet(adj_ts_dir / "part.parquet")
+
+    exporter = BarraRiskExporter(
+        factor_data_dir=str(tmp_path),
+        daily_data_dir=str(daily_dir),
+        adj_factor_dir=str(adj_dir),
+        est_window=504,
+    )
+    B_panel, r_panel = exporter._load_factor_and_returns("2024-01-31", 504)
+
+    # as-of day (20240131) must be EXCLUDED from both panels.
+    assert "20240131" not in B_panel
+    r_dates = set(r_panel.index.strftime("%Y%m%d"))
+    assert "20240131" not in r_dates
+    # control: 20240130 should be present in B_panel (factor row survived).
+    assert "20240130" in B_panel
 
 
 def test_json_schema_complete(tmp_path):
@@ -141,12 +179,7 @@ def test_diagonal_fallback_when_few_symbols(tmp_path):
     # B_t with only 5 symbols (<30) -> triggers diagonal fallback
     B_t = {f"s{i}.SH": rng.normal(0, 1, 15).tolist() for i in range(5)}
 
-    B_panel = {"20240101": pd.DataFrame(
-        {f"s{i}.SH": rng.normal(0, 1, 15) for i in range(5)})}
-    r_panel = pd.DataFrame(
-        {f"s{i}.SH": rng.normal(0, 0.01, 100) for i in range(5)})
-
-    exporter._load_factor_and_returns = lambda as_of, w: (B_panel, r_panel)
+    exporter._load_factor_and_returns = lambda as_of, w: ({}, pd.DataFrame())
     exporter._cross_sectional_regression_panel = lambda Bp, rp: (f_hat, residuals, all_symbols)
     exporter._load_factor_exposure_asof = lambda as_of: B_t
     payload = exporter._compute_risk_for_date("2024-01-31")
