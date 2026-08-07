@@ -76,11 +76,28 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
             foreach (var t in targets)
             {
                 if (t == null || t.Symbol == null) continue;
+                if (!algorithm.Securities.TryGetValue(t.Symbol, out var security))
+                {
+                    Log.Trace($"[Barra-Risk] {algorithm.Time:yyyy-MM-dd}: target symbol {t.Symbol} not in Securities, skipping");
+                    continue;
+                }
+                var price = security.Price;
+                if (price <= 0)
+                {
+                    Log.Trace($"[Barra-Risk] {algorithm.Time:yyyy-MM-dd}: {t.Symbol} price <= 0 (halted?), skipping");
+                    continue;
+                }
                 var ticker = t.Symbol.Value;
-                var price = algorithm.Securities[t.Symbol].Price;
                 var targetValue = (double)(t.Quantity * price);
                 weights[ticker] = targetValue / tpv;
             }
+
+            // Surface ticker-mismatch regressions without per-ticker log spam:
+            // missing exposure => treated as 0 factor risk, which would make the
+            // portfolio look artificially low-risk (vol-targeting wouldn't scale down).
+            int missingExposure = weights.Keys.Count(k => !_exposures.ContainsKey(k));
+            if (missingExposure > 0)
+                algorithm.Debug($"[Barra-Risk] {algorithm.Time:yyyy-MM-dd}: {missingExposure}/{weights.Count} target symbols missing Barra exposure (treated as 0 factor risk — possible ticker mismatch)");
 
             weights = ApplyFactorExposureBudget(weights);
             weights = ApplyVolTargeting(weights);
@@ -94,6 +111,7 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
                 {
                     var pt = PortfolioTarget.Percent(algorithm, t.Symbol, (decimal)w);
                     if (pt != null) adjusted.Add(pt);
+                    else Log.Trace($"[Barra-Risk] {algorithm.Time:yyyy-MM-dd}: PortfolioTarget.Percent returned null for {t.Symbol} (price<=0 or insufficient BP?), target dropped");
                 }
             }
 
@@ -107,6 +125,13 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
         /// within maxFactorExposure. Per-symbol scale = min over factors of the
         /// factor-level scale (only factors where the symbol has non-zero exposure).
         /// </summary>
+        // NOTE: This min-scale heuristic is a conservative single-pass approximation.
+        // It scales each symbol by the tightest factor budget it participates in, but
+        // is NOT guaranteed to bring every factor back within maxFactorExposure when
+        // multiple factors are over budget with offsetting symbol exposures. A full LP
+        // would be needed for exact satisfaction — intentionally omitted (L4 is a
+        // post-processing risk constraint, not a re-optimizer). The post-check below
+        // surfaces any residual breach so it is never silently ignored.
         private Dictionary<string, double> ApplyFactorExposureBudget(Dictionary<string, double> weights)
         {
             if (_sigmaF == null || _sigmaF.Length == 0) return weights;
@@ -155,6 +180,21 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
                 }
                 adjusted[kv.Key] = kv.Value * symScale;
             }
+
+            // Post-check: surface any residual breach so it is never silently ignored.
+            var newFactorExp = new double[nFactors];
+            foreach (var (ticker, w) in adjusted)
+            {
+                if (_exposures.TryGetValue(ticker, out var b))
+                    for (int f = 0; f < nFactors && f < b.Length; f++)
+                        newFactorExp[f] += w * b[f];
+            }
+            for (int f = 0; f < nFactors; f++)
+            {
+                if (Math.Abs(newFactorExp[f]) > (double)_maxFactorExposure)
+                    Log.Error($"[Barra-Risk] factor {f} still over budget after scaling: {newFactorExp[f]:F4} > {_maxFactorExposure}");
+            }
+
             return adjusted;
         }
 
@@ -280,6 +320,12 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
                     continue;
                 }
                 if (parsed == null) continue;
+                if (parsed.SigmaF == null || parsed.SigmaF.Length == 0
+                    || parsed.SigmaF.Any(r => r == null || r.Length == 0))
+                {
+                    Log.Error($"[Barra-Risk] Malformed Sigma_f in {file} (null/jagged), skipping file");
+                    continue;
+                }
                 if (fileDate > latestDate)
                 {
                     latestDate = fileDate;
@@ -335,6 +381,9 @@ namespace QuantConnect.Algorithm.CSharp.Models.Risk
 
         internal Dictionary<string, double> ApplyFactorExposureBudgetForTest(Dictionary<string, double> weights)
             => ApplyFactorExposureBudget(weights);
+
+        internal Dictionary<string, double> ApplyVolTargetingForTest(Dictionary<string, double> weights)
+            => ApplyVolTargeting(weights);
     }
 
     /// <summary>

@@ -4,7 +4,7 @@
  * Tests:
  *   1. LoadLatestRisk_PicksLatestAtOrBeforeAsOf
  *   2. PortfolioVariance_ComputesCorrectly
- *   3. VolTargeting_HighVolPortfolioExceedsTarget
+ *   3. VolTargeting_ScalesDownWhenVolExceedsTarget
  *   4. MissingRiskData_LoadReturnsMinValue_NoCrash
  *   5. FactorExposureBudget_ScalesOverBudgetSymbol
  */
@@ -95,9 +95,11 @@ namespace QuantConnect.Tests.Algorithm
         }
 
         [Test]
-        public void VolTargeting_HighVolPortfolioExceedsTarget()
+        public void VolTargeting_ScalesDownWhenVolExceedsTarget()
         {
-            // w=[1.0] on symbol with factor var 0.5 -> vol ~0.707 > 0.20 target
+            // w=[1.0] on symbol with factor var 0.5 -> vol = sqrt(0.5) = 0.707 > 0.20 target
+            // scale = 0.20 / 0.707 = 0.2828; scaled weight = 1.0 * 0.2828 = 0.2828
+            // post-scale variance = 0.2828^2 * 0.5 = 0.04 = targetVol^2
             var dir = Path.Combine(Path.GetTempPath(), $"barra_risk_{Guid.NewGuid():N}");
             try
             {
@@ -108,9 +110,13 @@ namespace QuantConnect.Tests.Algorithm
 
                 var model = new BarraFactorRiskModel(dir, targetVol: 0.20m, maxFactorExposure: 10.0m);
                 model.LoadLatestRiskForTest(new DateTime(2024, 2, 1));
-                var variance = model.ComputePortfolioVarianceForTest(
-                    new Dictionary<string, double> { { "600519", 1.0 } });
-                Assert.That(variance, Is.EqualTo(0.5).Within(1e-6));
+                var weights = new Dictionary<string, double> { { "600519", 1.0 } };
+                var scaled = model.ApplyVolTargetingForTest(weights);
+                var expectedScale = 0.20 / Math.Sqrt(0.5);
+                Assert.That(scaled["600519"], Is.EqualTo(expectedScale).Within(1e-4));
+                // post-scale variance should be ~ targetVol^2 = 0.04
+                var postVar = model.ComputePortfolioVarianceForTest(scaled);
+                Assert.That(postVar, Is.EqualTo(0.04).Within(1e-4));
             }
             finally
             {
