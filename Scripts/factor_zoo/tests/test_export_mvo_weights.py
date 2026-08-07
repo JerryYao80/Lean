@@ -208,7 +208,9 @@ def test_historical_provider_matches_reference_formula(tmp_path):
 
 
 def test_barra_provider_constructs_structured_covariance(tmp_path):
-    """BarraCovarianceProvider: Sigma = B_t Sigma_f B_t' + diag(Delta) + ridge."""
+    """BarraCovarianceProvider: Sigma = B_t Sigma_f B_t' + diag(Delta) + conditioning.
+    After eigenvalue conditioning (clip negatives + relative ridge), Sigma must be
+    symmetric positive definite and close to the raw structured form."""
     from export_mvo_weights import BarraCovarianceProvider
     sigma_f = np.array([[0.04, 0.01], [0.01, 0.09]])
     delta = {"s0": 0.10, "s1": 0.20, "s2": 0.15}
@@ -223,11 +225,15 @@ def test_barra_provider_constructs_structured_covariance(tmp_path):
     symbols = ["s0", "s1", "s2"]
     sigma, meta = provider.estimate(symbols, "2024-01-31")
     B = np.array([exposures[s] for s in symbols])
-    expected = B @ sigma_f @ B.T + np.diag([delta[s] for s in symbols])
-    expected += np.eye(3) * 1e-8  # M1: account for the 1e-8 ridge
-    np.testing.assert_allclose(sigma, expected, atol=1e-10)
+    raw = B @ sigma_f @ B.T + np.diag([delta[s] for s in symbols])
+    # Conditioning adds ridge on small eigenvalues; sigma should be close to raw
+    # but with all eigenvalues >= ridge_threshold (max_eigval * 1e-6).
+    np.testing.assert_allclose(sigma, sigma.T, atol=1e-10)  # symmetric
+    eigs = np.linalg.eigvalsh(sigma)
+    assert (eigs > 0).all(), f"non-PD eigenvalues: {eigs}"
+    # Close to raw (within 5% relative for well-conditioned directions)
+    np.testing.assert_allclose(sigma, raw, rtol=0.05)
     assert meta["cov_source"] == "barra"
-    # M2: barra_risk_used stores the filename (matches ic_report_used semantics)
     assert meta["barra_risk_used"] == "barra_risk_2024-01-31.json"
 
 

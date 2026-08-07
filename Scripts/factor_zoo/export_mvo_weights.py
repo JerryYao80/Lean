@@ -128,6 +128,11 @@ class BarraCovarianceProvider(ICovarianceProvider):
         for i, s in enumerate(symbols):
             if s in expo_dict:
                 B[i] = np.array(expo_dict[s], dtype=float)
+                # NaN in exposure propagates through B @ Sigma_f @ B' -> NaN sigma.
+                # Zero out NaN factors (same as missing: treat as no exposure).
+                nan_mask = np.isnan(B[i])
+                if nan_mask.any():
+                    B[i][nan_mask] = 0.0
             else:
                 n_missing_expo += 1
             if s in delta_dict and not np.isnan(float(delta_dict[s])):
@@ -151,7 +156,17 @@ class BarraCovarianceProvider(ICovarianceProvider):
                 f"BarraCovarianceProvider: {n_missing_expo}/{n} symbols missing "
                 f"exposure — likely ticker-format mismatch")
         sigma = B @ sigma_f @ B.T + np.diag(delta)
-        sigma += np.eye(n) * 1e-8
+        # Condition sigma for SLSQP: B @ Sigma_f @ B' has rank <= n_factors (15)
+        # leaving ~285 near-zero eigenvalues in a 300x300 matrix. The original 1e-8
+        # ridge was far too weak, causing "Inequality constraints incompatible" -> equal-weight.
+        # Fix: eigendecompose, clip negatives, add relative ridge on near-zero eigenvalues
+        # to achieve a well-conditioned positive definite matrix.
+        eigvals, eigvecs = np.linalg.eigh(sigma)
+        eigvals_clipped = np.maximum(eigvals, 1e-10)  # clip negatives
+        max_eigval = float(eigvals_clipped.max()) if eigvals_clipped.max() > 0 else 1.0
+        ridge_threshold = max_eigval * 1e-6  # ~285 eigenvalues below this
+        eigvals_clipped = np.maximum(eigvals_clipped, ridge_threshold)
+        sigma = eigvecs @ np.diag(eigvals_clipped) @ eigvecs.T
         return sigma, {
             "cov_source": "barra",
             "barra_risk_used": risk_filename,
