@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 import pytest
@@ -76,7 +75,6 @@ def test_specific_var_handles_nan_and_insufficient_obs():
         assert (v >= 0) or np.isnan(v)
 
 
-from datetime import datetime, timedelta
 
 
 def test_load_factor_and_returns_no_lookahead(tmp_path):
