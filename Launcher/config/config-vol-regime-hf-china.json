@@ -1,0 +1,27 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "VolRegimeHfChinaAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "../../../Algorithm.Python/VolRegimeHfChinaAlgorithm.py",
+
+  "data-folder": "../../../Data",
+  "data-directory": "../../../Data",
+
+  "data-provider": "DefaultDataProvider",
+
+  "results-destination-folder": "../../../Results",
+  "influxdb-enabled": true,
+  "influxdb-url": "http://127.0.0.1:8086",
+  "influxdb-org": "lean",
+  "influxdb-bucket": "quant",
+  "influxdb-token-env-var": "INFLUXDB_TOKEN",
+
+  "log-handler": "ConsoleLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+
+  "parameters": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data"
+  }
+}

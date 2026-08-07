@@ -1,0 +1,24 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedSSRNAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency("CNY")
+        self.SetCash(100000)
+        self.SetStartDate(2023, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+        self.SetBenchmark(lambda x: 0)
+
+        # 由于未提供 Universe，使用占位符标的进行演示
+        ticker = "600519.SSE"
+        self.AddEquity(ticker, Resolution.Daily, Market.SSE)
+
+        security = self.Securities[ticker]
+        security.FeeModel = AShareStockFeeModel()
+        security.FillModel = AShareStockFillModel()
+        security.BuyingPowerModel = AShareStockBuyingPowerModel()
+        security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+
+    def OnData(self, slice):
+        # 源材料不包含量化逻辑，因此此处未实现具体交易逻辑。
+        # 如果存在策略，风控逻辑（trailing stop, max drawdown）将在此处实现。
+        pass

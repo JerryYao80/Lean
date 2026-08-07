@@ -19,7 +19,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using NodaTime;
-using QuantConnect.Data;
+using Newtonsoft.Json;
 using QuantConnect.Data.Market;
 using QuantConnect.Logging;
 
@@ -31,7 +31,31 @@ namespace QuantConnect.Data
     public class TushareDataConverter
     {
         private readonly string _dataPath;
+        private readonly string _livePriceSnapshotPath;
         private readonly TushareDataCache _cache;
+        private readonly Dictionary<string, List<TradeBar>> _dailyDataBySymbol = new Dictionary<string, List<TradeBar>>();
+        private readonly object _dailyDataLock = new object();
+        private readonly Dictionary<string, LatestDailyBarCacheEntry> _latestDailyBarBySymbol = new Dictionary<string, LatestDailyBarCacheEntry>();
+        private readonly object _latestDailyBarLock = new object();
+        private readonly Dictionary<string, TradeBar> _liveSnapshotBarsBySymbol = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _liveSnapshotLock = new object();
+        private DateTime _liveSnapshotLastWriteTimeUtc;
+        private bool _snapshotWasReloaded;
+        private string _snapshotSourceMode;
+
+        // GBM intraday simulation state
+        private bool _gbmEnabled;
+        private string _gbmSourceMode = "auto";
+        private int _gbmPollIntervalSeconds = 60;
+        private int _gbmTradingMinutesPerDay = 240;
+        private double _gbmVolatilityScale = 8.0;
+        private double _gbmMinDailyVolatility = 0.80;
+        private double _gbmJumpProbability = 0.22;
+        private double _gbmJumpScale = 0.10;
+        private Random _gbmRandom = new Random(42);
+        private readonly Dictionary<string, GbmSymbolState> _gbmStateByTsCode = new Dictionary<string, GbmSymbolState>(StringComparer.OrdinalIgnoreCase);
+        private int _gbmAdvanceCount;
+
         private static readonly DateTimeZone ChinaTimeZone = DateTimeZoneProviders.Tzdb["Asia/Shanghai"];
 
         /// <summary>
@@ -39,9 +63,44 @@ namespace QuantConnect.Data
         /// </summary>
         /// <param name="dataPath">Path to tushare data directory</param>
         public TushareDataConverter(string dataPath)
+            : this(dataPath, null)
+        {
+        }
+
+        public TushareDataConverter(string dataPath, string livePriceSnapshotPath)
         {
             _dataPath = dataPath;
+            _livePriceSnapshotPath = livePriceSnapshotPath;
             _cache = new TushareDataCache(dataPath);
+        }
+
+        /// <summary>
+        /// Configure GBM intraday simulation parameters.
+        /// Called by TushareDataQueue after reading job parameters.
+        /// </summary>
+        public void ConfigureGbmSimulation(
+            string sourceMode = "auto",
+            int pollIntervalSeconds = 60,
+            int tradingMinutesPerDay = 240,
+            double volatilityScale = 8.0,
+            double minDailyVolatility = 0.80,
+            double jumpProbability = 0.22,
+            double jumpScale = 0.10,
+            int randomSeed = 42)
+        {
+            _gbmSourceMode = sourceMode ?? "auto";
+            _gbmPollIntervalSeconds = Math.Max(1, pollIntervalSeconds);
+            _gbmTradingMinutesPerDay = Math.Max(1, tradingMinutesPerDay);
+            _gbmVolatilityScale = Math.Max(1.0, volatilityScale);
+            _gbmMinDailyVolatility = Math.Max(0.05, minDailyVolatility);
+            _gbmJumpProbability = Math.Max(0.0, Math.Min(1.0, jumpProbability));
+            _gbmJumpScale = Math.Max(0.0, jumpScale);
+            _gbmRandom = new Random(randomSeed);
+            _gbmEnabled = true;
+            Log.Trace(
+                $"TushareDataConverter.ConfigureGbmSimulation(): source={_gbmSourceMode} poll={_gbmPollIntervalSeconds}s " +
+                $"vol_scale={_gbmVolatilityScale} min_vol={_gbmMinDailyVolatility} " +
+                $"jump_p={_gbmJumpProbability} jump_s={_gbmJumpScale} seed={randomSeed}");
         }
 
         /// <summary>
@@ -81,7 +140,6 @@ namespace QuantConnect.Data
             var ticker = parts[0];
             var exchange = parts[1];
 
-            // Determine market based on exchange
             var market = exchange.ToUpperInvariant() switch
             {
                 "SH" => QuantConnect.Market.SSE,
@@ -108,7 +166,6 @@ namespace QuantConnect.Data
             var month = int.Parse(tradeDate.Substring(4, 2));
             var day = int.Parse(tradeDate.Substring(6, 2));
 
-            // Market close time: 15:00 CST
             var localDateTime = new LocalDateTime(year, month, day, 15, 0);
             var zonedDateTime = ChinaTimeZone.AtLeniently(localDateTime);
 
@@ -134,42 +191,532 @@ namespace QuantConnect.Data
         /// <returns>List of TradeBars</returns>
         public List<TradeBar> GetDailyData(string tsCode, DateTime startDate, DateTime endDate)
         {
-            var result = new List<TradeBar>();
-            var symbol = ConvertToSymbol(tsCode);
-
-            // Path to fund daily data: fund_daily/ts_code={tsCode}/data.parquet
-            var dailyPath = Path.Combine(_dataPath, "fund_daily", $"ts_code={tsCode}", "data.parquet");
-
-            if (!File.Exists(dailyPath))
+            try
             {
-                Log.Error($"TushareDataConverter.GetDailyData(): Daily data file not found: {dailyPath}");
+                var allBars = GetOrLoadDailyData(tsCode);
+                var result = FilterAvailableDailyBars(allBars, startDate, endDate);
+
+                Log.Trace($"TushareDataConverter.GetDailyData(): Loaded {result.Count} bars for {tsCode}");
                 return result;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TushareDataConverter.GetDailyData(): Error reading data for {tsCode}: {ex.Message}");
+                return new List<TradeBar>();
+            }
+        }
+
+        public static List<TradeBar> FilterAvailableDailyBars(IEnumerable<TradeBar> bars, DateTime startDate, DateTime endDate)
+        {
+            if (bars == null)
+            {
+                return new List<TradeBar>();
+            }
+
+            var startUtc = NormalizeUtc(startDate);
+            var endUtc = NormalizeUtc(endDate);
+            return bars
+                .Where(bar => NormalizeUtc(bar.EndTime) >= startUtc && NormalizeUtc(bar.EndTime) <= endUtc)
+                .Select(bar => new TradeBar(bar))
+                .ToList();
+        }
+
+        private static DateTime NormalizeUtc(DateTime value)
+        {
+            return value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+        }
+
+        /// <summary>
+        /// Gets the most recent trading data for a symbol (for live-paper simulation)
+        /// </summary>
+        public TradeBar GetLatestData(string tsCode)
+        {
+            if (TryGetLatestLiveSnapshotData(tsCode, out var liveBar, out var liveSnapshotAvailable))
+            {
+                return liveBar;
+            }
+            if (liveSnapshotAvailable)
+            {
+                return null;
+            }
+
+            var dailyPath = ResolveDailyDataPath(tsCode);
+            if (dailyPath == null)
+            {
+                Log.Error($"TushareDataConverter.GetLatestData(): Daily data file not found for {tsCode} in fund_daily or daily datasets under {_dataPath}");
+                return null;
+            }
+
+            var lastWriteTimeUtc = File.GetLastWriteTimeUtc(dailyPath);
+            lock (_latestDailyBarLock)
+            {
+                if (_latestDailyBarBySymbol.TryGetValue(tsCode, out var cachedEntry)
+                    && string.Equals(cachedEntry.SourcePath, dailyPath, StringComparison.Ordinal)
+                    && cachedEntry.LastWriteTimeUtc == lastWriteTimeUtc)
+                {
+                    return cachedEntry.Bar == null ? null : new TradeBar(cachedEntry.Bar);
+                }
+            }
+
+            var latestBar = LoadLatestDailyBar(tsCode, dailyPath);
+
+            lock (_latestDailyBarLock)
+            {
+                _latestDailyBarBySymbol[tsCode] = new LatestDailyBarCacheEntry
+                {
+                    SourcePath = dailyPath,
+                    LastWriteTimeUtc = lastWriteTimeUtc,
+                    Bar = latestBar == null ? null : new TradeBar(latestBar)
+                };
+            }
+
+            return latestBar == null ? null : new TradeBar(latestBar);
+        }
+
+        private bool TryGetLatestLiveSnapshotData(string tsCode, out TradeBar tradeBar, out bool liveSnapshotAvailable)
+        {
+            tradeBar = null;
+            liveSnapshotAvailable = false;
+            if (string.IsNullOrWhiteSpace(_livePriceSnapshotPath) || !File.Exists(_livePriceSnapshotPath))
+            {
+                return false;
+            }
+
+            liveSnapshotAvailable = true;
+            LoadLiveSnapshotIfNeeded();
+
+            lock (_liveSnapshotLock)
+            {
+                if (_liveSnapshotBarsBySymbol.TryGetValue(tsCode, out var cachedBar))
+                {
+                    tradeBar = new TradeBar(cachedBar);
+                    // Apply GBM intraday simulation if snapshot is stale and mode allows
+                    if (_gbmEnabled && ShouldApplyGbmSimulation())
+                    {
+                        tradeBar = AdvanceBarWithGbm(tsCode, tradeBar);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Whether GBM intraday simulation should be applied.
+        /// Active when source_mode is gbm-simulated and the snapshot was NOT just reloaded
+        /// (fresh reloads already contain new prices from the Python GBM client).
+        /// </summary>
+        private bool ShouldApplyGbmSimulation()
+        {
+            if (_snapshotWasReloaded)
+            {
+                return false;
+            }
+
+            if (string.Equals(_gbmSourceMode, "simulate", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // auto mode: apply GBM when snapshot source is gbm-simulated
+            if (string.Equals(_gbmSourceMode, "auto", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_snapshotSourceMode, "gbm-simulated", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Advance a TradeBar's prices using GBM intraday simulation.
+        /// Each call represents one poll interval's worth of price movement.
+        /// </summary>
+        private TradeBar AdvanceBarWithGbm(string tsCode, TradeBar baseBar)
+        {
+            if (baseBar == null || baseBar.Close <= 0)
+            {
+                return baseBar;
+            }
+
+            GbmSymbolState state;
+            lock (_liveSnapshotLock)
+            {
+                if (!_gbmStateByTsCode.TryGetValue(tsCode, out state))
+                {
+                    state = new GbmSymbolState
+                    {
+                        Open = baseBar.Open,
+                        High = baseBar.High,
+                        Low = baseBar.Low,
+                        Close = baseBar.Close,
+                        PreClose = baseBar.Close,
+                        AccumVol = baseBar.Volume,
+                        AccumAmount = 0m,
+                        Drift = 0.0,
+                        Volatility = 0.02,
+                        AvgDailyVolume = (double)baseBar.Volume,
+                        Calibrated = false
+                    };
+                    _gbmStateByTsCode[tsCode] = state;
+                }
+            }
+
+            // Step fraction: how much of the trading day this poll interval represents
+            var stepFraction = (double)_gbmPollIntervalSeconds / 60.0 / (double)_gbmTradingMinutesPerDay;
+
+            // Scale volatility for intraday step
+            var stepVolatility = Math.Max(0.001, state.Volatility * _gbmVolatilityScale * Math.Sqrt(stepFraction));
+            var stepDrift = state.Drift * stepFraction;
+
+            // GBM step: S(t+1) = S(t) * exp((mu - sigma^2/2) + sigma * Z + jump)
+            double shock, jumpReturn = 0.0;
+            lock (_liveSnapshotLock)
+            {
+                shock = NextGaussian(_gbmRandom);
+                if (_gbmJumpProbability > 0 && _gbmRandom.NextDouble() < _gbmJumpProbability)
+                {
+                    jumpReturn = NextGaussian(_gbmRandom) * _gbmJumpScale;
+                }
+            }
+
+            var exponent = (stepDrift - 0.5 * stepVolatility * stepVolatility) + stepVolatility * shock + jumpReturn;
+            var currentClose = (double)state.Close;
+            var nextClose = Math.Max(0.01, currentClose * Math.Exp(exponent));
+
+            // Update high/low to encompass the new close
+            var newHigh = Math.Max((double)state.High, nextClose);
+            var newLow = Math.Min((double)state.Low, Math.Max(0.01, nextClose));
+
+            // Volume increment
+            var volIncrement = Math.Max(0.0, state.AvgDailyVolume * stepFraction * (0.5 + _gbmRandom.NextDouble()));
+
+            state.Close = (decimal)nextClose;
+            state.High = (decimal)newHigh;
+            state.Low = (decimal)newLow;
+            state.AccumVol += (decimal)volIncrement * 100m;
+
+            // Create new bar with updated prices and current timestamp
+            var nowUtc = DateTime.UtcNow;
+            var barPeriod = TimeSpan.FromDays(1);
+
+            var advancedBar = new TradeBar
+            {
+                Symbol = baseBar.Symbol,
+                Time = nowUtc - barPeriod,
+                EndTime = nowUtc,
+                Open = state.Open,
+                High = state.High,
+                Low = state.Low,
+                Close = state.Close,
+                Volume = state.AccumVol,
+                Period = barPeriod
+            };
+
+            return advancedBar;
+        }
+
+        private static double NextGaussian(Random random)
+        {
+            double u1, u2;
+            do { u1 = random.NextDouble(); } while (u1 <= 0.0);
+            u2 = random.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        }
+
+        private void LoadLiveSnapshotIfNeeded()
+        {
+            if (string.IsNullOrWhiteSpace(_livePriceSnapshotPath) || !File.Exists(_livePriceSnapshotPath))
+            {
+                _snapshotWasReloaded = false;
+                return;
+            }
+
+            var lastWriteTimeUtc = File.GetLastWriteTimeUtc(_livePriceSnapshotPath);
+            lock (_liveSnapshotLock)
+            {
+                if (_liveSnapshotLastWriteTimeUtc == lastWriteTimeUtc)
+                {
+                    _snapshotWasReloaded = false;
+                    return;
+                }
             }
 
             try
             {
-                // Use Python to read parquet file
-                var pythonCode = $@"
+                var payloadText = File.ReadAllText(_livePriceSnapshotPath);
+                var payload = JsonConvert.DeserializeObject<LivePriceSnapshotPayload>(payloadText) ?? new LivePriceSnapshotPayload();
+                _snapshotSourceMode = payload.SourceMode;
+                var snapshotBars = new Dictionary<string, TradeBar>(StringComparer.OrdinalIgnoreCase);
+                foreach (var row in payload.Quotes ?? new List<LivePriceSnapshotRow>())
+                {
+                    var liveTradeBar = CreateLiveTradeBar(row, payload.GeneratedAt);
+                    if (liveTradeBar == null || string.IsNullOrWhiteSpace(row?.TsCode))
+                    {
+                        continue;
+                    }
+
+                    snapshotBars[row.TsCode] = liveTradeBar;
+                }
+
+                lock (_liveSnapshotLock)
+                {
+                    _liveSnapshotBarsBySymbol.Clear();
+                    foreach (var pair in snapshotBars)
+                    {
+                        _liveSnapshotBarsBySymbol[pair.Key] = pair.Value;
+                    }
+
+                    _liveSnapshotLastWriteTimeUtc = lastWriteTimeUtc;
+                }
+
+                // Reset GBM states when snapshot is reloaded with fresh data
+                lock (_liveSnapshotLock)
+                {
+                    _gbmStateByTsCode.Clear();
+                    _gbmAdvanceCount = 0;
+                }
+
+                _snapshotWasReloaded = true;
+                Log.Trace($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Loaded {snapshotBars.Count} realtime bars from {_livePriceSnapshotPath} source_mode={_snapshotSourceMode} write_time_utc={lastWriteTimeUtc:O}");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TushareDataConverter.LoadLiveSnapshotIfNeeded(): Failed to parse {_livePriceSnapshotPath}: {ex.Message}");
+                _snapshotWasReloaded = false;
+            }
+        }
+
+        private List<TradeBar> GetOrLoadDailyData(string tsCode)
+        {
+            lock (_dailyDataLock)
+            {
+                if (_dailyDataBySymbol.TryGetValue(tsCode, out var cachedBars))
+                {
+                    return cachedBars;
+                }
+            }
+
+            var loadedBars = LoadDailyData(tsCode);
+
+            lock (_dailyDataLock)
+            {
+                if (!_dailyDataBySymbol.ContainsKey(tsCode))
+                {
+                    _dailyDataBySymbol[tsCode] = loadedBars;
+                }
+
+                return _dailyDataBySymbol[tsCode];
+            }
+        }
+
+        /// <summary>
+        /// Clear cached data for a symbol so it will be re-read from disk on next access
+        /// </summary>
+        public void ClearCacheForSymbol(string tsCode)
+        {
+            lock (_dailyDataLock)
+            {
+                _dailyDataBySymbol.Remove(tsCode);
+            }
+        }
+
+        private List<TradeBar> LoadDailyData(string tsCode)
+        {
+            var symbol = ConvertToSymbol(tsCode);
+            var dailyPath = ResolveDailyDataPath(tsCode);
+
+            if (dailyPath == null)
+            {
+                Log.Error($"TushareDataConverter.LoadDailyData(): Daily data file not found for {tsCode} in fund_daily or daily datasets under {_dataPath}");
+                return new List<TradeBar>();
+            }
+
+            var escapedPath = EscapePythonString(dailyPath);
+            var pythonCode = $@"
 import pandas as pd
 import json
 
-df = pd.read_parquet('{dailyPath}')
+df = pd.read_parquet('{escapedPath}')
 df = df.sort_values('trade_date')
-
-# Filter by date range
-start_date = '{startDate:yyyyMMdd}'
-end_date = '{endDate:yyyyMMdd}'
-df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
-
-# Convert to JSON
-result = df.to_json(orient='records')
-print(result)
+print(df.to_json(orient='records'))
 ";
 
-                var pythonPath = "/root/miniconda3/envs/quant311/bin/python";
-                var tempFile = Path.GetTempFileName();
-                File.WriteAllText(tempFile, pythonCode);
+            var output = ExecutePython(pythonCode, $"TushareDataConverter.LoadDailyData({tsCode})");
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return new List<TradeBar>();
+            }
 
+            var data = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output)
+                ?? new List<Dictionary<string, object>>();
+
+            var result = new List<TradeBar>(data.Count);
+            foreach (var row in data)
+            {
+                var tradeBar = CreateTradeBar(symbol, row);
+                if (tradeBar != null)
+                {
+                    result.Add(tradeBar);
+                }
+            }
+
+            Log.Trace($"TushareDataConverter.LoadDailyData(): Cached {result.Count} bars for {tsCode}");
+            return result;
+        }
+
+        private TradeBar LoadLatestDailyBar(string tsCode, string dailyPath)
+        {
+            var symbol = ConvertToSymbol(tsCode);
+            var escapedPath = EscapePythonString(dailyPath);
+            var pythonCode = $@"
+import pandas as pd
+import json
+
+df = pd.read_parquet('{escapedPath}')
+if df.empty:
+    print('[]')
+else:
+    df = df.sort_values('trade_date').tail(1)
+    print(df.to_json(orient='records'))
+";
+
+            var output = ExecutePython(pythonCode, $"TushareDataConverter.LoadLatestDailyBar({tsCode})");
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return null;
+            }
+
+            var data = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output)
+                ?? new List<Dictionary<string, object>>();
+            if (data.Count == 0)
+            {
+                return null;
+            }
+
+            return CreateTradeBar(symbol, data[0]);
+        }
+
+        private static TradeBar CreateTradeBar(Symbol symbol, IReadOnlyDictionary<string, object> row)
+        {
+            if (row == null || !row.TryGetValue("trade_date", out var tradeDateValue) || tradeDateValue == null)
+            {
+                return null;
+            }
+
+            var tradeDate = tradeDateValue.ToString();
+            var time = ConvertTradeDate(tradeDate);
+
+            return new TradeBar
+            {
+                Symbol = symbol,
+                Time = time.AddDays(-1),
+                EndTime = time,
+                Open = ConvertToDecimal(row, "open"),
+                High = ConvertToDecimal(row, "high"),
+                Low = ConvertToDecimal(row, "low"),
+                Close = ConvertToDecimal(row, "close"),
+                Volume = ConvertVolume(ConvertToDecimal(row, "vol")),
+                Period = TimeSpan.FromDays(1)
+            };
+        }
+
+        private static TradeBar CreateLiveTradeBar(LivePriceSnapshotRow row, string generatedAt)
+        {
+            if (row == null || string.IsNullOrWhiteSpace(row.TsCode))
+            {
+                return null;
+            }
+
+            var symbol = ConvertToSymbol(row.TsCode);
+            var eventTimeUtc = ParseLiveTimestampUtc(row.FetchTimestamp)
+                ?? ParseLiveTimestampUtc(generatedAt)
+                ?? (!string.IsNullOrWhiteSpace(row.TradeDate) ? ConvertTradeDate(row.TradeDate) : DateTime.UtcNow);
+            var barPeriod = TimeSpan.FromDays(1);
+            var barStartTimeUtc = eventTimeUtc - barPeriod;
+
+            var open = row.Open ?? row.PreClose ?? row.Close ?? row.Price ?? 0m;
+            var close = row.Close ?? row.Price ?? row.Open ?? row.PreClose ?? 0m;
+            var high = row.High ?? Math.Max(open, close);
+            var low = row.Low ?? Math.Min(open, close);
+
+            return new TradeBar
+            {
+                Symbol = symbol,
+                Time = barStartTimeUtc,
+                EndTime = eventTimeUtc,
+                Open = open,
+                High = high,
+                Low = low,
+                Close = close,
+                Volume = ConvertVolume(row.Vol ?? 0m),
+                Period = barPeriod
+            };
+        }
+
+        private static decimal ConvertToDecimal(IReadOnlyDictionary<string, object> row, string fieldName)
+        {
+            if (row == null || !row.TryGetValue(fieldName, out var value) || value == null)
+            {
+                return 0m;
+            }
+
+            return Convert.ToDecimal(value);
+        }
+
+        private static string EscapePythonString(string value)
+        {
+            return value
+                ?.Replace("\\", "\\\\")
+                .Replace("'", "\\'")
+                ?? string.Empty;
+        }
+
+        private static DateTime? ParseLiveTimestampUtc(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedOffset))
+            {
+                return parsedOffset.UtcDateTime;
+            }
+
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedDateTime))
+            {
+                return parsedDateTime;
+            }
+
+            return null;
+        }
+
+        private string ResolveDailyDataPath(string tsCode)
+        {
+            var fundDailyPath = Path.Combine(_dataPath, "fund_daily", $"ts_code={tsCode}", "data.parquet");
+            if (File.Exists(fundDailyPath))
+            {
+                return fundDailyPath;
+            }
+
+            var stockDailyPath = Path.Combine(_dataPath, "daily", $"ts_code={tsCode}", "data.parquet");
+            if (File.Exists(stockDailyPath))
+            {
+                return stockDailyPath;
+            }
+
+            return null;
+        }
+
+        private static string ExecutePython(string pythonCode, string context)
+        {
+            var pythonPath = "/root/miniconda3/envs/quant311/bin/python";
+            var tempFile = Path.GetTempFileName();
+            File.WriteAllText(tempFile, pythonCode);
+
+            try
+            {
                 var process = new System.Diagnostics.Process
                 {
                     StartInfo = new System.Diagnostics.ProcessStartInfo
@@ -188,58 +735,91 @@ print(result)
                 var error = process.StandardError.ReadToEnd();
                 process.WaitForExit();
 
-                File.Delete(tempFile);
-
-                if (!string.IsNullOrEmpty(error))
+                if (process.ExitCode != 0 || !string.IsNullOrWhiteSpace(error))
                 {
-                    Log.Error($"TushareDataConverter.GetDailyData(): Python error: {error}");
-                    return result;
+                    Log.Error($"{context}: Python error: {error}");
+                    return null;
                 }
 
-                // Parse JSON output
-                var data = Newtonsoft.Json.JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(output);
-
-                foreach (var row in data)
-                {
-                    var tradeDate = row["trade_date"].ToString();
-                    var time = ConvertTradeDate(tradeDate);
-
-                    var tradeBar = new TradeBar
-                    {
-                        Symbol = symbol,
-                        Time = time.AddDays(-1), // Start of bar (previous day 15:00)
-                        EndTime = time,
-                        Open = Convert.ToDecimal(row["open"]),
-                        High = Convert.ToDecimal(row["high"]),
-                        Low = Convert.ToDecimal(row["low"]),
-                        Close = Convert.ToDecimal(row["close"]),
-                        Volume = ConvertVolume(Convert.ToDecimal(row["vol"])),
-                        Period = TimeSpan.FromDays(1)
-                    };
-
-                    result.Add(tradeBar);
-                }
-
-                Log.Trace($"TushareDataConverter.GetDailyData(): Loaded {result.Count} bars for {tsCode}");
+                return output;
             }
-            catch (Exception ex)
+            finally
             {
-                Log.Error($"TushareDataConverter.GetDailyData(): Error reading data for {tsCode}: {ex.Message}");
+                File.Delete(tempFile);
             }
-
-            return result;
         }
 
-        /// <summary>
-        /// Gets the most recent trading data for a symbol (for live-paper simulation)
-        /// </summary>
-        public TradeBar GetLatestData(string tsCode)
+        private sealed class LatestDailyBarCacheEntry
         {
-            var endDate = DateTime.UtcNow;
-            var startDate = endDate.AddDays(-10); // Get last 10 days to ensure we have data
+            public string SourcePath { get; set; }
+            public DateTime LastWriteTimeUtc { get; set; }
+            public TradeBar Bar { get; set; }
+        }
 
-            var bars = GetDailyData(tsCode, startDate, endDate);
-            return bars.LastOrDefault();
+        private sealed class LivePriceSnapshotPayload
+        {
+            [JsonProperty("generated_at")]
+            public string GeneratedAt { get; set; }
+
+            [JsonProperty("source_mode")]
+            public string SourceMode { get; set; }
+
+            [JsonProperty("quotes")]
+            public List<LivePriceSnapshotRow> Quotes { get; set; } = new List<LivePriceSnapshotRow>();
+        }
+
+        private sealed class LivePriceSnapshotRow
+        {
+            [JsonProperty("ts_code")]
+            public string TsCode { get; set; }
+
+            [JsonProperty("trade_date")]
+            public string TradeDate { get; set; }
+
+            [JsonProperty("open")]
+            public decimal? Open { get; set; }
+
+            [JsonProperty("high")]
+            public decimal? High { get; set; }
+
+            [JsonProperty("low")]
+            public decimal? Low { get; set; }
+
+            [JsonProperty("close")]
+            public decimal? Close { get; set; }
+
+            [JsonProperty("price")]
+            public decimal? Price { get; set; }
+
+            [JsonProperty("pre_close")]
+            public decimal? PreClose { get; set; }
+
+            [JsonProperty("pct_chg")]
+            public decimal? PctChg { get; set; }
+
+            [JsonProperty("vol")]
+            public decimal? Vol { get; set; }
+
+            [JsonProperty("amount")]
+            public decimal? Amount { get; set; }
+
+            [JsonProperty("fetch_timestamp")]
+            public string FetchTimestamp { get; set; }
+        }
+
+        private sealed class GbmSymbolState
+        {
+            public decimal Open;
+            public decimal High;
+            public decimal Low;
+            public decimal Close;
+            public decimal PreClose;
+            public decimal AccumVol;
+            public decimal AccumAmount;
+            public double Drift;
+            public double Volatility;
+            public double AvgDailyVolume;
+            public bool Calibrated;
         }
     }
 }

@@ -1,0 +1,67 @@
+strategy_name: AShareCSI300Alpha101CompositeStrategy
+rl_state_completeness: partial
+lean_config: Launcher/config/config-csi300-alpha101-composite.json
+risk_model_target: MaximumDrawdownPercentPortfolio
+parameter_space:
+  # 8 alpha blend weights, [0,1]. TPE samples as independent continuous dims.
+  # layer=L2_Alpha = per-alpha blend coefficient (metadata only; optimize() never reads layer).
+  - {name: w_alpha001, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha006, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha030, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha040, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha042, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha055, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha058, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  - {name: w_alpha101, type: float, range: [0.0, 1.0], default: 0.125, layer: L2_Alpha}
+  # Composite gating / cadence — L3_Portfolio layer.
+  - {name: zscore-threshold, type: float, range: [0.5, 2.5], default: 1.0, layer: L3_Portfolio}
+  - {name: rebalance-days,    type: int,   range: [1, 21],  default: 21,  layer: L3_Portfolio}
+state_schema:
+  fields:
+    - {name: ts, type: string}
+    - {name: strategy, type: string}
+    - {name: tpv, type: float}
+    - {name: positions, type: array, item_schema: [sym, w, pnl_1d, days_held]}
+    - {name: n_open_positions, type: int}
+    - {name: alpha_zscores, type: object}
+    - {name: alpha_weights, type: object}
+    - {name: pnl, type: float}
+  dim_hint: 12
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+universe:
+  symbols: ["CSI300"]
+  timezone: Asia/Shanghai
+# Review/feedback/inspiration — wired to NEW adapters (gold2 untouched).
+review:
+  adapter_module: adapters.csi300_alpha101
+  adapter_class: Csi300Alpha101ReviewAdapter
+  layer_names: [alpha_001, alpha_002, alpha_003, alpha_004,
+                alpha_005, alpha_006, alpha_007, alpha_008]
+  review_schedule: on_backtest
+  block_deploy: false
+  thresholds:
+    max_layer_attribution_gap: 0.20
+    min_narrative_trades: 30
+feedback:
+  adapter_module: adapters.csi300_alpha101
+  shaping_term_map:
+    alpha_001: alpha_001_contrib_penalty
+    alpha_002: alpha_002_contrib_penalty
+    alpha_003: alpha_003_contrib_penalty
+    alpha_004: alpha_004_contrib_penalty
+    alpha_005: alpha_005_contrib_penalty
+    alpha_006: alpha_006_contrib_penalty
+    alpha_007: alpha_007_contrib_penalty
+    alpha_008: alpha_008_contrib_penalty
+inspiration:
+  persistence:
+    gap_threshold: 0.20
+    min_generations: 3
+  llm:
+    config_key: glm
+    model: glm-5.1
+    temperature: 0.7

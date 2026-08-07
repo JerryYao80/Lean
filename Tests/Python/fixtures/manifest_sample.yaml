@@ -1,0 +1,19 @@
+strategy_name: TestStrategy
+rl_state_completeness: full
+lean_config: Launcher/config/config-test.json
+risk_model_target: CompositeRiskModel
+parameter_space:
+  - {name: iv-rv-z-score-threshold, type: float, range: [1.5, 3.5], default: 2.0, layer: L2_Alpha}
+  - {name: var-budget, type: float, range: [0.01, 0.04], default: 0.02, layer: L4_Risk, log: false}
+state_schema:
+  fields:
+    - {name: tpv, type: float}
+    - {name: drawdown, type: float}
+  dim_hint: 5
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+universe:
+  symbols: ["510050"]
+  timezone: Asia/Shanghai

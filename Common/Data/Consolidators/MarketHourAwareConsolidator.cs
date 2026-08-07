@@ -140,6 +140,21 @@ namespace QuantConnect.Data.Common
                 (Period == Time.OneDay && (data.EndTime - data.Time >= Time.OneHour) && ExchangeHours.IsOpen(data.Time, data.EndTime, false)))
             {
                 Consolidator.Update(data);
+                return;
+            }
+
+            // For live trading with simulated data (GBM), allow consolidation outside market hours
+            // when the data has a valid price (Close > 0) and spans a full day period.
+            // This enables off-session price simulation to flow through the data pipeline.
+            // The inner TradeBarConsolidator won't emit until a full day elapses between
+            // data points, which never happens when GBM pushes updates every few seconds.
+            // Instead, we emit the bar directly via the DataConsolidated event.
+            if (Period == Time.OneDay && data.Value > 0m)
+            {
+                Consolidator.Update(data);
+                // Emit the working bar directly so downstream consumers (ScannableEnumerator)
+                // receive it immediately without waiting for a full day to elapse.
+                ForwardConsolidatedBar(this, data);
             }
         }
 

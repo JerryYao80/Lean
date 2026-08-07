@@ -1,0 +1,131 @@
+from AlgorithmImports import *
+
+class SoloQuantGeneratedLowVolatilityAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        # 1. Parameters
+        self.start_date_str = self.GetParameter("start_date") or "20140101"
+        self.end_date_str = self.GetParameter("end_date") or "20240630"
+        self.initial_capital = float(self.GetParameter("initial_capital") or 1000000)
+        self.universe_str = self.GetParameter("universe") or "000300.SSE,600519.SSE,000858.SZSE,600036.SSE,000001.SZSE"
+        
+        # 2. Account Settings
+        self.SetAccountCurrency('CNY')
+        self.SetCash(self.initial_capital)
+        self.SetStartDate(DateTime.ParseExact(self.start_date_str, "yyyyMMdd", None))
+        self.SetEndDate(DateTime.ParseExact(self.end_date_str, "yyyyMMdd", None))
+        self.SetBenchmark("000300.SSE")
+        
+        # 3. Universe & Data
+        self.symbols = []
+        self.tickers = [x.strip() for x in self.universe_str.split(',')]
+        
+        for ticker in self.tickers:
+            market = Market.SSE if ticker.endswith(".SSE") else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            self.symbols.append(equity.Symbol)
+            
+            # A-share Models
+            equity.FeeModel = AShareStockFeeModel()
+            equity.FillModel = AShareStockFillModel()
+            equity.BuyingPowerModel = AShareStockBuyingPowerModel()
+            equity.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+        
+        # 4. Indicators
+        self.atr_period = 60
+        self.ma_period = 120
+        self.indicators = {}
+        
+        for symbol in self.symbols:
+            self.indicators[symbol] = {
+                "ATR": AverageTrueRange(self.atr_period, MovingAverageType.Simple),
+                "SMA": SimpleMovingAverage(self.ma_period),
+                "HighWindow": RollingWindow[float](self.atr_period)
+            }
+            self.RegisterIndicator(symbol, self.indicators[symbol]["ATR"], Resolution.Daily)
+            self.RegisterIndicator(symbol, self.indicators[symbol]["SMA"], Resolution.Daily)
+            
+        self.SetWarmUp(timedelta(self.ma_period + 10))
+        
+    def OnData(self, slice):
+        if self.IsWarmingUp: return
+        if self.Time.hour != 15 or self.Time.minute != 0: return
+        
+        # Risk Management
+        self.ManageRisk(slice)
+        
+        # Factor Calculation
+        insights = []
+        for symbol in self.symbols:
+            if not slice.ContainsKey(symbol) or slice[symbol] is None: continue
+            
+            bar = slice[symbol]
+            ind = self.indicators[symbol]
+            
+            if not ind["ATR"].IsReady or not ind["SMA"].IsReady: continue
+            
+            # Update Rolling Window for Trailing Stop
+            ind["HighWindow"].Add(bar.High)
+            
+            # NATR = ATR / Close
+            natr = ind["ATR"].Current.Value / bar.Close
+            # Deviation = Close / MA120
+            deviation = bar.Close / ind["SMA"].Current.Value
+            
+            insights.append({
+                "Symbol": symbol,
+                "NATR": natr,
+                "Deviation": deviation,
+                "Price": bar.Close
+            })
+            
+        if not insights: return
+        
+        # 1. Filter Low Volatility (NATR Rank < 0.5)
+        insights.sort(key=lambda x: x["NATR"])
+        cutoff = int(len(insights) * 0.5)
+        low_vol_pool = insights[:cutoff]
+        
+        # 2. Select Top 30 by Deviation
+        low_vol_pool.sort(key=lambda x: x["Deviation"], reverse=True)
+        selected = low_vol_pool[:30]
+        
+        # 3. Portfolio Construction (Equal Weight)
+        targets = {}
+        if selected:
+            weight = 1.0 / len(selected)
+            for item in selected:
+                targets[item["Symbol"]] = weight
+                
+        # 4. Execution
+        self.ExecutePortfolio(targets)
+        
+    def ManageRisk(self, slice):
+        # Max Drawdown Check
+        if self.Portfolio.TotalPortfolioValue < self.initial_capital * 0.9:
+            self.Liquidate()
+            return
+            
+        # Trailing Stop (5% from 60-day High)
+        for symbol in self.symbols:
+            if not self.Portfolio[symbol].Invested: continue
+            if not slice.ContainsKey(symbol): continue
+            
+            ind = self.indicators[symbol]
+            if ind["HighWindow"].IsReady:
+                highest = max([ind["HighWindow"][i] for i in range(ind["HighWindow"].Count)])
+                if slice[symbol].Price < highest * 0.95:
+                    self.Liquidate(symbol)
+                    
+    def ExecutePortfolio(self, targets):
+        for symbol in self.symbols:
+            target_weight = targets.get(symbol, 0)
+            current_qty = self.Portfolio[symbol].Quantity
+            price = self.Securities[symbol].Price
+            
+            target_value = self.Portfolio.TotalPortfolioValue * target_weight
+            target_qty = int(target_value / price / 100) * 100
+            
+            delta = target_qty - current_qty
+            
+            if delta != 0:
+                self.MarketOrder(symbol, delta)

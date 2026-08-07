@@ -151,6 +151,11 @@ namespace QuantConnect.Queues
             };
 
             var algorithmId = Config.Get("algorithm-id", AlgorithmTypeName);
+            var sessionId = Config.Get("session-id");
+            if (string.IsNullOrWhiteSpace(sessionId))
+            {
+                sessionId = $"local-{DateTime.UtcNow:yyyyMMdd-HHmmss-fffffff}";
+            }
 
             //If this isn't a backtesting mode/request, attempt a live job.
             if (Globals.LiveMode)
@@ -169,6 +174,7 @@ namespace QuantConnect.Queues
                     UserId = Globals.UserId,
                     ProjectId = Globals.ProjectId,
                     OrganizationId = Globals.OrganizationID,
+                    SessionId = sessionId,
                     Version = Globals.Version,
                     DeployId = algorithmId,
                     Parameters = parameters,
@@ -294,7 +300,19 @@ namespace QuantConnect.Queues
             if (!Config.GetBool("close-automatically"))
             {
                 Console.WriteLine("Engine.Main(): Press any key to continue.");
-                System.Console.Read();
+                if (!System.Console.IsInputRedirected)
+                {
+                    try
+                    {
+                        System.Console.Read();
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+                }
             }
         }
     }

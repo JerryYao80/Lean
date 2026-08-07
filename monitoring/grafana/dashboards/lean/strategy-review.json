@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 39,
+  "uid": "strategy-review",
+  "tags": ["lean", "review"],
+  "title": "Strategy Review (复盘)",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {"name": "algorithm_id", "type": "query", "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+       "query": "SHOW TAG VALUES FROM \"review_layer_attribution\" WITH KEY = \"algorithm_id\""},
+      {"name": "run_id", "type": "query", "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+       "query": "SHOW TAG VALUES FROM \"review_layer_attribution\" WITH KEY = \"run_id\""},
+      {"name": "mode", "type": "query", "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+       "query": "SHOW TAG VALUES FROM \"review_layer_attribution\" WITH KEY = \"mode\"", "current": {"text": "backtesting", "value": "backtesting"}}
+    ]
+  },
+  "panels": [
+    {"title": "Review Status", "type": "stat", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT count(depth_pct) FROM \"review_drawdown\" WHERE \"algorithm_id\"='${algorithm_id}' AND $timeFilter"}]},
+    {"title": "Layer Attribution", "type": "barchart", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT sum(pnl_abs) FROM \"review_layer_attribution\" WHERE \"algorithm_id\"='${algorithm_id}' AND \"run_id\"='${run_id}' GROUP BY layer"}]},
+    {"title": "Per-Trade pnl vs mae", "type": "scatter", "gridPos": {"h": 8, "w": 6, "x": 0, "y": 16},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT pnl,mae FROM \"review_trade\" WHERE \"algorithm_id\"='${algorithm_id}' GROUP BY \"regime_at_entry\""}]},
+    {"title": "Drawdown Attribution", "type": "table", "gridPos": {"h": 8, "w": 6, "x": 6, "y": 16},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT depth_pct,top_layer,duration_days FROM \"review_drawdown\" WHERE \"algorithm_id\"='${algorithm_id}' ORDER BY time DESC"}]},
+    {"title": "Cumulative Return by Regime", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT \"value\" FROM \"lean_chart\" WHERE \"chart\"='Strategy Equity' AND \"algorithm_id\"='${algorithm_id}'"}]},
+    {"title": "Layer PnL %", "type": "bargauge", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+     "datasource": {"type": "influxdb", "uid": "lean-influxdb"},
+     "targets": [{"query": "SELECT last(pnl_pct_of_total) FROM \"review_layer_attribution\" WHERE \"algorithm_id\"='${algorithm_id}' GROUP BY layer"}]}
+  ]
+}

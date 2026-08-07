@@ -1,0 +1,30 @@
+{
+  "strategy_id": "pdf-human-ai-interactive-alpha-mining-for-quantitative-investment-arxiv",
+  "class_name": "SoloQuantGeneratedAlphaGptAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-human-ai-interactive-alpha-mining-for-quantitative-investment-arxiv/SoloQuantGeneratedAlphaGptAlgorithm.py.broken",
+  "description": "基于 Alpha-GPT 论文复现的量价相关性因子策略，应用于 A 股市场。使用 Volume-price Correlation (ts_corr) 信号进行选股，采用 A 股特有的交易模型和 T+1 结算规则。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/pdf-human-ai-interactive-alpha-mining-for-quantitative-investment-arxiv/SoloQuantGeneratedAlphaGptAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-aaec40cea12c302b.json",
+  "parameters": {
+    "start_date": "20150101",
+    "end_date": "20240625",
+    "initial_capital": "1000000",
+    "lookback": "20",
+    "max_drawdown_pct": "0.15",
+    "trailing_stop_pct": "0.05"
+  },
+  "risk_controls": [
+    "Max Drawdown 15%",
+    "Trailing Stop 5%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity",
+      "field": "OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T01:51:11.212549+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

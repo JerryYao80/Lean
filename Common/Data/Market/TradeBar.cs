@@ -373,14 +373,15 @@ namespace QuantConnect.Data.Market
                 Symbol = config.Symbol,
                 Period = config.Increment
             };
-            StreamParseScale(config, streamReader, date, useScaleFactor: true, tradeBar, true);
+            StreamParseScale(config, streamReader, date, useScaleFactor: LeanData.EquityUseScaleFactor(config.Symbol), tradeBar, true);
 
             return tradeBar;
         }
 
         private static void ParseEquity(TradeBar tradeBar, SubscriptionDataConfig config, string line, DateTime date)
         {
-            LineParseScale(config, line, date, useScaleFactor: true, tradeBar, hasVolume: true);
+            // A-share markets (SSE/SZSE) use native prices - no scaling needed
+            LineParseScale(config, line, date, useScaleFactor: LeanData.EquityUseScaleFactor(config.Symbol), tradeBar, hasVolume: true);
         }
 
         /// <summary>

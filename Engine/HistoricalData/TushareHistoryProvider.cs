@@ -21,6 +21,7 @@ using QuantConnect.Data;
 using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine.DataFeeds;
 using QuantConnect.Logging;
+using QuantConnect.Packets;
 using QuantConnect.Securities;
 
 namespace QuantConnect.Lean.Engine.HistoricalData
@@ -38,9 +39,20 @@ namespace QuantConnect.Lean.Engine.HistoricalData
         /// </summary>
         public override void Initialize(HistoryProviderInitializeParameters parameters)
         {
-            _dataPath = Globals.DataFolder;
+            _dataPath = GetDataPath(parameters.Job);
             _converter = new TushareDataConverter(_dataPath);
             Log.Trace($"TushareHistoryProvider.Initialize(): Initialized with data path: {_dataPath}");
+        }
+
+        private static string GetDataPath(AlgorithmNodePacket job)
+        {
+            if (job?.Parameters != null && job.Parameters.TryGetValue("tushare-data-path", out var configuredPath)
+                && !string.IsNullOrWhiteSpace(configuredPath))
+            {
+                return configuredPath;
+            }
+
+            return Globals.DataFolder;
         }
 
         /// <summary>

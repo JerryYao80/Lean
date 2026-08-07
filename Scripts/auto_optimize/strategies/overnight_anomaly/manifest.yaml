@@ -1,0 +1,30 @@
+strategy_name: AShareOvernightAnomalyAlgorithm
+rl_state_completeness: partial
+lean_config: Launcher/config/config-ashare-overnight-anomaly-backtest.json
+risk_model_target: AShareStockFeeModel
+parameter_space:
+  - {name: lookback-days, type: int, range: [10, 60], default: 20, layer: L2_Alpha}
+  - {name: top-n, type: int, range: [1, 8], default: 3, layer: L2_Alpha}
+  - {name: target-vol, type: float, range: [0.05, 0.25], default: 0.12, layer: L3_Portfolio}
+  - {name: vol-lookback-days, type: int, range: [20, 120], default: 60, layer: L3_Portfolio}
+  - {name: position-size, type: float, range: [0.10, 0.50], default: 0.30, layer: L3_Portfolio}
+  - {name: rebalance-frequency-days, type: int, range: [1, 20], default: 5, layer: L5_Execution}
+  - {name: min-overnight-momentum, type: float, range: [0.0, 0.005], default: 0.001, layer: L2_Alpha}
+state_schema:
+  fields:
+    - {name: ts, type: string}
+    - {name: strategy, type: string}
+    - {name: tpv, type: float}
+    - {name: cash_pct, type: float}
+    - {name: positions, type: array, item_schema: [sym, w, pnl_1d, days_held]}
+    - {name: drawdown, type: float}
+    - {name: n_open_positions, type: int}
+  dim_hint: 10
+reward_config:
+  primary: dsr
+  shaping:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+universe:
+  symbols: ["518880.SH", "510050.SH", "510300.SH", "510500.SH", "510880.SH", "511010.SH", "511260.SH", "159919.SZ"]
+  timezone: Asia/Shanghai

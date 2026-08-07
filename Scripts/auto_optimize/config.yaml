@@ -1,0 +1,50 @@
+optuna:
+  n_trials: 200
+  sampler: TPESampler
+  direction: maximize
+  concurrent: 4
+cpcv:
+  n_folds: 6
+  purge_bars: 5
+  embargo_bars: 5
+walk_forward:
+  train_days: 504
+  test_days: 126
+  step_days: 126
+ppo_training:
+  retrain_frequency: weekly
+  train_window_days: 504
+  cpcv_folds: 6
+  early_stop_patience: 20
+  deploy_gate: manual
+  rollout_policy: greedy
+  total_timesteps: 10000
+overfitting:
+  oos_dsr_absolute_min: 0.5
+  oos_is_ratio_min: 0.6
+ridge:
+  convergence_density_threshold: 0.3
+lean:
+  timeout_seconds: 600
+  executable: dotnet
+  launcher_dll: QuantConnect.Lean.Launcher.dll
+endpoints:
+  base_port: 5555
+offline_rl:
+  algorithm: cql                # cql | iol
+  var_budget: 0.50              # 修复: 用 trace var 分布的中位数分位 (旧 0.02 在 var 均值 0.72 下无梯度)
+  max_dd: 0.05                  # 修复: trace drawdown 实际范围 [0,0.028], 0.2 太松无惩罚梯度
+  reward_terms:
+    - {term: scaled_pnl, weight: 1.0}
+    - {term: var_excess_penalty, weight: 0.5}
+    - {term: drawdown_excess_penalty, weight: 2.0}
+    - {term: over_clearance_penalty, weight: 0.1}
+  fqe_n_steps: 500
+alpha_perturbation:
+  distribution: beta            # beta | uniform
+  n_bars: 100
+  seed: 42
+  beta_a: 8.0
+  beta_b: 2.0
+  uniform_low: 0.3
+  uniform_high: 1.0

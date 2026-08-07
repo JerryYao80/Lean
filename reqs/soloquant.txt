@@ -1,0 +1,12 @@
+在这个适配了A股市场的LEAN项目基础上，通过增加周期性获取量化策略思路和财经情报，加上现有的定时从tushare获取历史交易数据和实时日线supervisor定时任务，在LEAN中实现采集的高质量量化策略，并回测和live paper，并将量化策略思路，财经情报，历史交易数据，实时日线，回测结果和live paper结果保存在influxdb中，使用grafana可视化展示，以此将g本项目扩展成为一个动态更新的自动化量化系统，它的运作流程如下：使用/home/project/tushare-downloader从tushare中下载历史交易相关数据和实时日线数据，使用容器化部署的searxng和crawl4ai爬取量化策略和财经情报，你可以在优化，其中量化策略来自于arXiv (q-fin 分类)、SSRN、Quantpedia、WorldQuant BRAIN、QuantConnect Community、Numerai、华泰、中信等券商金工研报，最新财经情报来自于国内外权威财经媒体、主要交易所、头部投行等金融机构，除了在爬取前配置合适的关键字，再爬取时还会使用GLM-5.1筛选出有价值的量化策略和财经情报，GLM-5.1筛选有价值量化策略的标准是能够从爬取内容中找到完整的量化思路、实现步骤、以及回测或实盘效果等，其中下载历史交易数据、实时日线和爬取量化策略、财经情报是定时任务，但是你可以依据自动化量化交易系统功能和性能角度考虑，找到优秀的定时任务实现方式。在爬取到有价值的量化策略后，使用GLM-5.1，遵循本项目架构将其编码实现，所需的量化数据可先查看/home/project/tushare-downloader/tushare_field_mapping.json中是否存在，如果存在，则去/home/project/tushare-downloader/tushare-data中调用，如果不存在，可通过searxng和crawl4ai爬取，如果爬取不到，可先设置为随机值，并将这些缺失数据记录在日志中，根据该量化策略回测结果，至少优化2个版本，最终选择效果最好者保存下来，并能够在接入实时日线数据后，让我可以使用这些量化策略执行live paper，用以指导我的投资。下载的交易数据，爬取的策略和财经信息，量化策略回测、live papaer等数据需要展示在grafana中(当前grafana容器的回测、live paper可视化效果很好，可以在此基础上更新)，相关数据存储在influxdb中。
+有用信息如下：
+SEARXNG的访问URL是http://localhost:11236，
+CRAWL4AI的访问URL是http://localhost:11235，
+INFLUXDB的访问URL是http://localhost:8086，INFLUXDB_TOKEN=admin-token-leansystem，INFLUXDB_ORG=lean，INFLUXDB_BUCKET=quant，
+GRAFANA的访问URL是http://localhost:3000，GRAFANA_TOKEN=glsa_cBk8t1yZudqpbYOkD7uxZvMR0hgPC6bN_602028b6
+GLM-5.1大模型的baseURL是https://mydamoxing.cn/v1，apiKey是sk-Lqf1cFD3252DX3Jt4lXWa3C2lCD3U5bwSdFoUwUIJZWD6Dpw
+我的要求是：
+1、不同量化策略的回测和live paper统一使用 /usr/local/dotnet/dotnet  ./Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll --config 量化策略回测和live paper的json文件
+2、使用TDD开发模式，编写测试用例，实现一个功能测试一个功能，不要把错误流传到后续功能中
+3、先思考找到本项目最优技术栈和设计方案，再逐步实现，设计方案写在docs/soloquant.md中
+4、本需求是扩展LEAN项目能力，而非添加一个量化策略

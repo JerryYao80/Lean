@@ -1,0 +1,33 @@
+{
+  "strategy_id": "ssrn-home-page",
+  "class_name": "SoloQuantGeneratedSsrnPlaceholderAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/ssrn-home-page/SoloQuantGeneratedSsrnPlaceholderAlgorithm.cs",
+  "description": "由于原始文档仅为SSRN首页HTML，未包含任何量化策略内容，此算法实现一个默认的A股动量轮动策略作为占位：每月根据过去252日动量排名选取前10只股票，等权配置，单只上限10%，并设置15%回撤止损。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/ssrn-home-page/SoloQuantGeneratedSsrnPlaceholderAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-f49faee730678772.json",
+  "parameters": {
+    "start-date": "20200101",
+    "end-date": "20241231",
+    "initial-capital": "1000000",
+    "momentum-period": "252",
+    "top-n": "10",
+    "max-weight": "0.10",
+    "stop-loss": "0.15"
+  },
+  "risk_controls": [
+    "15%回撤止损：持仓价格从最高点下跌超过15%时触发清仓",
+    "单只股票权重上限10%",
+    "T+1结算模型：DelayedSettlementModel(1, TimeSpan.FromHours(9))",
+    "A股涨跌停填充模型：AShareStockFillModel",
+    "A股买入力模型：AShareStockBuyingPowerModel"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "A股日线行情",
+      "field": "Close"
+    }
+  ],
+  "generated_at_utc": "2026-05-23T06:34:50.829023+00:00",
+  "data_coverage": 1.0
+}

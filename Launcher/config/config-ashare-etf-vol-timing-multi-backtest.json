@@ -1,0 +1,43 @@
+{
+  "algorithm-type-name": "AShareETFVolatilityTimingMulti",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "QuantConnect.Algorithm.CSharp.dll",
+  "job-organization-id": "SoloQuant",
+  "job-project-id": "ashare-etf-vol-timing-multi",
+
+  "environment": "backtesting",
+  "data-folder": "../../../Data",
+
+  "algorithm-start-date": "2020-01-02T00:00:00Z",
+  "algorithm-end-date": "2025-04-01T23:59:59Z",
+
+  "timezone": "Asia/Shanghai",
+  "history-provider": "FallbackTushareHistoryProvider",
+  "data-provider": "DefaultDataProvider",
+
+  "live-mode": false,
+  "live-mode-brokerage": "NullBrokerage",
+  "setup-handler": "QuantConnect.Lean.Engine.Setup.BacktestingSetupHandler",
+  "result-handler": "QuantConnect.Lean.Engine.Results.BacktestingResultHandler",
+  "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.FileSystemDataFeed",
+  "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler",
+  "real-time-handler": "QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler",
+
+  "brokerage": {
+    "data-provider": "DefaultDataProvider"
+  },
+
+  "messaging": {
+    "handlers": []
+  },
+
+  "commands": {
+    "stop-immediately": false
+  },
+
+  "data-channel": {
+    "channel": "local"
+  },
+
+  "parameters": {}
+}

@@ -1,0 +1,18 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "AShareCSI300MVOStrategy",
+  "algorithm-language": "CSharp",
+  "algorithm-location": "QuantConnect.Algorithm.CSharp.dll",
+  "data-folder": "../../../Data/",
+  "debugging": false,
+  "log-level": "info",
+  "metrics-stats": true,
+  "results-destination-folder": "../../../Results/MVOStrategy",
+  "parameters": {
+    "rebalance-days": "21",
+    "dataRoot": "/home/project/tushare-downloader/tushare_data_v2",
+    "rootPath": "/home/project/hope/Lean",
+    "icReportDir": "/home/project/hope/Lean/result/ic-reports",
+    "mvoWeightsDir": "/home/project/hope/Lean/result/mvo-weights"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "strategy_id": "papers-oxford-man-institute-of-quantitative-finance",
+  "class_name": "SoloQuantGeneratedOxfordManStraddleAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/SoloQuantGeneratedOxfordManStraddleAlgorithm.py.broken",
+  "description": "Adapts the Time-Series Momentum (TSMOM) and Mean Reversion (TSMR) signals from the Oxford Man Institute paper on Deep Learning for Delta-Neutral Straddles to A-share equities. Implements volatility targeting and risk controls (trailing stop, max drawdown) within the OnData loop, adhering to A-share trading rules (T+1, fee models, lot sizes).",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/SoloQuantGeneratedOxfordManStraddleAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-573c64becff81e37.json",
+  "parameters": {
+    "start-date": "20100101",
+    "end-date": "20231231",
+    "initial-capital": "1000000",
+    "universe": "600519.SZSE,000001.SZSE,600036.SSE",
+    "lookback": "20",
+    "vol-target": "0.15",
+    "max-drawdown": "0.20",
+    "trailing-stop-pct": "0.10"
+  },
+  "risk_controls": [
+    "Max Drawdown: Liquidate all positions if portfolio drawdown exceeds 20%.",
+    "Trailing Stop: Liquidate position if price drops 10% from highest price since entry.",
+    "Volatility Targeting: Scale position size inversely by 20-day realized volatility."
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Daily Data",
+      "field": "Close, Volume"
+    }
+  ],
+  "generated_at_utc": "2026-05-20T23:44:13.808439+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

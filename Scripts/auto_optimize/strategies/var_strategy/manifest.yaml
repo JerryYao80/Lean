@@ -1,0 +1,77 @@
+lean_config: Launcher/config/config-var-strategy.json
+parameter_space:
+- default: 0.02
+  layer: L4_Risk
+  log: false
+  name: var-budget
+  range:
+  - 0.01
+  - 0.04
+  type: float
+- default: 252
+  layer: L4_Risk
+  name: var-lookback-days
+  range:
+  - 252
+  - 504
+  type: int
+- default: 0.2
+  layer: L4_Risk
+  name: risk-max-drawdown
+  range:
+  - 0.1
+  - 0.3
+  type: float
+- default: 0.4
+  layer: L4_Risk
+  name: risk-max-position-weight
+  range:
+  - 0.15
+  - 0.45
+  type: float
+reward_config:
+  primary: dsr
+  shaping:
+  - term: scaled_pnl
+    weight: 1.0
+  - term: var_excess_penalty
+    weight: 0.5
+  - term: drawdown_excess_penalty
+    weight: 2.0
+  - term: over_clearance_penalty
+    weight: 0.1
+risk_model_target: CompositeRiskModel
+state_schema:
+  dim_hint: 15
+  fields:
+  - name: ts
+    type: string
+  - name: strategy
+    type: string
+  - name: tpv
+    type: float
+  - name: cash_pct
+    type: float
+  - item_schema:
+    - sym
+    - w
+    - pnl_1d
+    - days_held
+    name: positions
+    type: array
+  - name: var_1d99
+    type: float
+  - name: var_regime
+    type: float
+  - name: drawdown
+    type: float
+  - name: n_open_positions
+    type: int
+strategy_name: VarStrategy
+rl_state_completeness: unaudited
+universe:
+  symbols:
+  - '510050'
+  - '510300'
+  - '510500'
+  timezone: Asia/Shanghai

@@ -1,0 +1,25 @@
+{
+  "strategy_id": "papers-oxford-man-institute-of-quantitative-finance",
+  "class_name": "SoloQuantGeneratedStraddleSignalAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/SoloQuantGeneratedStraddleSignalAlgorithm.cs",
+  "description": "A股股票多因子动量/均值回归策略，基于牛津曼研究所深度学习期权跨式信号的简化版。结合时间序列动量（TSMOM）与MACD动量信号生成每日方向，等权重配置，波动率缩放止损。",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/papers-oxford-man-institute-of-quantitative-finance/SoloQuantGeneratedStraddleSignalAlgorithm.cs",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-573c64becff81e37.json",
+  "parameters": {
+    "start-date": "20100101",
+    "end-date": "20231231",
+    "initial-capital": "1000000"
+  },
+  "risk_controls": [
+    "最大回撤控制：组合从历史高点回撤超过15%时，清空所有持仓",
+    "等权重分配：每个信号做多标的分配相同权重，做空信号平仓"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "TradeBar (股票日线)",
+      "field": "Close"
+    }
+  ],
+  "generated_at_utc": "2026-05-20T07:07:17.087795+00:00"
+}

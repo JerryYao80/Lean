@@ -1,0 +1,28 @@
+{
+  "strategy_id": "how-do-quant-devs-implement-trading-trategies-from-researchers",
+  "class_name": "SoloQuantGeneratedRedditDiscussionAlgorithm",
+  "algorithm_language": "CSharp",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/how-do-quant-devs-implement-trading-trategies-from-researchers/SoloQuantGeneratedRedditDiscussionAlgorithm.cs.broken",
+  "description": "Skeleton implementation based on Reddit discussion about quant dev implementation processes. No specific strategy logic was provided in the source, so this serves as a structural template adhering to the BarraCNE5 constraints.",
+  "code_file": "/home/project/hope/Lean/Algorithm.CSharp/SoloQuantGenerated/how-do-quant-devs-implement-trading-trategies-from-researchers/SoloQuantGeneratedRedditDiscussionAlgorithm.cs.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/arxiv-q-fin-6fb8140e9a3b8b4f.json",
+  "parameters": {
+    "start-date": "20230101",
+    "end-date": "20231231",
+    "initial-capital": "1000000",
+    "universe": "000001.SSE,000002.SZSE"
+  },
+  "risk_controls": [
+    "Max Drawdown Check: Liquidate if portfolio value drops 10% from peak",
+    "Trailing Stop: Not implemented in skeleton"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "Equity Price Data",
+      "field": "Close"
+    }
+  ],
+  "generated_at_utc": "2026-05-20T22:17:49.866051+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

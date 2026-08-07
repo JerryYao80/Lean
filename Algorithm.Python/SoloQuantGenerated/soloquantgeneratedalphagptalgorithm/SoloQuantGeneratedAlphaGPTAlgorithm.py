@@ -1,0 +1,161 @@
+from AlgorithmImports import *
+import numpy as np
+
+class SoloQuantGeneratedAlphaGPTAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency('CNY')
+        self.SetCash(1000000)
+        self.SetStartDate(2019, 1, 1)
+        self.SetEndDate(2023, 12, 31)
+        self.SetBenchmark(lambda x: 0)
+        
+        self.UniverseSettings.Resolution = Resolution.Daily
+        
+        # A-share Universe: Representative stocks from CSI 300/500 for demonstration
+        # In a full implementation, this list would be expanded or fetched via a custom data source
+        self.tickers = ["000300", "000001", "600000", "000002", "600519", "000858", "601318", "002594"]
+        self.symbols = []
+        
+        for ticker in self.tickers:
+            market = Market.SSE if ticker[0] == '6' else Market.SZSE
+            equity = self.AddEquity(ticker, Resolution.Daily, market)
+            
+            # A-share specific models
+            equity.FeeModel = AShareStockFeeModel()
+            equity.FillModel = AShareStockFillModel()
+            equity.BuyingPowerModel = AShareStockBuyingPowerModel()
+            equity.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+            
+            self.symbols.append(equity.Symbol)
+        
+        # Schedule rebalancing 30 mins after market open to ensure data availability
+        self.Schedule.On(self.DateRules.EveryDay(self.symbols[0]), 
+                         self.TimeRules.AfterMarketOpen(self.symbols[0], 30), 
+                         self.Rebalance)
+        
+        # Risk Management Parameters
+        self.max_drawdown_pct = 0.10 # 10% Max Drawdown
+        self.trailing_stop_pct = 0.05 # 5% Trailing Stop
+        self.highest_portfolio_value = self.Portfolio.TotalPortfolioValue
+        self.entry_prices = {}
+
+    def OnData(self, slice):
+        # Update Highest Portfolio Value for Drawdown Check
+        if self.Portfolio.TotalPortfolioValue > self.highest_portfolio_value:
+            self.highest_portfolio_value = self.Portfolio.TotalPortfolioValue
+            
+        # Max Drawdown Risk Management
+        if self.Portfolio.TotalPortfolioValue < self.highest_portfolio_value * (1 - self.max_drawdown_pct):
+            self.Liquidate()
+            self.Quit("Max Drawdown Reached")
+            return
+            
+        # Trailing Stop Risk Management
+        for symbol in self.Portfolio.Keys:
+            if self.Portfolio[symbol].Invested and slice.ContainsKey(symbol):
+                current_price = slice[symbol].Price
+                if symbol not in self.entry_prices:
+                    self.entry_prices[symbol] = self.Portfolio[symbol].AveragePrice
+                
+                # Update entry price if profit increases (trailing stop logic)
+                if self.Portfolio[symbol].IsLong and current_price > self.entry_prices[symbol]:
+                    self.entry_prices[symbol] = current_price
+                elif self.Portfolio[symbol].IsShort and current_price < self.entry_prices[symbol]:
+                    self.entry_prices[symbol] = current_price
+                
+                # Check Stop Loss
+                if self.Portfolio[symbol].IsLong and current_price < self.entry_prices[symbol] * (1 - self.trailing_stop_pct):
+                    self.Liquidate(symbol)
+                elif self.Portfolio[symbol].IsShort and current_price > self.entry_prices[symbol] * (1 + self.trailing_stop_pct):
+                    self.Liquidate(symbol)
+
+    def Rebalance(self):
+        # 1. Calculate Alpha: ts_corr(close, volume, 20)
+        alphas = {}
+        for symbol in self.symbols:
+            history = self.History(symbol, 20, Resolution.Daily)
+            if len(history) < 20:
+                continue
+            
+            closes = history['close'].values
+            volumes = history['volume'].values
+            
+            # Calculate Pearson Correlation
+            # Handle cases where std dev is 0 to avoid NaN
+            if np.std(closes) == 0 or np.std(volumes) == 0:
+                corr = 0
+            else:
+                corr_matrix = np.corrcoef(closes, volumes)
+                corr = corr_matrix[0, 1]
+                
+            if np.isnan(corr):
+                corr = 0
+                
+            alphas[symbol] = corr
+        
+        if not alphas:
+            return
+            
+        # 2. Rank Symbols by Alpha Score
+        sorted_symbols = sorted(alphas.keys(), key=lambda x: alphas[x], reverse=True)
+        
+        # 3. Select Top 20% and Bottom 20%
+        n = len(sorted_symbols)
+        top_n = max(1, int(n * 0.2))
+        bottom_n = max(1, int(n * 0.2))
+        
+        long_targets = sorted_symbols[:top_n]
+        short_targets = sorted_symbols[-bottom_n:]
+        
+        # 4. Execute Trades
+        # Liquidate positions not in targets
+        for symbol in self.symbols:
+            if symbol in self.Portfolio and self.Portfolio[symbol].Invested:
+                if symbol not in long_targets and symbol not in short_targets:
+                    self.Liquidate(symbol)
+                    if symbol in self.entry_prices:
+                        del self.entry_prices[symbol]
+        
+        # Calculate target quantity (Equal Weight)
+        # Long Targets
+        if long_targets:
+            total_value = self.Portfolio.TotalPortfolioValue
+            weight_per_long = 1.0 / len(long_targets) # Use 100% of capital for long side for simplicity, or split 50/50
+            # Adjusting for Long/Short split: 50% Long, 50% Short
+            target_value_per_stock = (total_value * 0.5) / len(long_targets)
+            
+            for symbol in long_targets:
+                if not self.Portfolio[symbol].Invested or self.Portfolio[symbol].IsShort:
+                    self.Liquidate(symbol) # Close short if exists
+                    
+                if slice.ContainsKey(symbol):
+                    price = slice[symbol].Price
+                    if price > 0:
+                        quantity = int(target_value_per_stock / price / 100) * 100
+                        delta = quantity - self.Portfolio[symbol].Quantity
+                        if delta != 0:
+                            self.MarketOrder(symbol, delta)
+                            self.entry_prices[symbol] = price
+
+        # Short Targets
+        if short_targets:
+            total_value = self.Portfolio.TotalPortfolioValue
+            target_value_per_stock = (total_value * 0.5) / len(short_targets)
+            
+            for symbol in short_targets:
+                if not self.Portfolio[symbol].Invested or self.Portfolio[symbol].IsLong:
+                    self.Liquidate(symbol) # Close long if exists
+                    
+                if slice.ContainsKey(symbol):
+                    price = slice[symbol].Price
+                    if price > 0:
+                        quantity = int(target_value_per_stock / price / 100) * 100
+                        # Shorting means negative quantity
+                        current_qty = self.Portfolio[symbol].Quantity
+                        # We want to be short 'quantity' shares
+                        # If we are long 100, and want short 100, delta is -200
+                        target_qty = -quantity
+                        delta = target_qty - current_qty
+                        if delta != 0:
+                            self.MarketOrder(symbol, delta)
+                            self.entry_prices[symbol] = price

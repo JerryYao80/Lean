@@ -1,0 +1,374 @@
+LEAN 原始版本：回测输出与无券商 Live Paper 输出说明
+===========================================
+
+写作日期：2026年3月20日
+
+本文讨论的是 LEAN 原始结果处理链路本身，不包含你项目里后来额外封装的桥接脚本、进度条、三张表、TUI 或自定义报表。
+
+这里的“原始版本”具体指：
+- 回测：`BacktestingResultHandler + Messaging`
+- 无须对接券商的 live paper：`PaperBrokerage + LiveTradingResultHandler + Messaging`
+
+一、原生 LEAN 执行回测时，会输出哪些内容
+----------------------------------
+分两层看：
+
+1. 控制台会直接看到什么
+--------------------
+本地默认 `Messaging` 处理器下，回测时终端直接可见的内容主要是：
+
+1. 引擎启动日志
+- 使用的配置文件
+- 载入的程序集
+- 选择的算法 DLL
+- 各 handler 类型
+- 回测起止时间、初始现金、资源限制等
+
+2. 算法自己的日志
+- `Debug`
+- `Log`
+- `Error`
+- `RuntimeError`
+
+3. 回测完成时的 `STATISTICS::`
+- 这是原生 LEAN 最典型的控制台输出
+- 包括例如：
+  - `Total Orders`
+  - `Average Win`
+  - `Average Loss`
+  - `Compounding Annual Return`
+  - `Drawdown`
+  - `Expectancy`
+  - `Start Equity`
+  - `End Equity`
+  - `Net Profit`
+  - `Sharpe Ratio`
+  - `Sortino Ratio`
+  - `Probabilistic Sharpe Ratio`
+  - `Loss Rate`
+  - `Win Rate`
+  - `Profit-Loss Ratio`
+  - `Alpha`
+  - `Beta`
+  - `Annual Standard Deviation`
+  - `Annual Variance`
+  - `Information Ratio`
+  - `Tracking Error`
+  - `Treynor Ratio`
+  - `Total Fees`
+  - `Estimated Strategy Capacity`
+  - `Lowest Capacity Asset`
+  - `Portfolio Turnover`
+  - `Drawdown Recovery`
+
+4. 若启用 Monte Carlo，还会追加
+- `Monte Carlo Trials`
+- `Monte Carlo Horizon Days`
+- `Monte Carlo Combined Median Return`
+- `Monte Carlo Combined Loss Probability`
+- `Monte Carlo Baseline Loss Probability`
+- `Monte Carlo Combined P95 Drawdown`
+
+5. 其他尾部信息
+- 日志文件保存路径
+- 数据请求统计
+- 处理数据点数量、耗时等
+
+注意：
+- 原生 LEAN 控制台不会把回测结果自动排成你熟悉的“资产配置表/成交表/归因表”。
+- 控制台核心是日志 + 最终统计摘要。
+
+2. 回测结果包里实际包含什么
+------------------------
+`BacktestResultPacket` / `BacktestResult` 中，原生 LEAN 会生成：
+
+1. `Charts`
+- 图表数据
+- 至少重点围绕：
+  - `Strategy Equity`
+  - `Benchmark`
+- 引擎还会采样：
+  - `Drawdown`
+  - `Portfolio Turnover`
+  - `Assets Sales Volume`
+  - `Capacity`
+  - `Portfolio Margin`
+- 算法自己 `Plot(...)` 的图表也会进入结果
+
+2. `Orders`
+- 订单字典
+
+3. `OrderEvents`
+- 订单事件列表
+
+4. `ProfitLoss`
+- 交易盈亏时间序列
+- 注意这不是“盈亏归因分析”，只是盈亏记录序列
+
+5. `Statistics`
+- 最终汇总统计字典
+
+6. `RuntimeStatistics`
+- 运行时统计字典
+
+7. `State`
+- 状态信息
+- 如 `Status`、`EndTime`、`LogCount`、`OrderCount`、`InsightCount`
+
+8. `ServerStatistics`
+- CPU / RAM / Hostname / LEAN Version
+
+9. `RollingWindow`
+- 分滚动窗口的绩效对象
+
+10. `TotalPerformance`
+- `AlgorithmPerformance`
+- 里面包含：
+  - `PortfolioStatistics`
+  - `TradeStatistics`
+  - `ClosedTrades`
+
+3. 回测时会落哪些结果文件
+----------------------
+原生 LEAN 回测会把结果保存到 `results-destination-folder` 下。
+
+典型文件包括：
+
+1. `{AlgorithmId}.json`
+- 全量回测结果快照
+
+2. `{AlgorithmId}-summary.json`
+- 精简摘要
+- 保留状态、统计、运行时统计、算法配置，以及抽样后的策略净值图
+
+3. `{AlgorithmId}-order-events.json`
+- 订单事件
+
+4. `{AlgorithmId}-monte-carlo.json`
+- 仅在启用回测 Monte Carlo 时生成
+
+5. `{AlgorithmId}-log.txt`
+- 日志文件
+
+四、原生 LEAN 回测有没有“盈亏归因分析”
+---------------------------------
+结论：没有原生的、完整的盈亏归因分析模块。
+
+1. 原生 LEAN 有什么
+----------------
+原生 LEAN 提供的是“统计”和“交易明细”，不是“归因分析”。
+
+它有：
+- 组合层统计
+  - CAGR
+  - Sharpe
+  - Sortino
+  - Alpha / Beta
+  - Drawdown
+  - Information Ratio
+  - Tracking Error
+  - Portfolio Turnover
+- 交易层统计
+  - Win Rate
+  - Loss Rate
+  - Profit-Loss Ratio
+  - Expectancy
+  - Average Profit / Loss
+  - Trade Duration
+  - MAE / MFE
+  - Maximum Closed Trade Drawdown
+- 关闭交易列表
+  - `ClosedTrades`
+
+2. 原生 LEAN 没有什么
+------------------
+源码里没有发现原生内建的：
+
+1. Brinson 归因
+- 选股收益 vs 行业配置收益
+
+2. 因子归因
+- 风格因子/风险因子对收益贡献
+
+3. 行业归因
+- 哪个行业贡献了多少收益
+
+4. 单策略信号归因
+- 哪一类入场信号贡献了多少盈亏
+
+5. 单持仓累计贡献表
+- 每个标的对组合净值的累计贡献拆解
+
+6. 交易成本归因
+- 滑点、手续费、冲击成本分别贡献多少
+
+所以最准确的表述是：
+- 原生 LEAN 有“绩效统计”和“交易明细”
+- 原生 LEAN 没有成熟的“盈亏归因分析框架”
+
+如果要做归因，通常要你自己再加工：
+- 从 `Orders / OrderEvents / ClosedTrades / Holdings / Charts / Factor Data` 二次计算
+
+五、原生 LEAN 执行无须对接券商的 live paper，会输出哪些内容
+--------------------------------------------------
+这里就是 `live-paper + PaperBrokerage`。
+
+1. 控制台直接可见内容
+------------------
+本地默认终端主要会看到：
+
+1. 启动日志
+- 配置文件
+- live mode 各 handler
+- `PaperBrokerage`
+- 数据队列、实时处理、交易处理器等
+
+2. 算法自己的日志
+- `Debug`
+- `Log`
+- `Error`
+
+3. 订单事件日志
+- `LiveTradingResultHandler.OrderEvent(): ...`
+
+4. 引擎级 trace/debug
+- 状态更新、图表保存、日志保存、退出等
+
+不会默认直接在终端渲染成：
+- account summary 表
+- trade executions 表
+- portfolio allocation 表
+
+这些都不是原生 LEAN 控制台默认输出。
+
+2. live result packet 里实际包含什么
+----------------------------------
+`LiveTradingResultHandler` 每轮会生成 `LiveResultPacket`，里面有：
+
+1. `Holdings`
+- 当前持仓
+
+2. `CashBook`
+- 当前现金和各币种现金
+
+3. `RuntimeStatistics`
+- live 头部运行时统计
+- 默认包括：
+  - `Probabilistic Sharpe Ratio`
+  - `Unrealized`
+  - `Fees`
+  - `Net Profit`
+  - `Return`
+  - `Equity`
+  - `Holdings`
+  - `Volume`
+- 再叠加算法自己 `SetRuntimeStatistic(...)` 的字段
+
+4. `ServerStatistics`
+- CPU / RAM / Hostname / LEAN Version
+
+5. `Orders`
+- 增量订单
+
+6. `OrderEvents`
+- 增量订单事件
+
+7. `Charts`
+- 图表增量
+
+8. `TotalPerformance`
+- 已平仓交易相关绩效对象
+
+9. `State`
+- 状态
+- 至少包含：
+  - `Status`
+  - `EndTime`
+  - `LogCount`
+  - `OrderCount`
+  - `InsightCount`
+- 若异常则附带：
+  - `RuntimeError`
+  - `StackTrace`
+
+3. live paper 会落哪些文件
+-----------------------
+原生 LEAN live paper 会持续写结果文件。
+
+典型包括：
+
+1. `{AlgorithmId}-log.txt`
+- 日志
+
+2. `{AlgorithmId}.json`
+- live 状态总快照
+
+3. `{AlgorithmId}-{yyyy-MM-dd}-order-events.json`
+- 当日订单事件
+
+4. 分辨率化结果快照
+- `{AlgorithmId}-{yyyy-MM-dd}_minute.json`
+- `{AlgorithmId}-{yyyy-MM-dd}_10minute.json`
+- `{AlgorithmId}-{yyyy-MM-dd-HH}_second_<chart>.json`
+
+六、回测与无券商 live paper 的差别
+-----------------------------
+最核心的差别不是“有没有订单”，而是“结果处理方式”。
+
+1. 回测
+- 更强调最终完整统计
+- 控制台最终会打印 `STATISTICS::`
+- 保存完整 backtest result 和 summary
+
+2. live paper
+- 更强调持续增量状态
+- 更频繁地推送 holdings / cash / runtime stats / order events / charts
+- 但本地默认控制台并不会帮你格式化成友好的实时表格
+
+七、最准确的结论
+--------------
+1. 原生 LEAN 回测会输出：
+- 引擎日志
+- 算法日志
+- 最终 `STATISTICS::`
+- 图表、订单、订单事件、盈亏时间序列、滚动绩效、总绩效、结果 JSON、日志文件、可选 Monte Carlo 文件
+
+2. 原生 LEAN 没有成熟内建的盈亏归因分析：
+- 没有行业归因
+- 没有因子归因
+- 没有 Brinson 归因
+- 没有单信号贡献分析
+- 只有统计和交易明细
+
+3. 原生无券商 live paper 会输出：
+- 引擎日志
+- 算法日志
+- 订单事件日志
+- live result packets
+- 持仓/现金/runtime stats/图表/状态等 JSON 文件
+
+4. 原生本地终端默认不会输出：
+- 账户摘要表
+- 成交明细表
+- 资产配置表
+- 盈亏归因表
+
+这些都需要你自己再封装显示层。
+
+八、依据代码
+----------
+- `/home/project/hope/Lean/Engine/Results/BacktestingResultHandler.cs`
+- `/home/project/hope/Lean/Engine/Results/LiveTradingResultHandler.cs`
+- `/home/project/hope/Lean/Engine/Results/BaseResultsHandler.cs`
+- `/home/project/hope/Lean/Common/Packets/BacktestResultPacket.cs`
+- `/home/project/hope/Lean/Common/Packets/LiveResultPacket.cs`
+- `/home/project/hope/Lean/Common/Packets/BaseResultParameters.cs`
+- `/home/project/hope/Lean/Common/Packets/LiveResultParameters.cs`
+- `/home/project/hope/Lean/Common/Result.cs`
+- `/home/project/hope/Lean/Common/Statistics/AlgorithmPerformance.cs`
+- `/home/project/hope/Lean/Common/Statistics/TradeStatistics.cs`
+- `/home/project/hope/Lean/Common/Statistics/PortfolioStatistics.cs`
+- `/home/project/hope/Lean/Common/Statistics/StatisticsBuilder.cs`
+- `/home/project/hope/Lean/Messaging/Messaging.cs`
+- `/home/project/hope/Lean/Brokerages/Paper/PaperBrokerage.cs`
+- `/home/project/hope/Lean/Launcher/config.json`

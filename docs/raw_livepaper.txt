@@ -1,0 +1,207 @@
+原生 LEAN 在“无券商 live paper”模式下会输出什么
+=========================================
+
+这里的“无券商”指本地 `live-paper` 环境使用 `PaperBrokerage`，不是连接真实券商。
+
+对应配置链路：
+- `Launcher/config.json` 中 `live-paper` 环境默认 `live-mode-brokerage = "PaperBrokerage"`
+- `result-handler = QuantConnect.Lean.Engine.Results.LiveTradingResultHandler`
+- `transaction-handler = QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler`
+
+结论先说：
+- 原生 LEAN 会生成很多 live 运行信息。
+- 但在本地默认 `QuantConnect.Messaging.Messaging` 下，终端直接打印出来的内容很少，主要是 `TRACE/DEBUG/LOG/ERROR`。
+- 持仓、现金、运行时统计、订单、图表等大部分 live 信息，是通过 `LiveResultPacket` 发送和写入结果文件，不会自动在终端渲染成表格。
+
+1. 终端默认直接可见的信息
+------------------------
+本地原生 LEAN 默认会在终端打印：
+
+1. 启动与引擎链路日志
+- 配置文件路径
+- 装载的程序集
+- Job 选择的算法 DLL
+- 数据、结果、交易、实时、brokerage handler 类型
+- 启动时间、算法时间区间、账户货币、初始现金等
+
+2. 算法自己的 `Debug/Log/Error`
+- `QCAlgorithm.Debug(...)`
+- `QCAlgorithm.Log(...)`
+- `RuntimeError/HandledError`
+
+3. 订单事件日志
+- `LiveTradingResultHandler.OrderEvent(): ...`
+- 如果开启 debug，还会有 `BrokerageTransactionHandler.LogOrderEvent(): ...`
+
+4. 引擎级 trace/debug
+- 数据馈送、结果处理、状态落盘、日志落盘、退出流程等
+
+不会默认在终端直接渲染成：
+- account summary 表
+- trade executions 表
+- portfolio allocation 表
+- 实时持仓表
+- 实时因子暴露表
+
+这些不是原生 LEAN 控制台默认能力，需要你自己的 wrapper/TUI/console renderer 去展示。
+
+2. LiveResultPacket 中实际生成的信息
+----------------------------------
+`LiveTradingResultHandler` 每轮更新会生成并发送 `LiveResultPacket`。其内容包括：
+
+1. `Holdings`
+- 当前持仓字典
+- 标的、数量、价格、持仓价值等
+
+2. `CashBook`
+- 账户现金及各币种现金信息
+- 账户本位币和货币符号
+
+3. `RuntimeStatistics`
+- 原生 live 头部 runtime stats
+- 默认包括：
+  - `Probabilistic Sharpe Ratio`
+  - `Unrealized`
+  - `Fees`
+  - `Net Profit`
+  - `Return`
+  - `Equity`
+  - `Holdings`
+  - `Volume`
+- 再叠加算法自己通过 `SetRuntimeStatistic(...)` 填进去的字段
+
+4. `ServerStatistics`
+- 服务器/进程资源信息
+- 默认包括：
+  - CPU Usage
+  - Used RAM
+  - Total RAM
+  - Hostname
+  - LEAN Version
+
+5. `Orders`
+- 增量订单字典
+
+6. `OrderEvents`
+- 增量订单事件
+- 成交、部分成交、撤单、拒单等
+
+7. `Charts`
+- 图表增量
+- 包括策略净值、基准、算法自己 `Plot(...)` 的图表
+
+8. `TotalPerformance`
+- 已平仓交易等滚动绩效对象
+
+9. `State`
+- 算法状态
+- 默认至少包含：
+  - `Status`
+  - `EndTime`
+  - `LogCount`
+  - `OrderCount`
+  - `InsightCount`
+- 若发生运行时错误，还会有：
+  - `RuntimeError`
+  - `StackTrace`
+
+3. 落盘到 Results 的文件
+-----------------------
+原生 LEAN live result handler 会把 live 结果分辨率化落盘，不只是打印。
+
+默认会生成：
+
+1. 日志文件
+- `{AlgorithmId}-log.txt`
+
+2. 状态快照
+- `{AlgorithmId}.json`
+- 这是 live 状态总快照
+- 包含 charts、orders、profitLoss、holdings、cash、statistics、runtimeStatistics、serverStatistics、state
+
+3. 订单事件文件
+- `{AlgorithmId}-{yyyy-MM-dd}-order-events.json`
+
+4. 分辨率化图表/结果快照
+- `{AlgorithmId}-{yyyy-MM-dd}_minute.json`
+- `{AlgorithmId}-{yyyy-MM-dd}_10minute.json`
+- `{AlgorithmId}-{yyyy-MM-dd-HH}_second_<chart>.json`
+
+这些文件是原生 LEAN 的标准 live-paper 输出的一部分。
+
+4. 输出频率
+----------
+按默认代码：
+
+1. 主更新循环
+- 约每 3 秒一次
+
+2. 图表与完整结果落盘
+- 约每 1 分钟一次
+
+3. runtime/log/消息推送
+- 高频增量推送，日志消息几乎即时
+
+4. 日志持久化
+- 约每 2 分钟一次
+
+5. 状态文件
+- 约每 10 分钟一次
+
+6. 使用统计发送
+- 约每 1 分钟一次
+
+5. PaperBrokerage 本身提供什么
+-----------------------------
+`PaperBrokerage` 本身不是输出层，它主要提供：
+
+1. 现金余额
+- 从 live job 的 brokerage data / cashbook 获取
+
+2. 当前持仓
+- 从算法证券与持仓生成
+
+3. 扫描未完成订单
+- 走回测式撮合
+
+4. 分红入账
+- 在 `Scan()` 中把股息直接加到 quote cash
+
+所以：
+- `PaperBrokerage` 负责“模拟券商账户与撮合”
+- `LiveTradingResultHandler` 负责“把 live 运行状态输出/落盘”
+
+6. 本地原生 LEAN 和你现在脚本输出的差别
+--------------------------------------
+你现在项目里看到的：
+- account summary
+- trade executions
+- portfolio allocation
+- 进度条
+- 策略阶段说明
+
+这些都不是原生 LEAN 自动给的。
+
+原生 LEAN 本地 `live-paper + PaperBrokerage` 默认更接近：
+- 引擎日志
+- 算法日志
+- 订单事件日志
+- JSON 结果文件
+- 内部 live result packets
+
+如果不额外写包装层，用户在终端里通常看不到友好的三张表。
+
+7. 最准确的一句话
+----------------
+原生 LEAN 在无券商 live paper 时，默认会输出“日志 + 订单事件 + runtime stats/holdings/orders/charts 的 live result packets 和 JSON 文件”，但不会自动把这些信息整理成你想要的账户摘要、交易执行表和资产配置表。
+
+依据代码：
+- `/home/project/hope/Lean/Launcher/config.json`
+- `/home/project/hope/Lean/Brokerages/Paper/PaperBrokerage.cs`
+- `/home/project/hope/Lean/Engine/Results/LiveTradingResultHandler.cs`
+- `/home/project/hope/Lean/Common/Packets/LiveResultPacket.cs`
+- `/home/project/hope/Lean/Common/Packets/LiveResultParameters.cs`
+- `/home/project/hope/Lean/Common/Packets/BaseResultParameters.cs`
+- `/home/project/hope/Lean/Engine/Results/BaseResultsHandler.cs`
+- `/home/project/hope/Lean/Queues/JobQueue.cs`
+- `/home/project/hope/Lean/Messaging/Messaging.cs`

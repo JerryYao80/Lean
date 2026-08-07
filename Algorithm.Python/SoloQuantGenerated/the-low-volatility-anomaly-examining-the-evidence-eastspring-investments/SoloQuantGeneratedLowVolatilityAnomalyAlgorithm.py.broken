@@ -1,0 +1,122 @@
+from AlgorithmImports import *
+import datetime
+
+class SoloQuantGeneratedLowVolatilityAnomalyAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        self.SetAccountCurrency("CNY")
+        self.SetCash(1000000)
+        self.SetStartDate(2020, 1, 1)
+        self.SetEndDate(2023, 1, 1)
+        self.SetBenchmark(lambda x: 0)
+        
+        # Define a fixed universe of A-share blue chips to satisfy "Must use AddEquity"
+        # Using a subset of CSI 300 for demonstration
+        self.tickers = ["600519.SSE", "000858.SZSE", "601318.SSE", "000333.SZSE", "600036.SSE", 
+                        "601012.SSE", "000001.SZSE", "600276.SSE", "601166.SSE", "002415.SZSE",
+                        "600887.SSE", "600030.SSE", "601328.SSE", "000651.SZSE", "600900.SSE",
+                        "601398.SSE", "601288.SSE", "601939.SSE", "601988.SSE", "601857.SSE"]
+        
+        self.symbols = []
+        for ticker in self.tickers:
+            # Determine market based on suffix
+            market = Market.SSE if ticker.endswith(".SSE") else Market.SZSE
+            symbol = self.AddEquity(ticker, Resolution.Daily, market).Symbol
+            self.symbols.append(symbol)
+            
+            # Set A-share specific models
+            security = self.Securities[symbol]
+            security.FeeModel = AShareStockFeeModel()
+            security.FillModel = AShareStockFillModel()
+            security.BuyingPowerModel = AShareStockBuyingPowerModel()
+            security.SettlementModel = DelayedSettlementModel(1, timedelta(hours=9))
+
+        self.SetWarmUp(timedelta(days=60))
+        self.rebalance_day = 1
+        self.last_rebalance_month = -1
+        
+        # Risk Management State
+        self.max_drawdown_pct = 0.15
+        self.trailing_stop_pct = 0.08
+        self.highest_portfolio_value = self.Portfolio.TotalPortfolioValue
+        self.highest_price = {symbol: 0 for symbol in self.symbols}
+
+    def OnData(self, slice):
+        # 1. Risk Management: Max Drawdown
+        current_value = self.Portfolio.TotalPortfolioValue
+        if current_value > self.highest_portfolio_value:
+            self.highest_portfolio_value = current_value
+        
+        if current_value < self.highest_portfolio_value * (1 - self.max_drawdown_pct):
+            self.Liquidate()
+            self.Quit("Max Drawdown Reached")
+            return
+
+        # 2. Risk Management: Trailing Stop per holding
+        for symbol in self.Portfolio.Keys:
+            if self.Portfolio[symbol].Invested:
+                current_price = self.Securities[symbol].Price
+                if symbol in self.highest_price:
+                    if current_price > self.highest_price[symbol]:
+                        self.highest_price[symbol] = current_price
+                    
+                    if current_price < self.highest_price[symbol] * (1 - self.trailing_stop_pct):
+                        self.Liquidate(symbol)
+                        self.highest_price[symbol] = 0
+
+        # 3. Rebalance Logic (Monthly)
+        if self.Time.month == self.last_rebalance_month:
+            return
+        
+        # Wait for first trading day of month
+        if self.Time.day != self.rebalance_day:
+            return
+
+        self.last_rebalance_month = self.Time.month
+        
+        # Calculate Volatility
+        vol_data = []
+        for symbol in self.symbols:
+            if not self.Securities[symbol].Price: continue
+            
+            history = self.History(symbol, 60, Resolution.Daily)
+            if len(history) < 30: continue
+            
+            # Calculate daily returns
+            closes = history['close']
+            returns = closes.pct_change().dropna()
+            if len(returns) == 0: continue
+            
+            # Annualized Volatility
+            vol = returns.std() * (252**0.5)
+            vol_data.append((symbol, vol))
+        
+        if not vol_data: return
+
+        # Sort by Volatility (Ascending)
+        vol_data.sort(key=lambda x: x[1])
+        
+        # Select Bottom 20% (Lowest Volatility)
+        quintile_size = max(1, int(len(vol_data) * 0.2))
+        selected_symbols = [x[0] for x in vol_data[:quintile_size]]
+        
+        # Portfolio Construction: Equally Weighted
+        # Liquidate holdings not in selection
+        for symbol in self.Portfolio.Keys:
+            if self.Portfolio[symbol].Invested and symbol not in selected_symbols:
+                self.Liquidate(symbol)
+        
+        # Buy selected symbols
+        if not selected_symbols: return
+        weight = 1.0 / len(selected_symbols)
+        
+        for symbol in selected_symbols:
+            if not self.Portfolio[symbol].Invested:
+                price = self.Securities[symbol].Price
+                if price <= 0: continue
+                
+                # Calculate quantity (Round to 100 shares)
+                target_value = self.Portfolio.TotalPortfolioValue * weight
+                quantity = int(target_value / price / 100) * 100
+                
+                if quantity > 0:
+                    self.MarketOrder(symbol, quantity)

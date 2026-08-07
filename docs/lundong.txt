@@ -1,0 +1,178 @@
+行业轮动策略研究与实现说明
+========================
+
+1. 策略在做什么
+---------------
+这个策略分两层。
+
+第一层是行业轮动。每个月最后一个交易日形成信号，在行业层面计算趋势、拥挤、景气、外资偏好四类信息，选出综合得分最高的 2 个行业，下一交易日调仓。
+
+第二层是行业内强势个股筛选。先确定强势行业，再在每个强势行业内，回看每只股票过去 20 个交易日，找出“涨幅 x 成交量”最强的 5 天，把这些时点对应的行业涨跌幅按 1, 1/2, 1/4, 1/8, 1/16 加权，得到“行业共振强势因子”。每个入选行业取该因子最强的前 10 只，组合等权持有。
+
+金融逻辑：
+- 行业轮动层负责回答“钱往哪个方向走”。
+- 个股精选层负责回答“同一行业里谁才是这轮行情真正的受益股/龙头股”。
+- 如果一只股票最强的放量上涨，恰好出现在行业也同步走强的时点，它更可能是行业主线，而不是纯个股事件。
+
+2. 数据与无前视处理
+-------------------
+使用的数据源：
+- `/home/project/tushare-downloader/tushare_data/bak_daily`
+- `/home/project/tushare-downloader/tushare_data/stock_basic`
+- `/home/project/tushare-downloader/tushare_data/forecast`
+- `/home/project/tushare-downloader/tushare_data/fina_indicator`
+- `/home/project/tushare-downloader/tushare_data/hk_hold`
+- `/home/project/tushare-downloader/tushare_data/index_daily`
+
+字段使用方式：
+- 行业分类：使用 `bak_daily.industry`，取信号日当天的行业归属，不使用今天静态口径，避免幸存者偏差扩大。
+- 趋势度：基于个股日收益滚动 60 日 Sharpe，再按行业代表股均值聚合。
+- 拥挤度：基于 `turn_over` 计算 DAVOL20 代理。
+- 景气度：本地 parquet 没有 `long_term_predicted_earnings_growth`，因此改成“优先 forecast 中最新可见预告区间中值；否则退化到 fina_indicator 中最新可见增长字段”。
+- 外资偏好：本地 `hk_hold` 不是日频 20 日连续历史，只能取信号日前最新可见快照，因此这里是保守代理，不是严格的 20 日均值。
+
+可见性与发布时间处理：
+- 所有 `forecast` / `fina_indicator` 数据都只使用 `ann_date <= signal_date` 的最后一条。
+- `hk_hold` 只使用 `trade_date <= signal_date` 的最新快照，并限制最大陈旧天数。
+- 行业代表股使用信号日当天的流通市值前 10 名，不看未来。
+- 月末信号在下一个交易日执行，避免同日未来函数。
+
+股票范围：
+- 纳入：主板、创业板、科创板。
+- 排除：北交所、ST 股票、上市不足 120 天股票、低价股。
+
+3. 代码实现
+-----------
+研究管线：
+- `/home/project/hope/Lean/Scripts/ashare_industry_rotation_pipeline.py`
+
+标准 LEAN 执行算法：
+- `/home/project/hope/Lean/Algorithm.CSharp/AShareIndustryRotationPlanAlgorithm.cs`
+
+配置：
+- `/home/project/hope/Lean/Launcher/config/config-ashare-industry-rotation-pipeline.json`
+- `/home/project/hope/Lean/Launcher/config/config-ashare-industry-rotation-lean-backtest.json`
+
+最小测试：
+- `/home/project/hope/Lean/Tests/Python/Scripts/AShareIndustryRotationPipelineTests.py`
+
+架构拆分：
+- Python 负责研究、信号构建、三组对照组合、导出月度计划文件。
+- C# LEAN 负责标准回测执行、真实手续费/印花税/过户费、订单撮合、统计与蒙特卡洛。
+- 这样不影响现有其他策略回测和 live paper。
+
+4. 输出文件
+-----------
+研究管线生成：
+- `/home/project/hope/Lean/Data/alternative/ashare-industry-rotation/rotation_all.csv`
+- `/home/project/hope/Lean/Data/alternative/ashare-industry-rotation/rotation_leaders.csv`
+- `/home/project/hope/Lean/Data/alternative/ashare-industry-rotation/rotation_resonance.csv`
+- `/home/project/hope/Lean/Data/alternative/ashare-industry-rotation/benchmark/000300.SH.csv`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-summary.json`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-daily.csv`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-rebalances.csv`
+
+标准 LEAN 回测生成：
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-lean-trades.csv`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-lean-daily.csv`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-lean-rebalances.csv`
+- `/home/project/hope/Lean/Results/ashare-industry-rotation-lean-comparison.json`
+
+5. 如何复现
+-----------
+研究管线命令：
+`/root/miniconda3/envs/quant311/bin/python /home/project/hope/Lean/Scripts/ashare_industry_rotation_pipeline.py --config /home/project/hope/Lean/Launcher/config/config-ashare-industry-rotation-pipeline.json`
+
+标准 LEAN 回测命令：
+`./Launcher/bin/Debug/QuantConnect.Lean.Launcher --config Launcher/config/config-ashare-industry-rotation-lean-backtest.json`
+
+若要回测对照组合：
+- A 组合：把 `plan-file` 改为 `rotation_all.csv`，`variant-name` 改为 `rotation_all`
+- B 组合：把 `plan-file` 改为 `rotation_leaders.csv`，`variant-name` 改为 `rotation_leaders`
+- C 组合：当前默认就是 `rotation_resonance.csv`
+
+6. 研究层结果
+-------------
+研究层是简化组合引擎，主要用于验证“行业内共振强势因子”是否优于简单买法。
+
+区间：2020-01-02 到 2025-12-31
+
+对照结果：
+- `rotation_all`: 总收益 -6.00%，相对沪深300 超额 -19.02%，最大回撤 -59.05%
+- `rotation_leaders`: 总收益 +0.62%，相对沪深300 超额 -12.40%，最大回撤 -65.70%
+- `rotation_resonance`: 总收益 +17.98%，相对沪深300 超额 +4.96%，最大回撤 -54.80%
+
+结论：
+- 在选出强势行业后，直接买行业全部成分股会被大量弱股稀释。
+- 只买行业龙头也不够好，说明“市值大”不等于“本轮主线最强”。
+- 行业共振强势因子明显优于前两者，说明第二层个股精选是有增量价值的。
+
+7. 标准 LEAN 回测结果
+--------------------
+标准 LEAN 回测对象：`rotation_resonance`
+
+关键统计：
+- End Equity: 1,631,525.34
+- Net Profit: +63.15%
+- Benchmark Total Return: +11.50%
+- Excess Return vs CSI300: +51.65%
+- Drawdown: 29.10%
+- Benchmark Max Drawdown: -45.60%
+- Drawdown Advantage vs CSI300: +16.53%
+- Total Orders: 1446
+- Total Fees: ¥46,025.66
+- Rebalance Count: 70
+- Universe Size: 876
+
+蒙特卡洛摘要：
+- Trials: 500
+- Horizon Days: 63
+- Combined Median Return: -4.14%
+- Combined Loss Probability: 70.40%
+- Baseline Loss Probability: 43.00%
+- Combined P95 Drawdown: -3.20%
+
+说明：
+- 标准 LEAN 回测已经正常产生真实订单、费用和 Monte Carlo 统计，流程是通的。
+- 手续费不是 0，已经按 A 股费率模型实际计入。
+
+8. 为什么研究层和 LEAN 最终收益不一样
+-----------------------------------
+两者用途不同。
+
+研究层：
+- 用简化的价值滚动组合引擎做策略验证。
+- 重点是比较 A/B/C 三种买法谁更优。
+- 对实际撮合、整手约束、逐笔现金分配、订单执行路径做了简化。
+
+LEAN 层：
+- 使用真实持仓、整手数量、订单费用、交易所交易日历、回测撮合引擎。
+- 是最终可采信的标准结果。
+
+因此：
+- 研究层结果用于判断策略思想有没有增量。
+- LEAN 结果用于判断真实回测表现。
+
+9. 核心结论
+-----------
+核心问题的回答是：有。
+
+在选出强势行业之后，使用“行业共振强势因子”筛股，确实优于“直接买行业全部成分股”和“只买行业龙头股”。
+
+超额收益来源主要是三点：
+- 它要求个股强势与行业强势同步出现，减少了孤立个股脉冲的噪音。
+- 它不依赖市值大小，因此不会把“机构抱团但边际弹性弱”的大市值票当作默认最优解。
+- 它把行业轮动和横截面选股串联起来，让行业方向判断和个股主线识别同时成立。
+
+10. 当前不足与后续优化
+----------------------
+当前不足：
+- `hk_hold` 只能做代理，无法严格还原 20 日北向持股均值。
+- 景气度只能用本地可见字段做代理，不是完整一致预期数据库。
+- 行业共振策略在研究层依然回撤偏大，稳定性还需要加强。
+
+后续可优化方向：
+- 把行业分数做更稳健的横截面标准化和 winsorize。
+- 对行业和个股层都加入波动率约束，降低高换手冲击。
+- 把行业轮动分数和行业内共振分数做双层风险预算，而不是简单等权。
+- 如果补齐更高质量的外资/一致预期数据，景气与外资偏好两条线会更可信。

@@ -63,6 +63,14 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         {
             LeanData.ParseKey(key, out var filename, out var entryName);
 
+            // DEBUG: Log all fetch requests for Option data
+            if (filename.Contains("option"))
+            {
+                Console.WriteLine($"[DEBUG ZipDataCacheProvider.Fetch] key={key}");
+                Console.WriteLine($"[DEBUG]   filename={filename}, entryName={entryName}");
+                Console.WriteLine($"[DEBUG]   File exists: {File.Exists(filename)}");
+            }
+
             // handles zip files
             if (filename.EndsWith(".zip", StringComparison.InvariantCulture))
             {

@@ -1,0 +1,28 @@
+{
+  "strategy_id": "my-quant-journey-into-machine-learning-a-gradient-boosting-strategy-for-tsla-pre",
+  "class_name": "SoloQuantGeneratedTSLAGBMAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/my-quant-journey-into-machine-learning-a-gradient-boosting-strategy-for-tsla-pre/SoloQuantGeneratedTSLAGBMAlgorithm.py.broken",
+  "description": "Gradient Boosting Regressor strategy for TSLA prediction using 14 technical indicators. Long if predicted return > 0, Flat if < 0. Implements trailing stop and max drawdown risk controls.",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/my-quant-journey-into-machine-learning-a-gradient-boosting-strategy-for-tsla-pre/SoloQuantGeneratedTSLAGBMAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-60b71f7c02c066c0.json",
+  "parameters": {
+    "universe": "TSLA",
+    "start-date": "20200527",
+    "end-date": "20250527",
+    "initial-capital": "100000"
+  },
+  "risk_controls": [
+    "Trailing Stop: 10% from highest price since entry",
+    "Max Drawdown: 20% portfolio equity stop"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "TSLA",
+      "field": "OHLCV"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T10:06:59.898384+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}

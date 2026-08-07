@@ -1,0 +1,178 @@
+{
+  "system-id": "soloquant",
+  "workflow-root": "Results/soloquant",
+  "artifact-root": "Results/soloquant/artifacts",
+  "strategy-root": "Results/soloquant/strategies",
+  "manifest-file": "Results/soloquant/soloquant-manifest.json",
+  "registry-file": "Results/soloquant/strategy-registry.json",
+  "missing-data-log": "Results/soloquant/missing-data.jsonl",
+  "searxng": {
+    "url": "http://localhost:11236",
+    "timeout-seconds": 60
+  },
+  "crawl4ai": {
+    "url": "http://localhost:11235",
+    "timeout-seconds": 120
+  },
+  "influxdb": {
+    "url": "http://localhost:8086",
+    "org": "lean",
+    "bucket": "quant",
+    "token-env-var": "INFLUXDB_TOKEN",
+    "token-default": "admin-token-leansystem"
+  },
+  "grafana": {
+    "url": "http://localhost:3000",
+    "token-env-var": "GRAFANA_TOKEN"
+  },
+  "lean": {
+    "dotnet-binary": "/usr/local/dotnet/dotnet",
+    "launcher-dll": "Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll"
+  },
+  "data": {
+    "tushare-data-path": "/home/project/tushare-downloader/tushare_data_v2",
+    "field-mapping-path": "/home/project/tushare-downloader/tushare_field_mapping.json",
+    "field-cache-root": "local_data/soloquant-field-cache"
+  },
+  "prefect": {
+    "api-url": "http://localhost:4200/api",
+    "work-pool": "soloquant-pool",
+    "server-port": 4200
+  },
+  "pipeline": {
+    "poll-seconds": 300,
+    "crawl-interval-seconds": 28800,
+    "data-driven-crawl-interval-seconds": 28800,
+    "local-ingest-interval-seconds": 3600,
+    "crawl-max-queries-per-task": 2,
+    "crawl-max-results-per-query": 1,
+    "crawl-timeout-seconds": 300,
+    "crawl-max-content-chars": 200000,
+    "llm-max-items-per-tick": 1,
+    "llm-stage-timeout-seconds": 3600,
+    "reproduce-interval-seconds": 1800,
+    "optimize-interval-seconds": 1800
+  },
+  "schedule": {
+    "download-history-cron": "0 2 * * *",
+    "download-realtime-cron": "*/5 * * * *",
+    "crawl-strategy-cron": "30 2 * * *",
+    "crawl-news-cron": "0 */2 * * *",
+    "prepare-reproduction-cron": "45 2 * * *",
+    "materialize-reproduction-cron": "50 2 * * *",
+    "prepare-iv-data-cron": "0 3 * * 1-5",
+    "analyze-finance-intelligence-cron": "5 */2 * * *",
+    "build-finance-event-graph-cron": "8 */2 * * *",
+    "export-research-influx-cron": "10 */2 * * *",
+    "export-finance-event-graph-influx-cron": "15 */2 * * *",
+    "export-price-ohlc-cron": "*/10 * * * 1-5",
+    "full-auto-pipeline-cron": "*/5 * * * *",
+    "optimize-cron": "0 4 * * 1-5",
+    "live-paper-cron": "*/5 * * * 1-5"
+  },
+  "crawl-tasks": [
+    {
+      "name": "strategy",
+      "category": "strategy",
+      "interval-minutes": 5,
+      "max-queries": 80,
+      "keywords": [
+        "cross-sectional momentum factor long short portfolio construction",
+        "value anomaly Fama French factor model stock selection",
+        "mean reversion pairs trading cointegration statistical arbitrage",
+        "volatility carry strategy VIX contango roll yield",
+        "quality factor profitability asset growth Novy-Marx",
+        "low volatility anomaly minimum variance portfolio",
+        "size factor small cap premium SMB strategy",
+        "earnings momentum SUE post-earnings announcement drift",
+        "accruals anomaly Sloan accruals quality factor",
+        "sentiment factor news NLP trading signal construction",
+        "supply chain momentum customer supplier alpha propagation",
+        "fund flow mutual fund holdings herding factor",
+        "short interest constraint short squeeze factor alpha",
+        "insider trading signal corporate insider purchases returns",
+        "analyst revision earnings estimate revision momentum",
+        "multi-factor model risk parity equal risk contribution",
+        "machine learning random forest gradient boosting alpha prediction",
+        "deep learning LSTM transformer stock return forecast",
+        "reinforcement learning portfolio optimization Q-learning trading",
+        "NLP sentiment analysis financial text alpha extraction",
+        "alternative data satellite image credit card spending alpha",
+        "多因子选股 动量 反转 波动率 价值 成长",
+        "行业轮动 宏观因子 景气度 量化策略 回测",
+        "资金流 北向资金 融资融券 限售解禁 因子",
+        "量价因子 换手率 波动率 动量 反转 策略",
+        "高频因子 日内动量 隔夜收益 开盘跳空 策略",
+        "基本面因子 ROE 资产负债率 现金流 策略 回测",
+        "事件驱动 业绩预告 增持回购 高送转 策略",
+        "barra风险模型 因子暴露 风险中性化 组合优化",
+        "指数增强 跟踪误差 信息比率 多因子 策略"
+      ],
+      "screen-with-llm": true
+    },
+    {
+      "name": "finance_intelligence",
+      "category": "finance_intelligence",
+      "interval-minutes": 5,
+      "max-queries": 60,
+      "keywords": [
+        "site:pbc.gov.cn 公开市场业务交易公告 逆回购 MLF 流动性 利率 2026",
+        "site:pbc.gov.cn 货币政策执行报告 LPR 降准 降息 流动性 风险偏好 2026",
+        "site:csrc.gov.cn 新闻发布会 监管政策 市场风险 退市 融资融券 2026",
+        "site:sse.com.cn/disclosure/notice/general/c/ 交易风险提示 债券 股票 退市 异常交易 2026",
+        "site:szse.cn/disclosure/notice/ 交易风险提示 监管动态 异常交易 退市 2026",
+        "site:bse.cn 公告 监管动态 市场风险 退市 风险提示 2026",
+        "site:paper.cnstock.com 交易风险提示 退市风险 流动性 利率 风险偏好 2026",
+        "site:stcn.com/article/detail 央行 交易所 监管 风险偏好 流动性 退市 2026",
+        "site:reuters.com China markets liquidity rates risk appetite policy 2026",
+        "site:jpmorgan.com OR site:morganstanley.com OR site:goldmansachs.com China equity strategy rates liquidity risk appetite 2026",
+        "site:cicc.com OR site:htsc.com.cn OR site:citics.com 宏观策略 A股 流动性 利率 风险偏好 2026",
+        "site:federalreserve.gov FOMC federal funds Treasury yield liquidity risk appetite 2026",
+        "site:sec.gov OR site:cftc.gov market risk derivatives clearing volatility margin 2026",
+        "site:ecb.europa.eu monetary policy rates inflation liquidity market risk 2026",
+        "site:bankofengland.co.uk monetary policy gilt yield liquidity inflation 2026",
+        "site:boj.or.jp monetary policy yield curve JGB liquidity yen 2026",
+        "site:fsa.go.jp OR site:jpx.co.jp market risk derivatives trading halt margin 2026",
+        "site:cmegroup.com futures margin clearing volatility interest rates equity index 2026",
+        "site:theice.com OR site:cboe.com OR site:eurex.com futures options margin volatility circular notice 2026",
+        "site:euronext.com market notice derivatives clearing volatility 2026"
+      ],
+      "screen-with-llm": true
+    },
+    {
+      "name": "data_driven_strategy",
+      "category": "strategy",
+      "interval-minutes": 10,
+      "max-queries": 40,
+      "mode": "data_driven",
+      "screen-with-llm": true
+    }
+  ],
+  "strategy-policy": {
+    "language": "CSharp",
+    "languages": ["CSharp", "Python"],
+    "min-versions": 3,
+    "baseline-version": "baseline",
+    "required-learned-versions": 2,
+    "best-metric": "score",
+    "serving-score-threshold": 0.0,
+    "degradation-threshold": 0.25,
+    "avoid-algorithms": [
+      "AShareLlmQuantLeanAlgorithm"
+    ]
+  },
+  "llm": {
+    "base-url": "https://mydamoxing.cn/v1",
+    "model": "glm-5.1",
+    "api-key-env-var": "ZHIPU_API_KEY",
+    "api-key-default": "sk-Lqf1cFD3252DX3Jt4lXWa3C2lCD3U5bwSdFoUwUIJZWD6Dpw",
+    "timeout-seconds": 600
+  },
+  "code-generation-llm": {
+    "base-url": "https://mydamoxing.cn/v1",
+    "model": "glm-5.1",
+    "api-key-env-var": "ZHIPU_API_KEY",
+    "api-key-default": "sk-Lqf1cFD3252DX3Jt4lXWa3C2lCD3U5bwSdFoUwUIJZWD6Dpw",
+    "timeout-seconds": 600
+  }
+}

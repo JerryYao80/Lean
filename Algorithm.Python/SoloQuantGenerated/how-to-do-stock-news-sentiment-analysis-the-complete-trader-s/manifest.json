@@ -1,0 +1,31 @@
+{
+  "strategy_id": "how-to-do-stock-news-sentiment-analysis-the-complete-trader-s",
+  "class_name": "SoloQuantGeneratedFinBertAlgorithm",
+  "algorithm_language": "Python",
+  "algorithm_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/how-to-do-stock-news-sentiment-analysis-the-complete-trader-s/SoloQuantGeneratedFinBertAlgorithm.py.broken",
+  "description": "基于 FinBERT 新闻情感分析的 A 股多空策略草案。该策略模拟读取每日新闻情感得分，根据得分阈值（>0.6 做多，<0.4 做空）构建等权重组合，并应用 A 股特定的交易规则和风控模型。",
+  "code_file": "/home/project/hope/Lean/Algorithm.Python/SoloQuantGenerated/how-to-do-stock-news-sentiment-analysis-the-complete-trader-s/SoloQuantGeneratedFinBertAlgorithm.py.broken",
+  "source_summary": "/home/project/hope/Lean/Results/soloquant/artifacts/reproduction/strategy/generic-6ae1d5193e4eff00.json",
+  "parameters": {
+    "start_date": "20100101",
+    "end_date": "20201231",
+    "initial_capital": "100000",
+    "universe": "000300.SSE,000001.SZSE,600000.SSE"
+  },
+  "risk_controls": [
+    "个股止损：当日亏损超过 10% 则平仓",
+    "个股仓位上限：单只股票不超过总资产的 5%",
+    "总仓位限制：总多头与总空头名义敞口之和不超过资本的 200%",
+    "组合最大回撤：20%"
+  ],
+  "data_requirements": [
+    {
+      "dataset": "News Sentiment",
+      "field": "symbol, score, timestamp",
+      "reason": "FinBERT 模型输出的情感得分，用于生成交易信号"
+    }
+  ],
+  "generated_at_utc": "2026-05-21T11:36:03.315754+00:00",
+  "data_coverage": 0.0,
+  "blocked_reason": "data_coverage=0.0% < 20% threshold (>80% missing from tushare/open sources)"
+}
